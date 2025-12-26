@@ -1,114 +1,178 @@
 ---
-title: SocraticSeminar Outline
-what goes here?
+title: SocraticSeminar Template
+author: [Your Name]
+date: [Date]
+version: 1.0
+tags: [topic, category]
 ---
 
+# [Title] - "A concise, memorable statement of your position"
 
-# Title - "This is our title"
+## Thesis
 
-## Thesis:
+*A clear, arguable statement that your entire document will support. This is your central claim—everything below serves to prove or defend it.*
 
-This is where I write things
+> Example: "The Socratic method remains the most effective pedagogical approach for developing critical thinking skills in the digital age."
 
-## Supporting Clause - "one-liner statement
+---
 
-### Background, definitions, citations:
+## Supporting Clause 1 - "[One-line summary of this argument]"
 
- - List URLS like in a bibliography.  Also, we can put commentary.  These are more like "end notes" instead of being a simple listed bibliography.
+### Definitions & Citations
 
- - `Something`: we can give background or define terms here.  Whatever we want.  This is like our "import" statment in code - we can then "use" these down below when we make our argument
+Define key terms, provide context, and cite sources. Think of this as your "imports"—you establish these here so you can reference them in your narrative.
 
- - `American Civil War`: a brief description of this event, perhaps start/end dates can go here.
+| Label | Type | Description |
+|-------|------|-------------|
+| `term` | Definition | Explanation of the term as used in your argument |
+| `source` | Citation | URL, book reference, or academic citation |
+| `media` | Evidence | Link to image, video, or document: `[description](./path)` |
 
- - `photo: political comic of Abraham Lincoln`: We can also place links here to embed media of all kinds. [Abraham Lincoln political comic](./comic1.png)
+**Format examples:**
 
-### Narrative:
+- `Socratic Method`: A form of cooperative argumentative dialogue that stimulates critical thinking through asking and answering questions. Originated with Socrates (470–399 BCE).
 
-This is our argument.
+- `Source: Plato's Dialogues`: Primary source documenting Socratic questioning. [Link](https://example.com)
 
-Reference media from above, as needed.  Since we've "imported" it into our argument, we can reference it here.
+- `Figure 1: Bloom's Taxonomy`: Visual hierarchy of cognitive skills. [View diagram](./blooms_taxonomy.png)
 
-### Refutation: "The usage of AI agents is harmful, to mental health, memory and cognition - esp. for children"
+### Narrative
 
-#### Background, definitions, citations:
+*Your argument for this clause. Build your case using the definitions and citations above. Be specific, logical, and persuasive.*
 
- - as needed, we can provide further evidence.
+Write your reasoning here. Reference your defined terms and evidence naturally within your prose. Each paragraph should advance your argument toward supporting the thesis.
 
- - what we can't do is re-define the above.  Our argument can propose a NEW definition or alteration, but we can't just "over write" it here and make an argument off of it.  We'll need to provide evidence (or point to something), then we can narrate about it below
+### Refutation - "[State the counter-argument honestly]"
+
+*Present the strongest version of opposing viewpoints. Steel-man, don't straw-man.*
+
+#### Definitions & Citations
+
+- Additional evidence or context needed to fairly represent the counter-argument
+- You may NOT redefine terms from above—propose new definitions with justification if needed
 
 #### Narrative
 
-> we can quote from the above and reply, as needed.
+> "Quote the opposing view or summarize it faithfully."
 
-We can also just talk and make new arguments.
-
-
-### Reply
-
-This section is our "reply to the refutation."  This section can be used to allow us to list common counter arguments in our "Refutations" section, but then provide logic to redirect our consideration for it.  We don't list evidence here, as all so-called "citations" 
-
-
----
-
-## Supporting Clause - "We can have as many supporting clauses as we need"
-
-### Background, definitions, citations:
-
-as needed, or empty
-
-### Narrative:
-
-Text goes here
-
-### Refutation:
-
-... if any
+Present the counter-argument's logic. Why might a reasonable person disagree with your clause?
 
 ### Reply
 
-... if refuted
+*Your response to the refutation. Address the counter-argument directly without introducing new evidence (all citations belong in Definitions sections).*
+
+Explain why your original argument still holds despite the refutation. Acknowledge valid points while demonstrating why they don't undermine your thesis.
 
 ---
 
-REPEAT...
+## Supporting Clause 2 - "[One-line summary]"
+
+### Definitions & Citations
+
+*As needed, or leave empty if building on previously defined terms.*
+
+### Narrative
+
+*Your argument for this clause.*
+
+### Refutation - "[Counter-argument, if any]"
+
+#### Definitions & Citations
+
+*Additional context for the refutation.*
+
+#### Narrative
+
+*The opposing view.*
+
+### Reply
+
+*Your response.*
 
 ---
 
-```py
-class Definition:
-    # what's a more general word than "term" we can use?  For a collection of photos this could be "political photos of the era", for example
-    term: str
+## Supporting Clause N - "[Continue as needed]"
 
-    # not sure what datatype - this can be a list of files (photo, video, etc) and/or list of URLs. Perhaps these would be kept in the same "folder"
-    media: [file or url]
+*Repeat the clause structure for each major supporting argument. Most seminars have 2-5 supporting clauses.*
 
-    # A `Definition` is like a footnote or endnote, and this would be the content or author's remark
-    narrative: str
+---
+
+## Conclusion
+
+*Synthesize your supporting clauses. Restate your thesis in light of the arguments made. What should the reader take away?*
+
+---
+
+## Meta-Refutation (Optional)
+
+*If presenting in a debate format, this section contains the opposing side's complete counter-seminar—a full SocraticSeminar structure arguing against your thesis.*
+
+---
+
+# Schema Reference
+
+```python
+from typing import List, Optional, Union
+from dataclasses import dataclass
+from enum import Enum
+
+class ReferenceType(Enum):
+    DEFINITION = "definition"    # Term or concept explanation
+    CITATION = "citation"        # Academic or web source
+    MEDIA = "media"              # Image, video, audio, document
 
 
-# This is a single-encapsulted "argument" or attempted statement of fact to establish our logic, block by block
+@dataclass
+class Reference:
+    """A single piece of supporting material for an argument."""
+    label: str                              # Identifier used in narrative (e.g., "Socratic Method")
+    ref_type: ReferenceType                 # Type of reference
+    content: str                            # Description, URL, or explanation
+    media_path: Optional[str] = None        # Path to local file if applicable
+
+
+@dataclass
+class Refutation:
+    """A counter-argument with the author's reply."""
+    claim: str                              # One-line statement of the counter-argument
+    references: List[Reference]             # Supporting material for the refutation
+    narrative: str                          # The counter-argument's reasoning
+    reply: str                              # Author's response to the refutation
+
+
+@dataclass 
 class Clause:
-    definitions: [Definition]
-    narrative: str
-
-    # we may have a list of refutations, kept and replied to in order to establish our past thoughts on the issue, old ways of thinking, past contraversies, etc.  These can be included to further context to stregnthen our argument.
-    refutation: [Refutation]
-
-
-# extends argument, but needs a "reply" by the author
-class Refutation(Clause):
-    # this is written by the author of the thesis in order to "respond to it"
-    reply: str
+    """A single supporting argument for the thesis."""
+    summary: str                            # One-line description of this argument
+    references: List[Reference]             # Definitions, citations, and media
+    narrative: str                          # The argument itself
+    refutations: List[Refutation] = None    # Counter-arguments and replies
 
 
+@dataclass
 class SocraticSeminar:
-    # Abstract
-    Thesis: str
-
-    Supporting_Arguments: [Clause]
-
-    Narrative: str
-
-    # just like how individual Clauses may be refuted, our entire Seminar may also have a "counter" - if debating on-stage, this would be our interloquitor's content and message
-    Refutations: [SocraticSeminar]
+    """A complete structured argument."""
+    title: str                              # Document title
+    thesis: str                             # Central claim
+    clauses: List[Clause]                   # Supporting arguments
+    conclusion: str                         # Synthesis and takeaway
+    meta_refutation: Optional['SocraticSeminar'] = None  # Opposing seminar (for debates)
+    
+    # Metadata
+    author: str = ""
+    date: str = ""
+    version: str = "1.0"
+    tags: List[str] = None
 ```
+
+---
+
+# Quick Start Checklist
+
+- [ ] **Thesis**: Is it clear, arguable, and specific?
+- [ ] **Clauses**: Does each one directly support the thesis?
+- [ ] **Definitions**: Are all key terms defined before use?
+- [ ] **Citations**: Is evidence properly sourced?
+- [ ] **Refutations**: Have you addressed the strongest counter-arguments?
+- [ ] **Replies**: Do your replies strengthen rather than merely dismiss?
+- [ ] **Conclusion**: Does it synthesize, not just summarize?
