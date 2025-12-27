@@ -42,7 +42,7 @@ function createThread(projectId: string, title?: string): Thread {
   return thread;
 }
 
-function updateThread(id: string, updates: Partial<Pick<Thread, 'title' | 'metadata'>>): void {
+function updateThread(id: string, updates: Partial<Pick<Thread, 'title' | 'metadata' | 'langGraphThreadId'>>): void {
   threads = threads.map((t) =>
     t.id === id ? { ...t, ...updates, updatedAt: Date.now() } : t
   );

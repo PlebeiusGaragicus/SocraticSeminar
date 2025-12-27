@@ -11,13 +11,8 @@ export default defineConfig({
   optimizeDeps: {
     include: ['monaco-editor']
   },
-  build: {
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          monaco: ['monaco-editor']
-        }
-      }
-    }
+  ssr: {
+    // Don't externalize monaco - we only load it on client via dynamic import
+    noExternal: ['monaco-editor']
   }
 });

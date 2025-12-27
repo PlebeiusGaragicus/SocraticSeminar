@@ -69,10 +69,11 @@ function parseFileEdits(content: string): { path: string; newContent: string } |
 // Actions
 async function sendMessage(
   message: string,
-  threadId: string | null,
+  langGraphThreadId: string | null,
+  localThreadId: string, // Local thread ID for message storage
   payment?: PaymentRequest,
   includeArtifacts: boolean = true
-): Promise<void> {
+): Promise<{ langGraphThreadId: string }> {
   const lgClient = getClient();
   
   // Get the selected assistant ID
@@ -81,19 +82,22 @@ async function sendMessage(
   // Reset state
   streamState = {
     isStreaming: true,
-    threadId,
+    threadId: langGraphThreadId,
     currentRunId: null,
     error: null
   };
   streamingContent = '';
   
+  let createdNewThread = false;
+  let activeThreadId = langGraphThreadId;
+  
   try {
-    // Create thread if needed
-    let activeThreadId = threadId;
+    // Create LangGraph thread if needed
     if (!activeThreadId) {
       const thread = await lgClient.threads.create();
       activeThreadId = thread.thread_id;
       streamState.threadId = activeThreadId;
+      createdNewThread = true;
     }
     
     // Build input with optional payment and artifact context
@@ -131,8 +135,8 @@ async function sendMessage(
       }
     }
     
-    // Add user message to local store
-    threadStore.addMessage(activeThreadId, {
+    // Add user message to local store (use local thread ID, not LangGraph ID)
+    threadStore.addMessage(localThreadId, {
       role: 'user',
       content: message
     });
@@ -183,9 +187,9 @@ async function sendMessage(
       }
     }
     
-    // Add assistant message to local store
+    // Add assistant message to local store (use local thread ID, not LangGraph ID)
     if (assistantContent) {
-      threadStore.addMessage(activeThreadId, {
+      threadStore.addMessage(localThreadId, {
         role: 'assistant',
         content: assistantContent
       });
@@ -212,6 +216,9 @@ async function sendMessage(
       ...streamState,
       isStreaming: false
     };
+    
+    // Return the LangGraph thread ID (caller should store this if it was newly created)
+    return { langGraphThreadId: activeThreadId! };
     
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';

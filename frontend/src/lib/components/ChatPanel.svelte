@@ -17,7 +17,7 @@
   const currentThread = $derived(threadStore.currentThread);
   const currentProjectId = $derived(projectStore.currentProjectId);
   
-  // Wallet readiness check
+  // Wallet readiness (safe to use directly with SSR disabled)
   const isWalletReady = $derived(cyphertap.isReady);
 
   async function handleSendMessage() {
@@ -26,23 +26,32 @@
     const message = messageInput.trim();
     messageInput = '';
 
-    // If no thread, create one first
-    let threadId = threadStore.currentThreadId;
-    if (!threadId && currentProjectId) {
+    // If no local thread, create one first
+    let localThreadId = threadStore.currentThreadId;
+    if (!localThreadId && currentProjectId) {
       const thread = threadStore.createThread(currentProjectId, 'Chat');
-      threadId = thread.id;
+      localThreadId = thread.id;
     }
 
-    if (!threadId) return;
+    if (!localThreadId) return;
+
+    // Get the LangGraph thread ID if it exists (from previous messages)
+    const thread = threadStore.threads.find(t => t.id === localThreadId);
+    const langGraphThreadId = thread?.langGraphThreadId ?? null;
 
     // Update thread title if it's the first message and title is "New Chat"
     if (currentThread?.title === 'New Chat') {
       const titlePreview = message.length > 30 ? message.slice(0, 30) + '...' : message;
-      threadStore.updateThread(threadId, { title: titlePreview });
+      threadStore.updateThread(localThreadId, { title: titlePreview });
     }
 
     try {
-      await agentStore.sendMessage(message, threadId);
+      const result = await agentStore.sendMessage(message, langGraphThreadId, localThreadId);
+      
+      // If a new LangGraph thread was created, store its ID
+      if (!langGraphThreadId && result.langGraphThreadId) {
+        threadStore.updateThread(localThreadId, { langGraphThreadId: result.langGraphThreadId });
+      }
     } catch (error) {
       console.error('Failed to send message:', error);
     }

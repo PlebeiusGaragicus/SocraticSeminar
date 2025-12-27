@@ -8,7 +8,7 @@
   // Application state
   let currentView = $state<'dashboard' | 'workspace'>('dashboard');
 
-  // Reactive CypherTap state
+  // Reactive CypherTap state (safe to use directly with SSR disabled)
   const isLoggedIn = $derived(cyphertap.isLoggedIn);
   const userNpub = $derived(cyphertap.npub);
 

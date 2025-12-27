@@ -17,6 +17,7 @@ export interface Thread {
   id: string;
   projectId: string;
   title: string;
+  langGraphThreadId?: string; // LangGraph server's thread ID (different from local id)
   metadata?: Record<string, unknown>;
   createdAt: number;
   updatedAt: number;

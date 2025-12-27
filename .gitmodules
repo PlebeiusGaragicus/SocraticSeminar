@@ -5,7 +5,7 @@
 [submodule "cyphertap"]
 	path = cyphertap
 	url = https://github.com/PlebeiusGaragicus/cyphertap
-	branch = main
+	branch = SocraticSeminar
 [submodule "deepagents"]
 	path = deepagents
 	url = https://github.com/langchain-ai/deepagents

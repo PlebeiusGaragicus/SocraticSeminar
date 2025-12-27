@@ -42,6 +42,7 @@
   let isEditing = $state(false);
   let hasUnsavedChanges = $state(false);
   let isMonacoReady = $state(false);
+  let currentEditorArtifactId: string | null = null;
 
   const activeArtifact = $derived(
     openArtifacts.find((a) => a.id === activeArtifactId) ?? null
@@ -110,6 +111,9 @@
     if (!browser) return;
 
     // Dynamically import Monaco on client only
+    // Monaco will fall back to main thread if workers aren't available
+    // This is fine for markdown editing - workers are mainly needed for 
+    // language services like TypeScript intellisense
     monaco = await import('monaco-editor');
 
     // Configure Monaco theme with markdown-friendly styling
@@ -148,8 +152,10 @@
     if (!browser || !isMonacoReady || !monaco || !editorContainer || showDiff) return;
 
     const content = currentContent();
+    const artifactChanged = activeArtifactId !== currentEditorArtifactId;
 
     if (!editor) {
+      // Create editor for the first time
       editor = monaco.editor.create(editorContainer, {
         value: content?.content || '',
         language: 'markdown',
@@ -184,7 +190,17 @@
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
         handleSave();
       });
+      
+      currentEditorArtifactId = activeArtifactId;
+    } else if (artifactChanged) {
+      // Tab switched - update editor content for new artifact
+      const newValue = content?.content || '';
+      editor.setValue(newValue);
+      hasUnsavedChanges = false;
+      isEditing = false;
+      currentEditorArtifactId = activeArtifactId;
     } else {
+      // Same artifact - only update if no unsaved changes (e.g., version navigation)
       const currentValue = editor.getValue();
       const newValue = content?.content || '';
       

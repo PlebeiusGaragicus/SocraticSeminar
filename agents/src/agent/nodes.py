@@ -14,16 +14,16 @@ from .state import AgentState
 
 # Configuration
 WALLET_URL = os.getenv("WALLET_URL", "http://localhost:8000")
-OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "http://localhost:11434/v1")
-MODEL_NAME = os.getenv("MODEL_NAME", "llama3.2")
-
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
+LLM_MODEL = os.getenv("LLM_MODEL", "qwen3-coder-30b-a3b-instruct-mlx")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "not-needed")
 
 def get_model():
     """Get the chat model configured for OpenAI-compatible endpoint."""
     return ChatOpenAI(
-        model=MODEL_NAME,
-        base_url=OPENAI_API_BASE,
-        api_key=os.getenv("OPENAI_API_KEY", "not-needed"),  # For local models
+        model=LLM_MODEL,
+        base_url=LLM_BASE_URL,
+        api_key=LLM_API_KEY,
         temperature=0.7,
     )
 
