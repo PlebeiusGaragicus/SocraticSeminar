@@ -78,6 +78,8 @@
     defaultKeymap: typeof import('@codemirror/commands').defaultKeymap;
     history: typeof import('@codemirror/commands').history;
     historyKeymap: typeof import('@codemirror/commands').historyKeymap;
+    cursorLineUp: typeof import('@codemirror/commands').cursorLineUp;
+    cursorLineDown: typeof import('@codemirror/commands').cursorLineDown;
     livePreview: typeof import('$lib/codemirror/livePreview.js').livePreview;
     MergeView: typeof import('@codemirror/merge').MergeView;
   } | null>(null);
@@ -120,21 +122,30 @@
     );
   }
 
-  // Auto-save function with debouncing
-  function autoSave() {
-    if (!activeArtifact || !editor) return;
-
-    const content = editor.state.doc.toString();
-    const currentVersion = currentContent();
+  // Save function that saves to a specific artifact (to avoid race conditions on tab switch)
+  function saveToArtifact(artifactId: string) {
+    if (!editor) return;
+    
+    const artifact = openArtifacts.find(a => a.id === artifactId);
+    if (!artifact) return;
+    
+    const editorContent = editor.state.doc.toString();
+    const version = artifact.versions[artifact.currentVersionIndex];
     
     // Only save if content actually changed
-    if (currentVersion && content !== currentVersion.content) {
+    if (version && editorContent !== version.content) {
       artifactStore.updateArtifact(
-        activeArtifact.id,
-        currentVersion.title || 'Untitled',
-        content
+        artifactId,
+        version.title || 'Untitled',
+        editorContent
       );
     }
+  }
+  
+  // Auto-save function with debouncing - saves to the current editor's artifact
+  function autoSave() {
+    if (!currentEditorArtifactId) return;
+    saveToArtifact(currentEditorArtifactId);
   }
   
   function scheduleAutoSave() {
@@ -217,6 +228,8 @@
       defaultKeymap: commandsModule.defaultKeymap,
       history: commandsModule.history,
       historyKeymap: commandsModule.historyKeymap,
+      cursorLineUp: commandsModule.cursorLineUp,
+      cursorLineDown: commandsModule.cursorLineDown,
       livePreview: livePreviewModule.livePreview,
       MergeView: mergeModule.MergeView
     };
@@ -262,8 +275,53 @@
         defaultKeymap,
         history,
         historyKeymap,
+        cursorLineUp,
+        cursorLineDown,
         livePreview
       } = cmModules;
+
+      // Custom commands for logical line movement (bypasses visual line calculation issues)
+      const moveToLogicalLineUp = (view: EditorView) => {
+        const state = view.state;
+        const selection = state.selection.main;
+        const currentLine = state.doc.lineAt(selection.head);
+        
+        if (currentLine.number <= 1) return true; // Already at first line
+        
+        const prevLine = state.doc.line(currentLine.number - 1);
+        const offsetInLine = selection.head - currentLine.from;
+        const newPos = Math.min(prevLine.from + offsetInLine, prevLine.to);
+        
+        view.dispatch({
+          selection: { anchor: newPos },
+          scrollIntoView: true
+        });
+        return true;
+      };
+      
+      const moveToLogicalLineDown = (view: EditorView) => {
+        const state = view.state;
+        const selection = state.selection.main;
+        const currentLine = state.doc.lineAt(selection.head);
+        
+        if (currentLine.number >= state.doc.lines) return true; // Already at last line
+        
+        const nextLine = state.doc.line(currentLine.number + 1);
+        const offsetInLine = selection.head - currentLine.from;
+        const newPos = Math.min(nextLine.from + offsetInLine, nextLine.to);
+        
+        view.dispatch({
+          selection: { anchor: newPos },
+          scrollIntoView: true
+        });
+        return true;
+      };
+      
+      // Custom keymap to ensure proper line-by-line navigation
+      const lineNavKeymap = [
+        { key: 'ArrowUp', run: moveToLogicalLineUp },
+        { key: 'ArrowDown', run: moveToLogicalLineDown }
+      ];
 
       editor = new EditorView({
         state: EditorState.create({
@@ -272,7 +330,7 @@
             highlightActiveLine(),
             history(),
             markdown({ codeLanguages: languages }),
-            keymap.of([...defaultKeymap, ...historyKeymap]),
+            keymap.of([...lineNavKeymap, ...defaultKeymap, ...historyKeymap]),
             oneDark,
             createSocraticTheme(EditorView),
             livePreview,
@@ -290,12 +348,16 @@
       
       currentEditorArtifactId = activeArtifactId;
     } else if (artifactChanged) {
-      // Tab switched - save current content first, then switch
+      // Tab switched - save to the OLD artifact first, then switch to new content
       if (saveTimeout) {
         clearTimeout(saveTimeout);
-        autoSave();
+      }
+      // Save to the previous artifact (currentEditorArtifactId still holds the old ID)
+      if (currentEditorArtifactId) {
+        saveToArtifact(currentEditorArtifactId);
       }
       
+      // Now load the new artifact's content
       const newValue = content?.content || '';
       editor.dispatch({
         changes: {
@@ -304,6 +366,7 @@
           insert: newValue
         }
       });
+      // Update to track the new artifact
       currentEditorArtifactId = activeArtifactId;
     } else {
       // Same artifact - update for version navigation

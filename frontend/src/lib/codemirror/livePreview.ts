@@ -96,7 +96,6 @@ function buildDecorations(view: EditorView): DecorationSet {
       // Strong/Bold (**text** or __text__)
       if (node.name === 'StrongEmphasis') {
         const text = view.state.sliceDoc(node.from, node.to);
-        const marker = text.startsWith('**') ? '**' : '__';
         const markerLen = 2;
         
         // Add bold styling
@@ -156,6 +155,7 @@ function buildDecorations(view: EditorView): DecorationSet {
         );
         
         if (!isActive) {
+          // Hide backticks
           decorations.push(
             Decoration.replace({}).range(node.from, node.from + 1)
           );
@@ -183,10 +183,9 @@ function buildDecorations(view: EditorView): DecorationSet {
         // Find the opening and closing fence
         const text = view.state.sliceDoc(node.from, node.to);
         const lines = text.split('\n');
-        const openFenceLine = startLine;
         const hasClosingFence = lines.length > 1 && lines[lines.length - 1].trim().match(/^`{3,}$/);
         
-        // Add styling to content lines (not fence lines)
+        // Add styling to all lines in the code block
         for (let i = startLine.number; i <= endLine.number; i++) {
           const line = view.state.doc.line(i);
           const isOpenFence = i === startLine.number;
@@ -198,22 +197,25 @@ function buildDecorations(view: EditorView): DecorationSet {
               Decoration.line({ class: 'cm-codeblock-line' }).range(line.from)
             );
           } else {
-            // Fence lines get special styling
+            // Fence lines - always show with code block background
+            decorations.push(
+              Decoration.line({ class: 'cm-codeblock-fence' }).range(line.from)
+            );
+            
             if (cursorInside) {
-              // Show fences faintly when cursor is inside
-              decorations.push(
-                Decoration.line({ class: 'cm-codeblock-fence-active' }).range(line.from)
-              );
+              // Show fence markers faintly when cursor is inside
               if (line.text.length > 0) {
                 decorations.push(
                   Decoration.mark({ class: 'cm-formatting-code-fence' }).range(line.from, line.to)
                 );
               }
             } else {
-              // Hide fences when cursor is outside - use CSS to collapse
-              decorations.push(
-                Decoration.line({ class: 'cm-codeblock-fence-hidden' }).range(line.from)
-              );
+              // Hide fence markers
+              if (line.text.length > 0) {
+                decorations.push(
+                  Decoration.replace({}).range(line.from, line.to)
+                );
+              }
             }
           }
         }
@@ -236,6 +238,7 @@ function buildDecorations(view: EditorView): DecorationSet {
             
             const lineActive = activeLines.has(i);
             if (!lineActive) {
+              // Hide quote marker
               decorations.push(
                 Decoration.replace({}).range(line.from, line.from + quoteMatch[1].length)
               );
@@ -259,11 +262,9 @@ function buildDecorations(view: EditorView): DecorationSet {
         const linkMatch = text.match(/^\[([^\]]*)\]\(([^)]*)\)$/);
         
         if (linkMatch && !isActive) {
-          // Hide [ and ]( and )
+          // Hide [ and ](url)
           const textStart = node.from + 1;
           const textEnd = node.from + 1 + linkMatch[1].length;
-          const urlStart = textEnd + 2; // ](
-          const urlEnd = node.to - 1;
           
           decorations.push(Decoration.replace({}).range(node.from, textStart)); // [
           decorations.push(Decoration.replace({}).range(textEnd, node.to)); // ](url)
@@ -370,19 +371,19 @@ export const livePreviewTheme = EditorView.theme({
   },
   '.cm-formatting-code-fence': {
     opacity: '0.35',
-    color: '#71717a'
+    color: '#71717a',
+    fontFamily: "'JetBrains Mono', 'Fira Code', ui-monospace, monospace",
+    fontSize: '0.875em'
   },
   
-  // Code fence lines (``` markers)
-  '.cm-codeblock-fence-active': {
-    backgroundColor: 'rgba(24, 24, 27, 0.5)',
-    borderLeft: '2px solid #3f3f46'
-  },
-  '.cm-codeblock-fence-hidden': {
-    opacity: '0.15',
-    color: '#3f3f46',
-    fontSize: '0.75em',
-    lineHeight: '0.5'
+  // Code fence lines (``` markers) - same styling as content lines
+  '.cm-codeblock-fence': {
+    backgroundColor: 'rgba(39, 39, 42, 0.6)',
+    fontFamily: "'JetBrains Mono', 'Fira Code', ui-monospace, monospace",
+    fontSize: '0.875em',
+    borderLeft: '2px solid #3f3f46',
+    paddingLeft: '1em',
+    marginLeft: '0'
   },
 
   // Strong/Bold
@@ -407,7 +408,7 @@ export const livePreviewTheme = EditorView.theme({
 
   // Code blocks - monospace
   '.cm-codeblock-line': {
-    backgroundColor: 'rgba(24, 24, 27, 0.8)',
+    backgroundColor: 'rgba(39, 39, 42, 0.6)',
     fontFamily: "'JetBrains Mono', 'Fira Code', ui-monospace, monospace",
     fontSize: '0.875em',
     borderLeft: '2px solid #3f3f46',
