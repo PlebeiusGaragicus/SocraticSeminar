@@ -2,7 +2,7 @@
 // Manages chat threads within projects
 
 import { nanoid } from 'nanoid';
-import type { Thread, Message } from './types';
+import type { Thread, Message } from './types.js';
 
 // Reactive state
 let threads = $state<Thread[]>([]);

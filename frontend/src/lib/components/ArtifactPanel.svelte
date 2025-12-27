@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { ChevronLeft, ChevronRight, Save } from '@lucide/svelte';
-  import { Button, Textarea } from './ui';
-  import { artifactStore } from '$lib/stores';
+  import ChevronLeft from '@lucide/svelte/icons/chevron-left';
+  import ChevronRight from '@lucide/svelte/icons/chevron-right';
+  import Save from '@lucide/svelte/icons/save';
+  import { Button, Textarea } from './ui/index.js';
+  import { artifactStore } from '$lib/stores/index.js';
 
   let editedContent = $state('');
   let editedTitle = $state('');

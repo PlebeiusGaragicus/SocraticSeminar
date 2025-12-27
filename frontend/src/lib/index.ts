@@ -1,4 +1,3 @@
 // Socratic Seminar library exports
-export * from './utils';
-export * from './stores';
-
+export * from './utils.js';
+export * from './stores/index.js';

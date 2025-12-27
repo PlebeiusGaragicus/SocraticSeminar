@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { Plus, FileText, MessageSquare } from '@lucide/svelte';
-  import { Button } from './ui';
-  import { projectStore, threadStore, artifactStore } from '$lib/stores';
+  import Plus from '@lucide/svelte/icons/plus';
+  import FileText from '@lucide/svelte/icons/file-text';
+  import MessageSquare from '@lucide/svelte/icons/message-square';
+  import { Button } from './ui/index.js';
+  import { projectStore, threadStore, artifactStore } from '$lib/stores/index.js';
 
   interface Props {
     userNpub?: string | null;

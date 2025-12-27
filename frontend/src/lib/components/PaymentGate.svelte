@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { Zap } from '@lucide/svelte';
-  import { Button } from './ui';
-  import type { PaymentRequest } from '$lib/stores/types';
+  import Zap from '@lucide/svelte/icons/zap';
+  import { Button } from './ui/index.js';
+  import type { PaymentRequest } from '$lib/stores/types.js';
 
   interface Props {
     onPaymentReady: (payment: PaymentRequest | null) => void;
@@ -68,4 +68,3 @@
     </select>
   {/if}
 </div>
-

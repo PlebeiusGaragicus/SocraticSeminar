@@ -51,7 +51,9 @@ nano .env
 ```
 
 ```sh
-cd frontend
+cd cyphertap
+npm run build
+cd ../frontend
 npm install
 
 cp .env.example .env
@@ -59,20 +61,29 @@ nano .env
 ```
 
 
+
 ## How to run for development:
 
 ```sh
-# Frontend
-cd frontend && npm run dev
+git submodule --init --recursive
+```
 
+```sh
+# Frontend
+cd frontend
+npm run dev
+```
+
+```sh
 # Backend  
 cd backend
 source ../venv_backend/bin/activate
-pip install -e . uvicorn src.main:app --reload
+uvicorn src.main:app --reload
+```
 
+```sh
 # Agents
-cd agents && langgraph dev --no-browser
+cd agents
 source ../venv_agents/bin/activate
-pip install -e .
-
+langgraph dev --no-browser
 ```

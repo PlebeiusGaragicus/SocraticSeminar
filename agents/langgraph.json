@@ -1,9 +1,9 @@
 {
+  "$schema": "https://langgra.ph/schema.json",
   "python_version": "3.11",
   "dependencies": ["."],
   "graphs": {
-    "seminar_agent": "./src/seminar/graph.py:graph"
+    "seminar_agent": "./src/agent/__init__.py:graph"
   },
   "env": ".env"
 }
-
