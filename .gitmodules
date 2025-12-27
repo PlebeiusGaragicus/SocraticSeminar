@@ -1,0 +1,16 @@
+[submodule "fullstack-chat-client"]
+	path = fullstack-chat-client
+	url = https://github.com/PlebeiusGaragicus/fullstack-chat-client
+	branch = main
+[submodule "cyphertap"]
+	path = cyphertap
+	url = https://github.com/PlebeiusGaragicus/cyphertap
+	branch = main
+[submodule "deepagents"]
+	path = deepagents
+	url = https://github.com/langchain-ai/deepagents
+	branch = master
+[submodule "open-canvas"]
+	path = open-canvas
+	url = https://github.com/langchain-ai/open-canvas
+	branch = main
