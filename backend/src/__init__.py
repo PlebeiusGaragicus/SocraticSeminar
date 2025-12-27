@@ -1,0 +1,2 @@
+# Socratic Seminar Backend
+

@@ -27,3 +27,23 @@ These references will be used to build our "Socratic Seminar" web application:
 `agents/` - our agentic graphs, deployed using `langgraph dev`. One node will hit our backend with an ecash token which will need to be verified before execution.
 
 `backend/` - our Python 3.12+ FastAPI backend, accepts and verifies eCash payments
+
+---
+
+## How to run for development:
+
+```sh
+# Frontend
+cd frontend && npm run dev
+
+# Backend  
+cd backend
+source ../venv_backend/bin/activate
+pip install -e . uvicorn src.main:app --reload
+
+# Agents
+cd agents && langgraph dev --no-browser
+source ../venv_agents/bin/activate
+pip install -e .
+
+```

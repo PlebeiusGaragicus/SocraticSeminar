@@ -40,3 +40,13 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Architecture:
+    - Overview: architecture/overview.md
+    - Frontend: architecture/frontend.md
+    - Agents: architecture/agents.md
+    - Backend: architecture/backend.md
+  - Agents:
+    - Socratese:
+      - Overview: agents/Socratese/agent.md
+      - Socratic Seminar: agents/Socratese/SocraticSeminar.md
+      - Coding Agents: agents/Socratese/CodingAgents.md
