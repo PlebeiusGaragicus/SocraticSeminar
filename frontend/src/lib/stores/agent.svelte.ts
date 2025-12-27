@@ -1,12 +1,12 @@
 // Agent store for LangGraph streaming with tool interrupt handling
 // Uses the langgraph service for communication and handles state reactively
 
-import type { Message } from '@langchain/langgraph-sdk';
 import type { 
   ToolCall, 
   ToolCallWithStatus,
   ToolResult,
-  ProjectFile
+  ProjectFile,
+  Message as LocalMessage
 } from './types.js';
 import { threadStore } from './threads.svelte.js';
 import { artifactStore } from './artifacts.svelte.js';
@@ -15,12 +15,56 @@ import {
   submitMessage as submitToLangGraph,
   setToolExecutor,
   checkHealth,
-  getClient
+  getClient,
+  type Message as LangGraphMessage
 } from '$lib/services/langgraph.js';
 import { executeToolCall } from '$lib/services/tool-executor.js';
 
 // Initialize the tool executor in the langgraph service
 setToolExecutor(executeToolCall);
+
+// =============================================================================
+// MESSAGE CONVERSION
+// =============================================================================
+
+/**
+ * Convert LangGraph messages to local message format.
+ * Filters out tool messages (they're displayed as part of AI messages).
+ */
+function convertLangGraphMessages(
+  lgMessages: LangGraphMessage[],
+  threadId: string
+): Omit<LocalMessage, 'id' | 'createdAt'>[] {
+  const localMessages: Omit<LocalMessage, 'id' | 'createdAt'>[] = [];
+  
+  for (let i = 0; i < lgMessages.length; i++) {
+    const msg = lgMessages[i];
+    
+    if (msg.type === 'human') {
+      localMessages.push({
+        threadId,
+        role: 'user',
+        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
+      });
+    } else if (msg.type === 'ai') {
+      const content = typeof msg.content === 'string' ? msg.content : '';
+      const toolCalls = (msg as { tool_calls?: ToolCall[] }).tool_calls;
+      
+      // Only add if there's content or tool calls
+      if (content || (toolCalls && toolCalls.length > 0)) {
+        localMessages.push({
+          threadId,
+          role: 'assistant',
+          content,
+          toolCalls: toolCalls
+        });
+      }
+    }
+    // Skip 'tool' messages - they're displayed as part of the AI message's tool calls
+  }
+  
+  return localMessages;
+}
 
 // =============================================================================
 // REACTIVE STATE
@@ -34,7 +78,7 @@ let pendingToolCalls = $state<ToolCallWithStatus[]>([]);
 let streamingContent = $state<string>('');
 
 // Track LangGraph messages for the current conversation
-let langGraphMessages = $state<Message[]>([]);
+let langGraphMessages = $state<LangGraphMessage[]>([]);
 
 // =============================================================================
 // HELPERS
@@ -177,25 +221,11 @@ async function sendMessage(
           console.log('[Agent] Stream completed. Messages:', finalMessages.length);
           langGraphMessages = [...finalMessages];
           
-          // Extract the final assistant content
-          const lastAiMessage = finalMessages.findLast(m => m.type === 'ai');
-          const finalContent = lastAiMessage 
-            ? (typeof lastAiMessage.content === 'string' ? lastAiMessage.content : '')
-            : streamingContent;
-          
-          // Extract tool calls from the last AI message
-          const toolCalls = lastAiMessage && (lastAiMessage as { tool_calls?: ToolCall[] }).tool_calls
-            ? (lastAiMessage as { tool_calls: ToolCall[] }).tool_calls
-            : undefined;
-          
-          // Add assistant message to local store
-          if (finalContent || toolCalls) {
-            threadStore.addMessage(localThreadId, {
-              role: 'assistant',
-              content: finalContent,
-              toolCalls: toolCalls
-            });
-          }
+          // Convert and sync ALL messages from LangGraph to local store
+          // This ensures we have the complete conversation history including
+          // multiple AI messages from tool call iterations
+          const convertedMessages = convertLangGraphMessages(finalMessages, localThreadId);
+          threadStore.syncMessages(localThreadId, convertedMessages);
           
           isStreaming = false;
           isInterrupted = false;

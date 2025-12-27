@@ -82,7 +82,9 @@
     // If no local thread, create one first
     let localThreadId = threadStore.currentThreadId;
     if (!localThreadId && currentProjectId) {
-      const thread = threadStore.createThread(currentProjectId, 'Chat');
+      // Use first 10 chars of message as initial thread title
+      const initialTitle = message.length > 10 ? message.slice(0, 10) + '...' : message;
+      const thread = threadStore.createThread(currentProjectId, initialTitle);
       localThreadId = thread.id;
     }
 
@@ -92,9 +94,9 @@
     const thread = threadStore.threads.find(t => t.id === localThreadId);
     const langGraphThreadId = thread?.langGraphThreadId ?? null;
 
-    // Update thread title if it's the first message and title is "Chat"
+    // Update thread title if it's the first message and title is generic
     if (currentThread?.title === 'Chat' || currentThread?.title === 'New Thread') {
-      const titlePreview = message.length > 30 ? message.slice(0, 30) + '...' : message;
+      const titlePreview = message.length > 10 ? message.slice(0, 10) + '...' : message;
       threadStore.updateThread(localThreadId, { title: titlePreview });
     }
 

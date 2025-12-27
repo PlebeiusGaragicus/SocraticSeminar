@@ -114,6 +114,30 @@ function clearMessages(threadId: string): void {
   messagesVersion++;
 }
 
+/**
+ * Sync/replace all messages for a thread.
+ * Used to sync with LangGraph server state after a conversation completes.
+ */
+function syncMessages(threadId: string, messages: Omit<Message, 'id' | 'createdAt'>[]): void {
+  const now = Date.now();
+  const newMessages: Message[] = messages.map((msg, index) => ({
+    ...msg,
+    id: `synced-${threadId}-${index}-${now}`,
+    threadId,
+    createdAt: now - (messages.length - index) * 1000 // Preserve order with timestamps
+  }));
+  
+  messagesByThread = { ...messagesByThread, [threadId]: newMessages };
+  messagesVersion++;
+  
+  console.log('[ThreadStore] Synced messages for thread', threadId, 'Total:', newMessages.length);
+  
+  // Update thread's updatedAt
+  threads = threads.map((t) =>
+    t.id === threadId ? { ...t, updatedAt: Date.now() } : t
+  );
+}
+
 function getMessages(threadId: string): Message[] {
   return messagesByThread[threadId] ?? [];
 }
@@ -169,6 +193,7 @@ export const threadStore = {
   addMessage,
   updateMessage,
   clearMessages,
+  syncMessages,
   loadThreads,
   reset
 };

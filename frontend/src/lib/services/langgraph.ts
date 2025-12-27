@@ -15,6 +15,9 @@ import { Client } from '@langchain/langgraph-sdk';
 import type { Message, Thread } from '@langchain/langgraph-sdk';
 import type { ToolCall, ToolResult, ProjectFile } from '../stores/types.js';
 
+// Re-export Message type for use in other modules
+export type { Message, Thread };
+
 // Configuration
 const LANGGRAPH_URL = import.meta.env.PUBLIC_LANGGRAPH_URL ?? 'http://localhost:2024';
 
