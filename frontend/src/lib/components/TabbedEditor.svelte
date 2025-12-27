@@ -50,6 +50,21 @@
     
     return {
       destroy() {
+        // When container is removed from DOM, destroy the editor instance
+        // This happens when all tabs are closed
+        if (editor) {
+          // Save any pending changes before destroying
+          if (saveTimeout) {
+            clearTimeout(saveTimeout);
+            saveTimeout = null;
+          }
+          if (currentEditorArtifactId) {
+            saveToArtifact(currentEditorArtifactId);
+          }
+          editor.destroy();
+          editor = null;
+          currentEditorArtifactId = null;
+        }
         editorContainer = null;
         containerMounted = false;
       }
