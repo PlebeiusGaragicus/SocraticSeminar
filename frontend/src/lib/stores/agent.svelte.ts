@@ -127,14 +127,21 @@ async function sendMessage(
   error = null;
   setPendingToolCalls([]);
   setStreamingContent('');
-  langGraphMessages = [];
+  
+  // Initialize langGraphMessages with user message for immediate display
+  // This will be replaced by server state via onMessagesSync
+  langGraphMessages = [{
+    type: 'human',
+    content: message,
+    id: `optimistic-user-${Date.now()}`
+  } as LangGraphMessage];
   
   // Track which AI message ID we're streaming to
   let currentAiMessageId: string | null = null;
   let knownAiMessageIds = new Set<string>();
   
   try {
-    // Add user message to local store
+    // Add user message to local store (persisted)
     threadStore.addMessage(localThreadId, {
       role: 'user',
       content: message

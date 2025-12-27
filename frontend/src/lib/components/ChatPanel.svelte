@@ -21,11 +21,14 @@
   let messagesContainer: HTMLDivElement | undefined = $state();
   let backendAvailable = $state<boolean | null>(null);
 
-  // Check backend health on mount
+  // Check backend health on mount and load threads
   onMount(() => {
     checkHealth().then(available => {
       backendAvailable = available;
     });
+    
+    // Load threads from IndexedDB
+    threadStore.loadFromStorage();
   });
 
   // Reactive derivations from stores
@@ -33,8 +36,8 @@
   const currentProjectId = $derived(projectStore.currentProjectId);
   const isWalletReady = $derived(cyphertap.isReady);
 
-  // Use $derived.by for explicit dependency tracking
-  const currentMessages = $derived.by(() => {
+  // Messages from thread store (persisted)
+  const persistedMessages = $derived.by(() => {
     return threadStore.currentMessages;
   });
 
@@ -42,10 +45,36 @@
   const isInterrupted = $derived.by(() => agentStore.isInterrupted);
   const pendingToolCalls = $derived.by(() => agentStore.pendingToolCalls);
   const streamingContent = $derived.by(() => agentStore.streamingContent);
+  
+  // LangGraph messages during streaming (live from server)
+  const langGraphMessages = $derived.by(() => agentStore.langGraphMessages);
+
+  // Display messages: during streaming show langGraphMessages, otherwise show persisted
+  // This prevents flickering by showing the stable server state during execution
+  const displayMessages = $derived.by(() => {
+    if (isStreaming && langGraphMessages.length > 0) {
+      // Convert LangGraph messages to display format during streaming
+      return langGraphMessages
+        .filter(msg => msg.type === 'human' || msg.type === 'ai')
+        .map((msg, index) => {
+          const isHuman = msg.type === 'human';
+          const content = typeof msg.content === 'string' ? msg.content : '';
+          const toolCalls = !isHuman && (msg as { tool_calls?: ToolCall[] }).tool_calls;
+          
+          return {
+            id: msg.id || `lg-${index}`,
+            role: isHuman ? 'user' as const : 'assistant' as const,
+            content,
+            toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined
+          };
+        });
+    }
+    return persistedMessages;
+  });
 
   // Debug logging for message count
   $effect(() => {
-    console.log('[ChatPanel] Messages updated:', currentMessages.length, 'Streaming:', isStreaming, 'Content:', streamingContent?.slice(0, 50));
+    console.log('[ChatPanel] Display messages:', displayMessages.length, 'Streaming:', isStreaming, 'LG messages:', langGraphMessages.length);
   });
 
   // Get user-friendly description for a tool
@@ -119,12 +148,13 @@
     }
   }
 
-  // Auto-scroll to bottom when new messages arrive or streaming content updates
+  // Auto-scroll to bottom when messages change
   $effect(() => {
     // Access dependencies
-    const _msgs = currentMessages.length;
+    const _msgs = displayMessages.length;
     const _streaming = streamingContent;
     const _tools = pendingToolCalls.length;
+    const _lgMsgs = langGraphMessages.length;
     
     // Scroll after DOM update
     tick().then(() => {
@@ -160,7 +190,7 @@
           <p class="text-xs text-zinc-700 mt-1">Use the sidebar on the left</p>
         </div>
       </div>
-    {:else if currentMessages.length === 0 && !streamingContent}
+    {:else if displayMessages.length === 0 && !isStreaming}
       <div class="flex h-full items-center justify-center text-zinc-600">
         <div class="text-center">
           <Bot class="mx-auto h-12 w-12 mb-3 opacity-30" />
@@ -168,7 +198,7 @@
         </div>
       </div>
     {:else}
-      {#each currentMessages as message}
+      {#each displayMessages as message (message.id)}
         <div
           class="flex {message.role === 'user' ? 'justify-end' : 'justify-start'}"
         >
@@ -177,7 +207,12 @@
               ? 'bg-amber-600 text-white'
               : 'bg-zinc-800 text-zinc-200'}"
           >
-            <p class="whitespace-pre-wrap text-sm">{message.content}</p>
+            {#if message.content}
+              <p class="whitespace-pre-wrap text-sm">{message.content}</p>
+            {:else if message.role === 'assistant'}
+              <!-- AI message with no content yet (tool calls only) -->
+              <p class="text-sm text-zinc-400 italic">Processing...</p>
+            {/if}
           </div>
         </div>
         
@@ -191,15 +226,20 @@
         {/if}
       {/each}
 
-      <!-- Streaming response -->
+      <!-- Show streaming content for the current AI response -->
       {#if isStreaming && streamingContent}
-        <div class="flex justify-start">
-          <div class="max-w-[85%] rounded-xl bg-zinc-800 px-4 py-2 text-zinc-200">
-            <p class="whitespace-pre-wrap text-sm">{streamingContent}</p>
-            <span class="animate-pulse text-amber-500">▊</span>
+        {@const lastMessage = displayMessages[displayMessages.length - 1]}
+        {@const isLastAi = lastMessage?.role === 'assistant'}
+        {#if !isLastAi || !lastMessage?.content}
+          <!-- Only show separate streaming bubble if there's no AI message yet or it has no content -->
+          <div class="flex justify-start">
+            <div class="max-w-[85%] rounded-xl bg-zinc-800 px-4 py-2 text-zinc-200">
+              <p class="whitespace-pre-wrap text-sm">{streamingContent}</p>
+              <span class="animate-pulse text-amber-500">▊</span>
+            </div>
           </div>
-        </div>
-      {:else if isStreaming && !isInterrupted}
+        {/if}
+      {:else if isStreaming && !isInterrupted && displayMessages.length === 0}
         <div class="flex justify-start">
           <div class="max-w-[85%] rounded-xl bg-zinc-800 px-4 py-2 text-zinc-400">
             <span class="animate-pulse text-sm">Thinking...</span>
@@ -208,7 +248,7 @@
       {/if}
       
       <!-- Show pending/executing tool calls -->
-      {#if isStreaming && isInterrupted && pendingToolCalls.length > 0}
+      {#if isStreaming && pendingToolCalls.length > 0}
         <div class="flex justify-start">
           <div class="max-w-[85%]">
             <div class="mb-2 flex items-center gap-2 text-xs text-amber-400">

@@ -1,14 +1,16 @@
 // Thread store using Svelte 5 runes
-// Manages chat threads within projects
+// Manages chat threads within projects with IndexedDB persistence
 
 import { nanoid } from 'nanoid';
 import type { Thread, Message } from './types.js';
+import { db } from '$lib/services/indexeddb.js';
 
 // Reactive state
 let threads = $state<Thread[]>([]);
 // Use a plain object instead of Map for better Svelte 5 reactivity
 let messagesByThread = $state<Record<string, Message[]>>({});
 let currentThreadId = $state<string | null>(null);
+let isLoaded = $state(false);
 
 // Version counter to force reactivity updates
 let messagesVersion = $state(0);
@@ -32,7 +34,42 @@ function getProjectThreads(projectId: string): Thread[] {
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-// Actions
+// =============================================================================
+// PERSISTENCE HELPERS
+// =============================================================================
+
+async function persistThread(thread: Thread): Promise<void> {
+  try {
+    await db.threads.save(thread);
+  } catch (e) {
+    console.error('[ThreadStore] Failed to persist thread:', e);
+  }
+}
+
+async function persistMessages(threadId: string, messages: Message[]): Promise<void> {
+  try {
+    // Delete existing messages and save new ones
+    await db.messages.deleteByThread(threadId);
+    if (messages.length > 0) {
+      await db.messages.saveMany(messages);
+    }
+  } catch (e) {
+    console.error('[ThreadStore] Failed to persist messages:', e);
+  }
+}
+
+async function deletePersistedThread(threadId: string): Promise<void> {
+  try {
+    await db.threads.delete(threadId);
+  } catch (e) {
+    console.error('[ThreadStore] Failed to delete persisted thread:', e);
+  }
+}
+
+// =============================================================================
+// ACTIONS
+// =============================================================================
+
 function createThread(projectId: string, title?: string): Thread {
   const now = Date.now();
   const thread: Thread = {
@@ -48,13 +85,27 @@ function createThread(projectId: string, title?: string): Thread {
   messagesVersion++;
   currentThreadId = thread.id;
   
+  // Persist asynchronously
+  persistThread(thread);
+  
   return thread;
 }
 
 function updateThread(id: string, updates: Partial<Pick<Thread, 'title' | 'metadata' | 'langGraphThreadId'>>): void {
-  threads = threads.map((t) =>
-    t.id === id ? { ...t, ...updates, updatedAt: Date.now() } : t
-  );
+  let updatedThread: Thread | null = null;
+  
+  threads = threads.map((t) => {
+    if (t.id === id) {
+      updatedThread = { ...t, ...updates, updatedAt: Date.now() };
+      return updatedThread;
+    }
+    return t;
+  });
+  
+  // Persist asynchronously
+  if (updatedThread) {
+    persistThread(updatedThread);
+  }
 }
 
 function deleteThread(id: string): void {
@@ -66,6 +117,9 @@ function deleteThread(id: string): void {
   if (currentThreadId === id) {
     currentThreadId = null;
   }
+  
+  // Persist asynchronously
+  deletePersistedThread(id);
 }
 
 function selectThread(id: string | null): void {
@@ -81,19 +135,32 @@ function addMessage(threadId: string, message: Omit<Message, 'id' | 'threadId' |
   };
   
   const threadMessages = messagesByThread[threadId] ?? [];
+  const updatedMessages = [...threadMessages, newMessage];
+  
   // Create new object to trigger reactivity
   messagesByThread = {
     ...messagesByThread,
-    [threadId]: [...threadMessages, newMessage]
+    [threadId]: updatedMessages
   };
   messagesVersion++;
   
-  console.log('[ThreadStore] Added message to thread', threadId, 'Total messages:', messagesByThread[threadId]?.length);
+  console.log('[ThreadStore] Added message to thread', threadId, 'Total messages:', updatedMessages.length);
   
   // Update thread's updatedAt
-  threads = threads.map((t) =>
-    t.id === threadId ? { ...t, updatedAt: Date.now() } : t
-  );
+  let updatedThread: Thread | null = null;
+  threads = threads.map((t) => {
+    if (t.id === threadId) {
+      updatedThread = { ...t, updatedAt: Date.now() };
+      return updatedThread;
+    }
+    return t;
+  });
+  
+  // Persist asynchronously
+  if (updatedThread) {
+    persistThread(updatedThread);
+  }
+  persistMessages(threadId, updatedMessages);
   
   return newMessage;
 }
@@ -102,16 +169,26 @@ function updateMessage(threadId: string, messageId: string, updates: Partial<Mes
   const threadMessages = messagesByThread[threadId];
   if (!threadMessages) return;
   
+  const updatedMessages = threadMessages.map((m) => 
+    m.id === messageId ? { ...m, ...updates } : m
+  );
+  
   messagesByThread = {
     ...messagesByThread,
-    [threadId]: threadMessages.map((m) => (m.id === messageId ? { ...m, ...updates } : m))
+    [threadId]: updatedMessages
   };
   messagesVersion++;
+  
+  // Persist asynchronously
+  persistMessages(threadId, updatedMessages);
 }
 
 function clearMessages(threadId: string): void {
   messagesByThread = { ...messagesByThread, [threadId]: [] };
   messagesVersion++;
+  
+  // Persist asynchronously
+  persistMessages(threadId, []);
 }
 
 /**
@@ -133,9 +210,20 @@ function syncMessages(threadId: string, messages: Omit<Message, 'id' | 'createdA
   console.log('[ThreadStore] Synced messages for thread', threadId, 'Total:', newMessages.length);
   
   // Update thread's updatedAt
-  threads = threads.map((t) =>
-    t.id === threadId ? { ...t, updatedAt: Date.now() } : t
-  );
+  let updatedThread: Thread | null = null;
+  threads = threads.map((t) => {
+    if (t.id === threadId) {
+      updatedThread = { ...t, updatedAt: Date.now() };
+      return updatedThread;
+    }
+    return t;
+  });
+  
+  // Persist asynchronously
+  if (updatedThread) {
+    persistThread(updatedThread);
+  }
+  persistMessages(threadId, newMessages);
 }
 
 function getMessages(threadId: string): Message[] {
@@ -154,11 +242,47 @@ function loadThreads(loadedThreads: Thread[], loadedMessages?: Record<string, Me
   }
 }
 
-// Load threads for a specific project (threads are currently in-memory only)
-function loadProjectThreads(projectId: string): void {
-  // Threads are stored in memory for now
-  // In the future, this could load from IndexedDB or LangGraph server
-  // For now, just ensure the currentThreadId is valid for this project
+/**
+ * Load all threads and messages from IndexedDB.
+ * Called on app startup.
+ */
+async function loadFromStorage(): Promise<void> {
+  if (isLoaded) return;
+  
+  try {
+    console.log('[ThreadStore] Loading from IndexedDB...');
+    
+    // Load all threads
+    const storedThreads = await db.threads.getAll();
+    threads = storedThreads;
+    
+    // Load messages for each thread
+    const messagesMap: Record<string, Message[]> = {};
+    for (const thread of storedThreads) {
+      const threadMessages = await db.messages.getByThread(thread.id);
+      if (threadMessages.length > 0) {
+        messagesMap[thread.id] = threadMessages;
+      }
+    }
+    messagesByThread = messagesMap;
+    messagesVersion++;
+    isLoaded = true;
+    
+    console.log('[ThreadStore] Loaded', storedThreads.length, 'threads from IndexedDB');
+  } catch (e) {
+    console.error('[ThreadStore] Failed to load from IndexedDB:', e);
+    isLoaded = true; // Mark as loaded anyway to prevent infinite retries
+  }
+}
+
+// Load threads for a specific project
+async function loadProjectThreads(projectId: string): Promise<void> {
+  // Ensure we've loaded from storage first
+  if (!isLoaded) {
+    await loadFromStorage();
+  }
+  
+  // Ensure the currentThreadId is valid for this project
   const projectThreads = getProjectThreads(projectId);
   if (currentThreadId) {
     const isCurrentValid = projectThreads.some(t => t.id === currentThreadId);
@@ -173,6 +297,7 @@ function reset(): void {
   messagesByThread = {};
   messagesVersion++;
   currentThreadId = null;
+  isLoaded = false;
 }
 
 // Export reactive getters and actions
@@ -181,11 +306,13 @@ export const threadStore = {
   get currentThread() { return currentThread; },
   get currentThreadId() { return currentThreadId; },
   get currentMessages() { return currentMessages; },
+  get isLoaded() { return isLoaded; },
   
   getProjectThreads,
   getMessages,
   getThreadMessageCount,
   loadProjectThreads,
+  loadFromStorage,
   createThread,
   updateThread,
   deleteThread,
