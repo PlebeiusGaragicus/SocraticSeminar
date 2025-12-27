@@ -4,16 +4,29 @@
   import Bot from '@lucide/svelte/icons/bot';
   import Loader2 from '@lucide/svelte/icons/loader-2';
   import Wrench from '@lucide/svelte/icons/wrench';
+  import AlertCircle from '@lucide/svelte/icons/alert-circle';
+  import Search from '@lucide/svelte/icons/search';
+  import FileText from '@lucide/svelte/icons/file-text';
+  import FolderOpen from '@lucide/svelte/icons/folder-open';
   import { Button, Textarea } from './ui/index.js';
   import AgentPicker from './AgentPicker.svelte';
   import ToolCallDisplay from './ToolCallDisplay.svelte';
   import { threadStore, agentStore, projectStore } from '$lib/stores/index.js';
   import { cyphertap } from 'cyphertap';
   import type { ToolCallWithStatus, ToolCall } from '$lib/stores/types.js';
-  import { tick } from 'svelte';
+  import { tick, onMount } from 'svelte';
+  import { checkHealth } from '$lib/services/langgraph.js';
 
   let messageInput = $state('');
   let messagesContainer: HTMLDivElement | undefined = $state();
+  let backendAvailable = $state<boolean | null>(null);
+
+  // Check backend health on mount
+  onMount(() => {
+    checkHealth().then(available => {
+      backendAvailable = available;
+    });
+  });
 
   // Reactive derivations from stores
   const currentThread = $derived(threadStore.currentThread);
@@ -34,6 +47,22 @@
   $effect(() => {
     console.log('[ChatPanel] Messages updated:', currentMessages.length, 'Streaming:', isStreaming, 'Content:', streamingContent?.slice(0, 50));
   });
+
+  // Get user-friendly description for a tool
+  function getToolDescription(toolName: string, args?: Record<string, unknown>): string {
+    switch (toolName) {
+      case 'list_files':
+        return 'Listing project files...';
+      case 'get_file':
+        const fileId = args?.file_id as string | undefined;
+        return fileId ? `Reading file: ${fileId}` : 'Reading file...';
+      case 'search_files':
+        const query = args?.query as string | undefined;
+        return query ? `Searching: "${query}"` : 'Searching files...';
+      default:
+        return `Running ${toolName}...`;
+    }
+  }
 
   // Convert message tool calls to ToolCallWithStatus format for display
   function toToolCallsWithStatus(toolCalls: ToolCall[] | undefined): ToolCallWithStatus[] {
@@ -181,8 +210,12 @@
         <div class="flex justify-start">
           <div class="max-w-[85%]">
             <div class="mb-2 flex items-center gap-2 text-xs text-amber-400">
-              <Wrench class="h-3 w-3" />
-              <span>Executing tools...</span>
+              <Loader2 class="h-3 w-3 animate-spin" />
+              <span>
+                {#each pendingToolCalls as tool, i}
+                  {getToolDescription(tool.name, tool.args)}{i < pendingToolCalls.length - 1 ? ', ' : ''}
+                {/each}
+              </span>
             </div>
             <ToolCallDisplay toolCalls={pendingToolCalls} />
           </div>
@@ -193,6 +226,13 @@
 
   <!-- Input -->
   <div class="border-t border-zinc-800 p-3">
+    {#if backendAvailable === false}
+      <div class="mb-2 flex items-center gap-2 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-400">
+        <AlertCircle class="h-3 w-3" />
+        <span>LangGraph server unavailable. Start the server to enable AI chat.</span>
+      </div>
+    {/if}
+    
     {#if !isWalletReady}
       <div class="mb-2 flex items-center gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-400">
         <Loader2 class="h-3 w-3 animate-spin" />
@@ -205,13 +245,13 @@
         placeholder={currentThread ? "Type your message..." : "Select a thread first..."}
         bind:value={messageInput}
         onkeydown={handleKeydown}
-        disabled={isStreaming || !currentThread || !isWalletReady}
+        disabled={isStreaming || !currentThread || !isWalletReady || backendAvailable === false}
         rows={2}
         class="flex-1 resize-none bg-zinc-800 border-zinc-700 text-zinc-100 placeholder-zinc-500"
       />
       <Button
         onclick={handleSendMessage}
-        disabled={!messageInput.trim() || isStreaming || !currentThread || !isWalletReady}
+        disabled={!messageInput.trim() || isStreaming || !currentThread || !isWalletReady || backendAvailable === false}
         size="icon"
         class="self-end bg-amber-600 hover:bg-amber-500"
       >

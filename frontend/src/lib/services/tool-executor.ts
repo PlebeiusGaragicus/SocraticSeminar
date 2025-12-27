@@ -13,7 +13,7 @@
  */
 
 import { db } from './indexeddb.js';
-import type { ToolCall, ToolResult, Artifact, ProjectFile } from '../stores/types.js';
+import type { ToolCall, ToolResult, ProjectFile } from '../stores/types.js';
 
 /**
  * Execute a single tool call and return the result.
@@ -27,30 +27,23 @@ export async function executeToolCall(
   try {
     switch (name) {
       case 'list_files':
-        return await executeListFiles(toolCallId, projectId);
+        return await executeListFiles(toolCallId, name, projectId);
 
       case 'get_file':
-        return await executeGetFile(toolCallId, args.file_id as string);
+        return await executeGetFile(toolCallId, name, args.file_id as string);
 
       case 'search_files':
         return await executeSearchFiles(
           toolCallId,
+          name,
           projectId,
           args.query as string,
           (args.top_k as number) || 5
         );
 
-      case 'edit_file':
-        return await executeEditFile(
-          toolCallId,
-          args.file_id as string,
-          args.new_content as string,
-          (args.edit_description as string) || ''
-        );
-
       default:
         return {
-          toolCallId,
+          tool_call_id: toolCallId,
           name,
           content: '',
           error: `Unknown tool: ${name}`
@@ -60,7 +53,7 @@ export async function executeToolCall(
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     console.error(`[ToolExecutor] Error executing ${name}:`, error);
     return {
-      toolCallId,
+      tool_call_id: toolCallId,
       name,
       content: '',
       error: errorMessage
@@ -85,6 +78,7 @@ export async function executeToolCalls(
  */
 async function executeListFiles(
   toolCallId: string,
+  toolName: string,
   projectId: string
 ): Promise<ToolResult> {
   const artifacts = await db.artifacts.getByProject(projectId);
@@ -96,8 +90,8 @@ async function executeListFiles(
   }));
 
   return {
-    toolCallId,
-    name: 'list_files',
+    tool_call_id: toolCallId,
+    name: toolName,
     content: JSON.stringify(files, null, 2)
   };
 }
@@ -107,12 +101,13 @@ async function executeListFiles(
  */
 async function executeGetFile(
   toolCallId: string,
+  toolName: string,
   fileId: string
 ): Promise<ToolResult> {
   if (!fileId) {
     return {
-      toolCallId,
-      name: 'get_file',
+      tool_call_id: toolCallId,
+      name: toolName,
       content: '',
       error: 'file_id is required'
     };
@@ -122,8 +117,8 @@ async function executeGetFile(
   
   if (!artifact) {
     return {
-      toolCallId,
-      name: 'get_file',
+      tool_call_id: toolCallId,
+      name: toolName,
       content: '',
       error: `File not found: ${fileId}`
     };
@@ -133,8 +128,8 @@ async function executeGetFile(
   
   if (!currentVersion || !currentVersion.content) {
     return {
-      toolCallId,
-      name: 'get_file',
+      tool_call_id: toolCallId,
+      name: toolName,
       content: '',
       error: 'File is empty'
     };
@@ -150,8 +145,8 @@ async function executeGetFile(
   };
 
   return {
-    toolCallId,
-    name: 'get_file',
+    tool_call_id: toolCallId,
+    name: toolName,
     content: JSON.stringify(result, null, 2)
   };
 }
@@ -164,14 +159,15 @@ async function executeGetFile(
  */
 async function executeSearchFiles(
   toolCallId: string,
+  toolName: string,
   projectId: string,
   query: string,
   topK: number
 ): Promise<ToolResult> {
   if (!query) {
     return {
-      toolCallId,
-      name: 'search_files',
+      tool_call_id: toolCallId,
+      name: toolName,
       content: '',
       error: 'query is required'
     };
@@ -181,8 +177,8 @@ async function executeSearchFiles(
   
   if (artifacts.length === 0) {
     return {
-      toolCallId,
-      name: 'search_files',
+      tool_call_id: toolCallId,
+      name: toolName,
       content: JSON.stringify({ results: [], message: 'No files in project' })
     };
   }
@@ -241,78 +237,16 @@ async function executeSearchFiles(
 
   if (limitedResults.length === 0) {
     return {
-      toolCallId,
-      name: 'search_files',
+      tool_call_id: toolCallId,
+      name: toolName,
       content: JSON.stringify({ results: [], message: 'No matching content found' })
     };
   }
 
   return {
-    toolCallId,
-    name: 'search_files',
+    tool_call_id: toolCallId,
+    name: toolName,
     content: JSON.stringify({ results: limitedResults })
-  };
-}
-
-/**
- * edit_file(file_id, new_content, edit_description) - Propose file edits
- * 
- * This doesn't directly modify the file. Instead, it returns a success message
- * and the caller (agent store) handles showing the diff to the user.
- */
-async function executeEditFile(
-  toolCallId: string,
-  fileId: string,
-  newContent: string,
-  editDescription: string
-): Promise<ToolResult> {
-  if (!fileId) {
-    return {
-      toolCallId,
-      name: 'edit_file',
-      content: '',
-      error: 'file_id is required'
-    };
-  }
-
-  if (newContent === undefined || newContent === null) {
-    return {
-      toolCallId,
-      name: 'edit_file',
-      content: '',
-      error: 'new_content is required'
-    };
-  }
-
-  const artifact = await db.artifacts.get(fileId);
-  
-  if (!artifact) {
-    return {
-      toolCallId,
-      name: 'edit_file',
-      content: '',
-      error: `File not found: ${fileId}`
-    };
-  }
-
-  const currentVersion = artifact.versions[artifact.currentVersionIndex];
-  const oldContent = currentVersion?.content || '';
-
-  // Return success with metadata - actual diff handling is done by agent store
-  const result = {
-    success: true,
-    file_id: fileId,
-    file_title: currentVersion?.title || 'Untitled',
-    old_content: oldContent,
-    new_content: newContent,
-    edit_description: editDescription,
-    message: 'Edit queued for user approval'
-  };
-
-  return {
-    toolCallId,
-    name: 'edit_file',
-    content: JSON.stringify(result)
   };
 }
 
@@ -327,9 +261,8 @@ export function toolResultsToMessages(results: ToolResult[]): Array<{
 }> {
   return results.map(result => ({
     type: 'tool' as const,
-    tool_call_id: result.toolCallId,
+    tool_call_id: result.tool_call_id,
     name: result.name,
     content: result.error ? JSON.stringify({ error: result.error }) : result.content
   }));
 }
-

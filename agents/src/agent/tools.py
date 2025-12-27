@@ -97,5 +97,7 @@ def edit_file(file_id: str, new_content: str, edit_description: str = "") -> str
 
 
 # All tools that require client-side execution
-CLIENT_TOOLS = [list_files, get_file, search_files, edit_file]
+# Note: edit_file is commented out for now - focusing on read-only operations
+CLIENT_TOOLS = [list_files, get_file, search_files]
+# CLIENT_TOOLS = [list_files, get_file, search_files, edit_file]  # Uncomment to enable editing
 

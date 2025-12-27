@@ -41,8 +41,9 @@ export interface ToolCall {
 }
 
 // Result from executing a tool on the client
+// Uses LangGraph SDK naming convention (tool_call_id not toolCallId)
 export interface ToolResult {
-  toolCallId: string;
+  tool_call_id: string;
   name: string;
   content: string;
   error?: string;
