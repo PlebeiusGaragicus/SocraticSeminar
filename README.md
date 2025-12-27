@@ -26,3 +26,13 @@ These references will be used to build our "Socratic Seminar" web application:
 `agents/` - our agentic graphs, deployed using `langgraph dev`. One node will hit our backend with an ecash token which will need to be verified before execution.
 
 `backend/` - our Python FastAPI backend, accepts and verifies eCash payments
+
+---
+
+# Starting Prompt for Cursor
+
+Review the @README.md and submodules to understand the core features of our web application. We'll need to understand the example submodules and build out a thorough plan before building.
+
+The idea is to have projects, which will contain both threads and artifacts.  The submodule's are examples upon which we will.
+
+We will update our MKDocs in docs/ as we go - this should be terse and be used to outline our architecture, design decisions and progress as we go.
