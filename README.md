@@ -30,6 +30,35 @@ These references will be used to build our "Socratic Seminar" web application:
 
 ---
 
+## Initial setup for local development:
+
+```sh
+python3.12 -m venv venv_agents
+source venv_agents/bin/activate
+cd agents
+pip install -e .
+cp .env.example .env
+nano .env
+```
+
+```sh
+python3.12 -m venv venv_backend
+source venv_backend/bin/activate
+cd backend
+pip install -e .
+cp .env.example .env
+nano .env
+```
+
+```sh
+cd frontend
+npm install
+
+cp .env.example .env
+nano .env
+```
+
+
 ## How to run for development:
 
 ```sh
