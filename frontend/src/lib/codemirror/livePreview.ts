@@ -334,20 +334,16 @@ export const livePreviewTheme = EditorView.theme({
     color: '#fbbf24'
   },
   '.cm-header-1': {
-    fontSize: '1.875em',
-    lineHeight: '1.3',
-    marginTop: '0.5em'
+    fontSize: '1.75em'
   },
   '.cm-header-2': {
-    fontSize: '1.5em',
-    lineHeight: '1.35'
+    fontSize: '1.4em'
   },
   '.cm-header-3': {
-    fontSize: '1.25em',
-    lineHeight: '1.4'
+    fontSize: '1.2em'
   },
   '.cm-header-4': {
-    fontSize: '1.125em'
+    fontSize: '1.1em'
   },
   '.cm-header-5': {
     fontSize: '1em'
@@ -381,9 +377,7 @@ export const livePreviewTheme = EditorView.theme({
     backgroundColor: 'rgba(39, 39, 42, 0.6)',
     fontFamily: "'JetBrains Mono', 'Fira Code', ui-monospace, monospace",
     fontSize: '0.875em',
-    borderLeft: '2px solid #3f3f46',
-    paddingLeft: '1em',
-    marginLeft: '0'
+    borderLeft: '2px solid #3f3f46'
   },
 
   // Strong/Bold
@@ -399,8 +393,8 @@ export const livePreviewTheme = EditorView.theme({
   // Inline code - monospace
   '.cm-inline-code': {
     backgroundColor: 'rgba(251, 191, 36, 0.1)',
-    padding: '0.15em 0.4em',
-    borderRadius: '4px',
+    padding: '0 0.35em',
+    borderRadius: '3px',
     fontFamily: "'JetBrains Mono', 'Fira Code', ui-monospace, monospace",
     fontSize: '0.875em',
     color: '#fbbf24'
@@ -411,9 +405,7 @@ export const livePreviewTheme = EditorView.theme({
     backgroundColor: 'rgba(39, 39, 42, 0.6)',
     fontFamily: "'JetBrains Mono', 'Fira Code', ui-monospace, monospace",
     fontSize: '0.875em',
-    borderLeft: '2px solid #3f3f46',
-    paddingLeft: '1em',
-    marginLeft: '0'
+    borderLeft: '2px solid #3f3f46'
   },
 
   // Blockquotes - elegant italic

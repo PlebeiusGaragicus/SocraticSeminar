@@ -167,7 +167,10 @@
         fontFamily: "'Inter', 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
       },
       '.cm-content': {
-        padding: '24px 16px',
+        paddingTop: '8px',
+        paddingBottom: '16px',
+        paddingLeft: '16px',
+        paddingRight: '16px',
         caretColor: '#f59e0b'
       },
       '.cm-cursor': {
