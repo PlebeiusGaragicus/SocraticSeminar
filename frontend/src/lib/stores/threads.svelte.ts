@@ -6,17 +6,25 @@ import type { Thread, Message } from './types.js';
 
 // Reactive state
 let threads = $state<Thread[]>([]);
-let messages = $state<Map<string, Message[]>>(new Map());
+// Use a plain object instead of Map for better Svelte 5 reactivity
+let messagesByThread = $state<Record<string, Message[]>>({});
 let currentThreadId = $state<string | null>(null);
+
+// Version counter to force reactivity updates
+let messagesVersion = $state(0);
 
 // Derived state
 const currentThread = $derived(
   threads.find((t) => t.id === currentThreadId) ?? null
 );
 
-const currentMessages = $derived(
-  currentThreadId ? (messages.get(currentThreadId) ?? []) : []
-);
+// Use messagesVersion as a dependency to force re-computation
+const currentMessages = $derived.by(() => {
+  // Access messagesVersion to create dependency
+  const _v = messagesVersion;
+  if (!currentThreadId) return [];
+  return messagesByThread[currentThreadId] ?? [];
+});
 
 // Get threads for a specific project
 function getProjectThreads(projectId: string): Thread[] {
@@ -36,7 +44,8 @@ function createThread(projectId: string, title?: string): Thread {
   };
   
   threads = [...threads, thread];
-  messages.set(thread.id, []);
+  messagesByThread = { ...messagesByThread, [thread.id]: [] };
+  messagesVersion++;
   currentThreadId = thread.id;
   
   return thread;
@@ -50,7 +59,9 @@ function updateThread(id: string, updates: Partial<Pick<Thread, 'title' | 'metad
 
 function deleteThread(id: string): void {
   threads = threads.filter((t) => t.id !== id);
-  messages.delete(id);
+  const { [id]: removed, ...rest } = messagesByThread;
+  messagesByThread = rest;
+  messagesVersion++;
   
   if (currentThreadId === id) {
     currentThreadId = null;
@@ -69,8 +80,15 @@ function addMessage(threadId: string, message: Omit<Message, 'id' | 'threadId' |
     createdAt: Date.now()
   };
   
-  const threadMessages = messages.get(threadId) ?? [];
-  messages.set(threadId, [...threadMessages, newMessage]);
+  const threadMessages = messagesByThread[threadId] ?? [];
+  // Create new object to trigger reactivity
+  messagesByThread = {
+    ...messagesByThread,
+    [threadId]: [...threadMessages, newMessage]
+  };
+  messagesVersion++;
+  
+  console.log('[ThreadStore] Added message to thread', threadId, 'Total messages:', messagesByThread[threadId]?.length);
   
   // Update thread's updatedAt
   threads = threads.map((t) =>
@@ -81,27 +99,34 @@ function addMessage(threadId: string, message: Omit<Message, 'id' | 'threadId' |
 }
 
 function updateMessage(threadId: string, messageId: string, updates: Partial<Message>): void {
-  const threadMessages = messages.get(threadId);
+  const threadMessages = messagesByThread[threadId];
   if (!threadMessages) return;
   
-  messages.set(
-    threadId,
-    threadMessages.map((m) => (m.id === messageId ? { ...m, ...updates } : m))
-  );
+  messagesByThread = {
+    ...messagesByThread,
+    [threadId]: threadMessages.map((m) => (m.id === messageId ? { ...m, ...updates } : m))
+  };
+  messagesVersion++;
 }
 
 function clearMessages(threadId: string): void {
-  messages.set(threadId, []);
+  messagesByThread = { ...messagesByThread, [threadId]: [] };
+  messagesVersion++;
+}
+
+function getMessages(threadId: string): Message[] {
+  return messagesByThread[threadId] ?? [];
 }
 
 function getThreadMessageCount(threadId: string): number {
-  return messages.get(threadId)?.length ?? 0;
+  return messagesByThread[threadId]?.length ?? 0;
 }
 
-function loadThreads(loadedThreads: Thread[], loadedMessages?: Map<string, Message[]>): void {
+function loadThreads(loadedThreads: Thread[], loadedMessages?: Record<string, Message[]>): void {
   threads = loadedThreads;
   if (loadedMessages) {
-    messages = loadedMessages;
+    messagesByThread = loadedMessages;
+    messagesVersion++;
   }
 }
 
@@ -121,7 +146,8 @@ function loadProjectThreads(projectId: string): void {
 
 function reset(): void {
   threads = [];
-  messages = new Map();
+  messagesByThread = {};
+  messagesVersion++;
   currentThreadId = null;
 }
 
@@ -133,6 +159,7 @@ export const threadStore = {
   get currentMessages() { return currentMessages; },
   
   getProjectThreads,
+  getMessages,
   getThreadMessageCount,
   loadProjectThreads,
   createThread,
@@ -145,4 +172,3 @@ export const threadStore = {
   loadThreads,
   reset
 };
-

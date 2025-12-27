@@ -6,6 +6,7 @@ export { default as Sidebar } from './Sidebar.svelte';
 export { default as ChatPanel } from './ChatPanel.svelte';
 export { default as TabbedEditor } from './TabbedEditor.svelte';
 export { default as AgentPicker } from './AgentPicker.svelte';
+export { default as ToolCallDisplay } from './ToolCallDisplay.svelte';
 
 // Legacy components (kept for compatibility)
 export { default as ProjectSidebar } from './ProjectSidebar.svelte';

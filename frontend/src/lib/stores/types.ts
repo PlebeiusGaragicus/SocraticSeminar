@@ -32,11 +32,37 @@ export interface Message {
   createdAt: number;
 }
 
+// Tool call from LangGraph - matches LangChain's ToolCall structure
 export interface ToolCall {
   id: string;
   name: string;
-  args: string;
-  result?: unknown;
+  args: Record<string, unknown>;
+  type?: 'tool_call';
+}
+
+// Result from executing a tool on the client
+export interface ToolResult {
+  toolCallId: string;
+  name: string;
+  content: string;
+  error?: string;
+}
+
+// Tool execution status for UI display
+export type ToolExecutionStatus = 'pending' | 'executing' | 'completed' | 'error';
+
+// Tool call with execution state for UI
+export interface ToolCallWithStatus extends ToolCall {
+  status: ToolExecutionStatus;
+  result?: ToolResult;
+}
+
+// Project file metadata - sent to agent so it knows what files exist
+// Actual content is fetched via tool calls
+export interface ProjectFile {
+  id: string;
+  title: string;
+  file_type: 'artifact' | 'document' | 'code';
 }
 
 export interface ArtifactVersion {
@@ -67,4 +93,7 @@ export interface AgentStreamState {
   threadId: string | null;
   currentRunId: string | null;
   error: string | null;
+  // Interrupt state for tool execution
+  isInterrupted: boolean;
+  pendingToolCalls: ToolCallWithStatus[];
 }

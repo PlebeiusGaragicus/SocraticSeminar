@@ -3,22 +3,46 @@
   import MessageCircle from '@lucide/svelte/icons/message-circle';
   import Bot from '@lucide/svelte/icons/bot';
   import Loader2 from '@lucide/svelte/icons/loader-2';
+  import Wrench from '@lucide/svelte/icons/wrench';
   import { Button, Textarea } from './ui/index.js';
   import AgentPicker from './AgentPicker.svelte';
+  import ToolCallDisplay from './ToolCallDisplay.svelte';
   import { threadStore, agentStore, projectStore } from '$lib/stores/index.js';
   import { cyphertap } from 'cyphertap';
+  import type { ToolCallWithStatus, ToolCall } from '$lib/stores/types.js';
+  import { tick } from 'svelte';
 
   let messageInput = $state('');
-  let messagesContainer: HTMLDivElement;
+  let messagesContainer: HTMLDivElement | undefined = $state();
 
-  const currentMessages = $derived(threadStore.currentMessages);
-  const isStreaming = $derived(agentStore.isStreaming);
-  const streamingContent = $derived(agentStore.streamingContent);
+  // Reactive derivations from stores
   const currentThread = $derived(threadStore.currentThread);
   const currentProjectId = $derived(projectStore.currentProjectId);
-  
-  // Wallet readiness (safe to use directly with SSR disabled)
   const isWalletReady = $derived(cyphertap.isReady);
+
+  // Use $derived.by for explicit dependency tracking
+  const currentMessages = $derived.by(() => {
+    return threadStore.currentMessages;
+  });
+
+  const isStreaming = $derived.by(() => agentStore.isStreaming);
+  const isInterrupted = $derived.by(() => agentStore.isInterrupted);
+  const pendingToolCalls = $derived.by(() => agentStore.pendingToolCalls);
+  const streamingContent = $derived.by(() => agentStore.streamingContent);
+
+  // Debug logging for message count
+  $effect(() => {
+    console.log('[ChatPanel] Messages updated:', currentMessages.length, 'Streaming:', isStreaming, 'Content:', streamingContent?.slice(0, 50));
+  });
+
+  // Convert message tool calls to ToolCallWithStatus format for display
+  function toToolCallsWithStatus(toolCalls: ToolCall[] | undefined): ToolCallWithStatus[] {
+    if (!toolCalls) return [];
+    return toolCalls.map(tc => ({
+      ...tc,
+      status: 'completed' as const
+    }));
+  }
 
   async function handleSendMessage() {
     if (!messageInput.trim() || isStreaming || !isWalletReady) return;
@@ -39,8 +63,8 @@
     const thread = threadStore.threads.find(t => t.id === localThreadId);
     const langGraphThreadId = thread?.langGraphThreadId ?? null;
 
-    // Update thread title if it's the first message and title is "New Chat"
-    if (currentThread?.title === 'New Chat') {
+    // Update thread title if it's the first message and title is "Chat"
+    if (currentThread?.title === 'Chat' || currentThread?.title === 'New Thread') {
       const titlePreview = message.length > 30 ? message.slice(0, 30) + '...' : message;
       threadStore.updateThread(localThreadId, { title: titlePreview });
     }
@@ -64,11 +88,19 @@
     }
   }
 
-  // Auto-scroll to bottom when new messages arrive
+  // Auto-scroll to bottom when new messages arrive or streaming content updates
   $effect(() => {
-    if (messagesContainer && (currentMessages.length > 0 || streamingContent)) {
-      messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    }
+    // Access dependencies
+    const _msgs = currentMessages.length;
+    const _streaming = streamingContent;
+    const _tools = pendingToolCalls.length;
+    
+    // Scroll after DOM update
+    tick().then(() => {
+      if (messagesContainer) {
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      }
+    });
   });
 </script>
 
@@ -117,6 +149,15 @@
             <p class="whitespace-pre-wrap text-sm">{message.content}</p>
           </div>
         </div>
+        
+        <!-- Show tool calls for assistant messages -->
+        {#if message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0}
+          <div class="flex justify-start">
+            <div class="max-w-[85%]">
+              <ToolCallDisplay toolCalls={toToolCallsWithStatus(message.toolCalls)} />
+            </div>
+          </div>
+        {/if}
       {/each}
 
       <!-- Streaming response -->
@@ -127,10 +168,23 @@
             <span class="animate-pulse text-amber-500">▊</span>
           </div>
         </div>
-      {:else if isStreaming}
+      {:else if isStreaming && !isInterrupted}
         <div class="flex justify-start">
           <div class="max-w-[85%] rounded-xl bg-zinc-800 px-4 py-2 text-zinc-400">
             <span class="animate-pulse text-sm">Thinking...</span>
+          </div>
+        </div>
+      {/if}
+      
+      <!-- Show pending/executing tool calls -->
+      {#if isStreaming && isInterrupted && pendingToolCalls.length > 0}
+        <div class="flex justify-start">
+          <div class="max-w-[85%]">
+            <div class="mb-2 flex items-center gap-2 text-xs text-amber-400">
+              <Wrench class="h-3 w-3" />
+              <span>Executing tools...</span>
+            </div>
+            <ToolCallDisplay toolCalls={pendingToolCalls} />
           </div>
         </div>
       {/if}
