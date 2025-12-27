@@ -119,3 +119,62 @@
   }
 }
 
+/* CodeMirror Live Preview Markdown Styles */
+.cm-editor {
+  height: 100%;
+}
+
+.cm-editor .cm-scroller {
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', ui-monospace, monospace;
+}
+
+/* Headers with proper sizing */
+.cm-editor .cm-header.cm-header-1 .cm-line {
+  font-size: 2em;
+  font-weight: 700;
+  color: #fbbf24;
+}
+
+.cm-editor .cm-header.cm-header-2 .cm-line {
+  font-size: 1.5em;
+  font-weight: 600;
+  color: #fbbf24;
+}
+
+.cm-editor .cm-header.cm-header-3 .cm-line {
+  font-size: 1.25em;
+  font-weight: 600;
+  color: #fbbf24;
+}
+
+/* Merge view styling for diffs */
+.cm-merge-view {
+  height: 100%;
+  display: flex;
+}
+
+.cm-merge-view > div {
+  flex: 1;
+}
+
+.cm-merge-view .cm-editor {
+  height: 100%;
+}
+
+.cm-merge-view .cm-changedLine {
+  background-color: rgba(245, 158, 11, 0.1);
+}
+
+.cm-merge-view .cm-deletedChunk {
+  background-color: rgba(239, 68, 68, 0.15);
+}
+
+.cm-merge-view .cm-insertedChunk {
+  background-color: rgba(34, 197, 94, 0.15);
+}
+
+/* Gutter styling for merge view */
+.cm-merge-view .cm-changedLineGutter {
+  background-color: rgba(245, 158, 11, 0.2);
+}
+

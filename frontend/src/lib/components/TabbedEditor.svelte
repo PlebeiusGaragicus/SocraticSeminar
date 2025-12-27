@@ -9,10 +9,8 @@
   import { onMount, onDestroy } from 'svelte';
   import { browser } from '$app/environment';
 
-  // Monaco types - dynamically loaded
-  type Monaco = typeof import('monaco-editor');
-  type IStandaloneCodeEditor = import('monaco-editor').editor.IStandaloneCodeEditor;
-  type IStandaloneDiffEditor = import('monaco-editor').editor.IStandaloneDiffEditor;
+  // CodeMirror imports (dynamically loaded on client)
+  type EditorView = import('@codemirror/view').EditorView;
 
   interface Props {
     openArtifacts: Artifact[];
@@ -34,15 +32,31 @@
     onRejectChanges
   }: Props = $props();
 
-  let editorContainer: HTMLDivElement;
-  let diffContainer: HTMLDivElement;
-  let editor: IStandaloneCodeEditor | null = null;
-  let diffEditor: IStandaloneDiffEditor | null = null;
-  let monaco: Monaco | null = null;
+  let editorContainer = $state<HTMLDivElement | null>(null);
+  let diffContainer = $state<HTMLDivElement | null>(null);
+  let editor: EditorView | null = null;
   let isEditing = $state(false);
   let hasUnsavedChanges = $state(false);
-  let isMonacoReady = $state(false);
+  let isEditorReady = $state(false);
   let currentEditorArtifactId: string | null = null;
+
+  // Store CodeMirror modules after dynamic import
+  let cmModules: {
+    EditorView: typeof import('@codemirror/view').EditorView;
+    keymap: typeof import('@codemirror/view').keymap;
+    lineNumbers: typeof import('@codemirror/view').lineNumbers;
+    highlightActiveLine: typeof import('@codemirror/view').highlightActiveLine;
+    highlightActiveLineGutter: typeof import('@codemirror/view').highlightActiveLineGutter;
+    EditorState: typeof import('@codemirror/state').EditorState;
+    markdown: typeof import('@codemirror/lang-markdown').markdown;
+    languages: typeof import('@codemirror/language-data').languages;
+    oneDark: typeof import('@codemirror/theme-one-dark').oneDark;
+    defaultKeymap: typeof import('@codemirror/commands').defaultKeymap;
+    history: typeof import('@codemirror/commands').history;
+    historyKeymap: typeof import('@codemirror/commands').historyKeymap;
+    livePreview: typeof import('$lib/codemirror/livePreview.js').livePreview;
+    MergeView: typeof import('@codemirror/merge').MergeView;
+  } | null = null;
 
   const activeArtifact = $derived(
     openArtifacts.find((a) => a.id === activeArtifactId) ?? null
@@ -85,7 +99,7 @@
   function handleSave() {
     if (!activeArtifact || !editor) return;
 
-    const content = editor.getValue();
+    const content = editor.state.doc.toString();
     const currentVersion = currentContent();
     
     artifactStore.updateArtifact(
@@ -99,147 +113,232 @@
   }
 
   function handleRevert() {
-    if (!editor || !activeArtifact) return;
+    if (!editor || !activeArtifact || !cmModules) return;
     const content = currentContent();
     if (content) {
-      editor.setValue(content.content);
+      editor.dispatch({
+        changes: {
+          from: 0,
+          to: editor.state.doc.length,
+          insert: content.content
+        }
+      });
       hasUnsavedChanges = false;
     }
+  }
+
+  // Custom theme that matches the existing socratic-dark aesthetic
+  function createSocraticTheme(EditorView: typeof import('@codemirror/view').EditorView) {
+    return EditorView.theme({
+      '&': {
+        height: '100%',
+        fontSize: '15px',
+        fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', monospace"
+      },
+      '.cm-content': {
+        padding: '16px 0',
+        caretColor: '#f59e0b'
+      },
+      '.cm-cursor': {
+        borderLeftColor: '#f59e0b'
+      },
+      '&.cm-focused .cm-cursor': {
+        borderLeftColor: '#f59e0b'
+      },
+      '.cm-gutters': {
+        backgroundColor: '#0a0a0a',
+        color: '#52525b',
+        border: 'none'
+      },
+      '.cm-activeLineGutter': {
+        backgroundColor: '#18181b',
+        color: '#a1a1aa'
+      },
+      '.cm-activeLine': {
+        backgroundColor: '#18181b'
+      },
+      '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
+        backgroundColor: '#f59e0b33'
+      },
+      '.cm-line': {
+        lineHeight: '1.6'
+      },
+      '.cm-scroller': {
+        overflow: 'auto'
+      }
+    }, { dark: true });
   }
 
   onMount(async () => {
     if (!browser) return;
 
-    // Dynamically import Monaco on client only
-    // Monaco will fall back to main thread if workers aren't available
-    // This is fine for markdown editing - workers are mainly needed for 
-    // language services like TypeScript intellisense
-    monaco = await import('monaco-editor');
+    // Dynamically import CodeMirror modules
+    const [
+      viewModule,
+      stateModule,
+      markdownModule,
+      langDataModule,
+      themeModule,
+      commandsModule,
+      livePreviewModule,
+      mergeModule
+    ] = await Promise.all([
+      import('@codemirror/view'),
+      import('@codemirror/state'),
+      import('@codemirror/lang-markdown'),
+      import('@codemirror/language-data'),
+      import('@codemirror/theme-one-dark'),
+      import('@codemirror/commands'),
+      import('$lib/codemirror/livePreview.js'),
+      import('@codemirror/merge')
+    ]);
 
-    // Configure Monaco theme with markdown-friendly styling
-    monaco.editor.defineTheme('socratic-dark', {
-      base: 'vs-dark',
-      inherit: true,
-      rules: [
-        { token: 'keyword.md', foreground: 'f59e0b' },
-        { token: 'string.link.md', foreground: '3b82f6' },
-        { token: 'markup.heading.md', foreground: 'f59e0b', fontStyle: 'bold' },
-        { token: 'markup.bold.md', fontStyle: 'bold' },
-        { token: 'markup.italic.md', fontStyle: 'italic' },
-      ],
-      colors: {
-        'editor.background': '#0a0a0a',
-        'editor.foreground': '#e4e4e7',
-        'editorLineNumber.foreground': '#52525b',
-        'editorLineNumber.activeForeground': '#a1a1aa',
-        'editor.selectionBackground': '#f59e0b33',
-        'editor.lineHighlightBackground': '#18181b',
-        'editorCursor.foreground': '#f59e0b'
-      }
-    });
+    cmModules = {
+      EditorView: viewModule.EditorView,
+      keymap: viewModule.keymap,
+      lineNumbers: viewModule.lineNumbers,
+      highlightActiveLine: viewModule.highlightActiveLine,
+      highlightActiveLineGutter: viewModule.highlightActiveLineGutter,
+      EditorState: stateModule.EditorState,
+      markdown: markdownModule.markdown,
+      languages: langDataModule.languages,
+      oneDark: themeModule.oneDark,
+      defaultKeymap: commandsModule.defaultKeymap,
+      history: commandsModule.history,
+      historyKeymap: commandsModule.historyKeymap,
+      livePreview: livePreviewModule.livePreview,
+      MergeView: mergeModule.MergeView
+    };
 
-    monaco.editor.setTheme('socratic-dark');
-    isMonacoReady = true;
+    isEditorReady = true;
   });
 
   onDestroy(() => {
-    editor?.dispose();
-    diffEditor?.dispose();
+    editor?.destroy();
   });
 
   // Create/update editor when active artifact changes
   $effect(() => {
-    if (!browser || !isMonacoReady || !monaco || !editorContainer || showDiff) return;
+    // Wait for all dependencies to be ready
+    if (!browser || !isEditorReady || !cmModules || !editorContainer || showDiff) return;
+    
+    // Also check we have artifacts to display
+    if (openArtifacts.length === 0 || !activeArtifactId) return;
 
     const content = currentContent();
     const artifactChanged = activeArtifactId !== currentEditorArtifactId;
 
     if (!editor) {
       // Create editor for the first time
-      editor = monaco.editor.create(editorContainer, {
-        value: content?.content || '',
-        language: 'markdown',
-        theme: 'socratic-dark',
-        fontSize: 15,
-        fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', monospace",
-        minimap: { enabled: false },
-        lineNumbers: 'on',
-        scrollBeyondLastLine: false,
-        automaticLayout: true,
-        padding: { top: 16, bottom: 16 },
-        wordWrap: 'on',
-        wrappingStrategy: 'advanced',
-        lineHeight: 1.6,
-        renderWhitespace: 'selection',
-        quickSuggestions: false,
-        suggestOnTriggerCharacters: false,
-        acceptSuggestionOnEnter: 'off',
-        tabSize: 2,
-        insertSpaces: true,
-        smoothScrolling: true,
-        cursorBlinking: 'smooth',
-        cursorSmoothCaretAnimation: 'on'
-      });
+      const {
+        EditorView,
+        keymap,
+        lineNumbers,
+        highlightActiveLine,
+        highlightActiveLineGutter,
+        EditorState,
+        markdown,
+        languages,
+        oneDark,
+        defaultKeymap,
+        history,
+        historyKeymap,
+        livePreview
+      } = cmModules;
 
-      editor.onDidChangeModelContent(() => {
-        hasUnsavedChanges = true;
-        isEditing = true;
-      });
+      // Save command
+      const saveKeymap = keymap.of([{
+        key: 'Mod-s',
+        run: () => {
+          handleSave();
+          return true;
+        }
+      }]);
 
-      // Keyboard shortcut for save
-      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-        handleSave();
+      editor = new EditorView({
+        state: EditorState.create({
+          doc: content?.content || '',
+          extensions: [
+            lineNumbers(),
+            highlightActiveLine(),
+            highlightActiveLineGutter(),
+            history(),
+            markdown({ codeLanguages: languages }),
+            keymap.of([...defaultKeymap, ...historyKeymap]),
+            saveKeymap,
+            oneDark,
+            createSocraticTheme(EditorView),
+            livePreview,
+            EditorView.lineWrapping,
+            EditorView.updateListener.of((update) => {
+              if (update.docChanged) {
+                hasUnsavedChanges = true;
+                isEditing = true;
+              }
+            })
+          ]
+        }),
+        parent: editorContainer
       });
       
       currentEditorArtifactId = activeArtifactId;
     } else if (artifactChanged) {
       // Tab switched - update editor content for new artifact
       const newValue = content?.content || '';
-      editor.setValue(newValue);
+      editor.dispatch({
+        changes: {
+          from: 0,
+          to: editor.state.doc.length,
+          insert: newValue
+        }
+      });
       hasUnsavedChanges = false;
       isEditing = false;
       currentEditorArtifactId = activeArtifactId;
     } else {
       // Same artifact - only update if no unsaved changes (e.g., version navigation)
-      const currentValue = editor.getValue();
+      const currentValue = editor.state.doc.toString();
       const newValue = content?.content || '';
       
       if (currentValue !== newValue && !hasUnsavedChanges) {
-        editor.setValue(newValue);
+        editor.dispatch({
+          changes: {
+            from: 0,
+            to: editor.state.doc.length,
+            insert: newValue
+          }
+        });
       }
     }
   });
 
-  // Create diff editor when showing pending changes
+  // Create diff view when showing pending changes
   $effect(() => {
-    if (!browser || !isMonacoReady || !monaco || !diffContainer || !showDiff || !pendingChanges) return;
+    if (!browser || !isEditorReady || !cmModules || !diffContainer || !showDiff || !pendingChanges) return;
 
-    diffEditor?.dispose();
+    const { MergeView, EditorState, oneDark, markdown, languages } = cmModules;
 
-    const originalModel = monaco.editor.createModel(
-      pendingChanges.oldContent,
-      'markdown'
-    );
-    const modifiedModel = monaco.editor.createModel(
-      pendingChanges.newContent,
-      'markdown'
-    );
+    // Clear previous content
+    diffContainer.innerHTML = '';
 
-    diffEditor = monaco.editor.createDiffEditor(diffContainer, {
-      theme: 'socratic-dark',
-      fontSize: 15,
-      fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', monospace",
-      minimap: { enabled: false },
-      automaticLayout: true,
-      readOnly: true,
-      renderSideBySide: true,
-      wordWrap: 'on',
-      lineHeight: 1.6
-    });
-
-    diffEditor.setModel({
-      original: originalModel,
-      modified: modifiedModel
+    new MergeView({
+      a: {
+        doc: pendingChanges.oldContent,
+        extensions: [
+          oneDark,
+          markdown({ codeLanguages: languages }),
+          EditorState.readOnly.of(true)
+        ]
+      },
+      b: {
+        doc: pendingChanges.newContent,
+        extensions: [
+          oneDark,
+          markdown({ codeLanguages: languages }),
+          EditorState.readOnly.of(true)
+        ]
+      },
+      parent: diffContainer
     });
   });
 </script>
@@ -335,7 +434,7 @@
 
     <!-- Editor area -->
     <div class="relative flex-1">
-      {#if !isMonacoReady}
+      {#if !isEditorReady}
         <!-- Loading state -->
         <div class="absolute inset-0 flex items-center justify-center text-zinc-500">
           <div class="text-center">
@@ -365,7 +464,7 @@
               </button>
             </div>
           </div>
-          <div bind:this={diffContainer} class="flex-1"></div>
+          <div bind:this={diffContainer} class="flex-1 overflow-auto"></div>
         </div>
       {:else}
         <!-- Regular editor -->
@@ -374,3 +473,24 @@
     </div>
   {/if}
 </div>
+
+<style>
+  /* CodeMirror container styling */
+  :global(.cm-editor) {
+    height: 100%;
+    background-color: #0a0a0a;
+  }
+
+  :global(.cm-scroller) {
+    font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+  }
+
+  /* Merge view styling */
+  :global(.cm-merge-view) {
+    height: 100%;
+  }
+
+  :global(.cm-merge-view .cm-editor) {
+    height: 100%;
+  }
+</style>
