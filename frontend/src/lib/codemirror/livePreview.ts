@@ -176,44 +176,45 @@ function buildDecorations(view: EditorView): DecorationSet {
       if (node.name === 'FencedCode') {
         const cursorInside = isInsideCodeBlock(view, node.from, node.to);
         
-        // Add code block styling to all lines
+        // Get all lines in the code block
         const startLine = view.state.doc.lineAt(node.from);
         const endLine = view.state.doc.lineAt(node.to);
-        
-        for (let i = startLine.number; i <= endLine.number; i++) {
-          const line = view.state.doc.line(i);
-          decorations.push(
-            Decoration.line({ class: 'cm-codeblock-line' }).range(line.from)
-          );
-        }
         
         // Find the opening and closing fence
         const text = view.state.sliceDoc(node.from, node.to);
         const lines = text.split('\n');
-        const openFenceLine = view.state.doc.lineAt(node.from);
-        const closeFenceLine = view.state.doc.lineAt(node.to);
+        const openFenceLine = startLine;
+        const hasClosingFence = lines.length > 1 && lines[lines.length - 1].trim().match(/^`{3,}$/);
         
-        if (!cursorInside) {
-          // Hide opening fence line (``` or ```language)
-          decorations.push(
-            Decoration.replace({}).range(openFenceLine.from, openFenceLine.to + 1)
-          );
+        // Add styling to content lines (not fence lines)
+        for (let i = startLine.number; i <= endLine.number; i++) {
+          const line = view.state.doc.line(i);
+          const isOpenFence = i === startLine.number;
+          const isCloseFence = hasClosingFence && i === endLine.number;
           
-          // Hide closing fence line if it exists and is just ```
-          if (lines[lines.length - 1].trim().match(/^`{3,}$/)) {
+          if (!isOpenFence && !isCloseFence) {
+            // Content lines get code block styling
             decorations.push(
-              Decoration.replace({}).range(closeFenceLine.from - 1, closeFenceLine.to)
+              Decoration.line({ class: 'cm-codeblock-line' }).range(line.from)
             );
-          }
-        } else {
-          // Show fences faintly when cursor is inside
-          decorations.push(
-            Decoration.mark({ class: 'cm-formatting-code-fence' }).range(openFenceLine.from, openFenceLine.to)
-          );
-          if (lines[lines.length - 1].trim().match(/^`{3,}$/)) {
-            decorations.push(
-              Decoration.mark({ class: 'cm-formatting-code-fence' }).range(closeFenceLine.from, closeFenceLine.to)
-            );
+          } else {
+            // Fence lines get special styling
+            if (cursorInside) {
+              // Show fences faintly when cursor is inside
+              decorations.push(
+                Decoration.line({ class: 'cm-codeblock-fence-active' }).range(line.from)
+              );
+              if (line.text.length > 0) {
+                decorations.push(
+                  Decoration.mark({ class: 'cm-formatting-code-fence' }).range(line.from, line.to)
+                );
+              }
+            } else {
+              // Hide fences when cursor is outside - use CSS to collapse
+              decorations.push(
+                Decoration.line({ class: 'cm-codeblock-fence-hidden' }).range(line.from)
+              );
+            }
           }
         }
       }
@@ -324,50 +325,69 @@ export const livePreviewPlugin = ViewPlugin.fromClass(
 );
 
 // Theme extension for live preview styling
+// Uses prose font for text, monospace only for code
 export const livePreviewTheme = EditorView.theme({
-  // Headers
+  // Headers - elegant serif styling
   '.cm-header': {
-    fontWeight: 'bold'
+    fontWeight: '600',
+    color: '#fbbf24'
   },
   '.cm-header-1': {
-    fontSize: '2em',
-    lineHeight: '1.2'
+    fontSize: '1.875em',
+    lineHeight: '1.3',
+    marginTop: '0.5em'
   },
   '.cm-header-2': {
     fontSize: '1.5em',
-    lineHeight: '1.3'
+    lineHeight: '1.35'
   },
   '.cm-header-3': {
     fontSize: '1.25em',
     lineHeight: '1.4'
   },
   '.cm-header-4': {
-    fontSize: '1.1em'
+    fontSize: '1.125em'
   },
   '.cm-header-5': {
     fontSize: '1em'
   },
   '.cm-header-6': {
-    fontSize: '0.9em'
+    fontSize: '0.95em',
+    color: '#a1a1aa'
   },
 
   // Formatting markers (shown faintly when active)
   '.cm-formatting': {
-    opacity: '0.4',
-    color: '#888'
+    opacity: '0.35',
+    color: '#71717a',
+    fontFamily: "'JetBrains Mono', 'Fira Code', ui-monospace, monospace",
+    fontSize: '0.85em'
   },
   '.cm-formatting-header': {
-    opacity: '0.4',
-    color: '#f59e0b'
+    opacity: '0.35',
+    color: '#f59e0b',
+    fontFamily: "'JetBrains Mono', 'Fira Code', ui-monospace, monospace"
   },
   '.cm-formatting-code-fence': {
-    opacity: '0.4',
-    color: '#888'
+    opacity: '0.35',
+    color: '#71717a'
+  },
+  
+  // Code fence lines (``` markers)
+  '.cm-codeblock-fence-active': {
+    backgroundColor: 'rgba(24, 24, 27, 0.5)',
+    borderLeft: '2px solid #3f3f46'
+  },
+  '.cm-codeblock-fence-hidden': {
+    opacity: '0.15',
+    color: '#3f3f46',
+    fontSize: '0.75em',
+    lineHeight: '0.5'
   },
 
   // Strong/Bold
   '.cm-strong': {
-    fontWeight: 'bold'
+    fontWeight: '700'
   },
 
   // Emphasis/Italic
@@ -375,47 +395,53 @@ export const livePreviewTheme = EditorView.theme({
     fontStyle: 'italic'
   },
 
-  // Inline code
+  // Inline code - monospace
   '.cm-inline-code': {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    padding: '0.1em 0.3em',
-    borderRadius: '3px',
-    fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-    fontSize: '0.9em'
+    backgroundColor: 'rgba(251, 191, 36, 0.1)',
+    padding: '0.15em 0.4em',
+    borderRadius: '4px',
+    fontFamily: "'JetBrains Mono', 'Fira Code', ui-monospace, monospace",
+    fontSize: '0.875em',
+    color: '#fbbf24'
   },
 
-  // Code blocks
+  // Code blocks - monospace
   '.cm-codeblock-line': {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-    fontSize: '0.9em'
+    backgroundColor: 'rgba(24, 24, 27, 0.8)',
+    fontFamily: "'JetBrains Mono', 'Fira Code', ui-monospace, monospace",
+    fontSize: '0.875em',
+    borderLeft: '2px solid #3f3f46',
+    paddingLeft: '1em',
+    marginLeft: '0'
   },
 
-  // Blockquotes
+  // Blockquotes - elegant italic
   '.cm-blockquote-line': {
     borderLeft: '3px solid #f59e0b',
-    paddingLeft: '1em',
+    paddingLeft: '1.25em',
     color: '#a1a1aa',
-    fontStyle: 'italic'
+    fontStyle: 'italic',
+    backgroundColor: 'rgba(245, 158, 11, 0.03)'
   },
 
   // Links
   '.cm-link': {
-    color: '#3b82f6',
-    textDecoration: 'underline',
+    color: '#60a5fa',
+    textDecoration: 'none',
+    borderBottom: '1px solid rgba(96, 165, 250, 0.3)',
     cursor: 'pointer'
   },
 
   // Horizontal rule
   '.cm-hr-rendered': {
     border: 'none',
-    borderTop: '1px solid #52525b',
-    margin: '1em 0'
+    borderTop: '1px solid #3f3f46',
+    margin: '1.5em 0'
   },
 
   // List items
   '.cm-list-item': {
-    paddingLeft: '0.5em'
+    paddingLeft: '0.25em'
   }
 }, { dark: true });
 

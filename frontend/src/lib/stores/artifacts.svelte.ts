@@ -29,10 +29,24 @@ const openArtifacts = $derived(
   openArtifactIds.map(id => artifacts.find(a => a.id === id)).filter(Boolean) as Artifact[]
 );
 
-// Persistence helper
+// Persistence helper - creates a plain object copy to avoid Svelte proxy issues
 async function persistArtifact(artifact: Artifact): Promise<void> {
   try {
-    await db.artifacts.save(artifact);
+    // Deep clone to remove Svelte's Proxy wrapper which can't be cloned by IndexedDB
+    const plainArtifact: Artifact = {
+      id: artifact.id,
+      projectId: artifact.projectId,
+      currentVersionIndex: artifact.currentVersionIndex,
+      versions: artifact.versions.map(v => ({
+        index: v.index,
+        title: v.title,
+        content: v.content,
+        createdAt: v.createdAt
+      })),
+      createdAt: artifact.createdAt,
+      updatedAt: artifact.updatedAt
+    };
+    await db.artifacts.save(plainArtifact);
   } catch (error) {
     console.error('Failed to persist artifact:', error);
   }

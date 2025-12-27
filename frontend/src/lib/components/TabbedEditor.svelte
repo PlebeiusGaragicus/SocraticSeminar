@@ -2,8 +2,6 @@
   import X from '@lucide/svelte/icons/x';
   import ChevronLeft from '@lucide/svelte/icons/chevron-left';
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
-  import Save from '@lucide/svelte/icons/save';
-  import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
   import { artifactStore } from '$lib/stores/index.js';
   import type { Artifact } from '$lib/stores/types.js';
   import { onMount, onDestroy } from 'svelte';
@@ -32,21 +30,47 @@
     onRejectChanges
   }: Props = $props();
 
-  let editorContainer = $state<HTMLDivElement | null>(null);
-  let diffContainer = $state<HTMLDivElement | null>(null);
+  // Use regular variables for container refs with manual trigger
+  let editorContainer: HTMLDivElement | null = null;
+  let diffContainer: HTMLDivElement | null = null;
+  let containerMounted = $state(false);
+  
   let editor: EditorView | null = null;
-  let isEditing = $state(false);
-  let hasUnsavedChanges = $state(false);
   let isEditorReady = $state(false);
   let currentEditorArtifactId: string | null = null;
+  
+  // Auto-save debounce timer
+  let saveTimeout: ReturnType<typeof setTimeout> | null = null;
+  const AUTOSAVE_DELAY = 500; // ms
+  
+  // Svelte action to set container ref and trigger reactivity
+  function setEditorContainer(node: HTMLDivElement) {
+    editorContainer = node;
+    containerMounted = true;
+    
+    return {
+      destroy() {
+        editorContainer = null;
+        containerMounted = false;
+      }
+    };
+  }
+  
+  function setDiffContainer(node: HTMLDivElement) {
+    diffContainer = node;
+    
+    return {
+      destroy() {
+        diffContainer = null;
+      }
+    };
+  }
 
-  // Store CodeMirror modules after dynamic import
-  let cmModules: {
+  // Store CodeMirror modules after dynamic import (needs to be $state to trigger effect)
+  let cmModules = $state<{
     EditorView: typeof import('@codemirror/view').EditorView;
     keymap: typeof import('@codemirror/view').keymap;
-    lineNumbers: typeof import('@codemirror/view').lineNumbers;
     highlightActiveLine: typeof import('@codemirror/view').highlightActiveLine;
-    highlightActiveLineGutter: typeof import('@codemirror/view').highlightActiveLineGutter;
     EditorState: typeof import('@codemirror/state').EditorState;
     markdown: typeof import('@codemirror/lang-markdown').markdown;
     languages: typeof import('@codemirror/language-data').languages;
@@ -56,7 +80,7 @@
     historyKeymap: typeof import('@codemirror/commands').historyKeymap;
     livePreview: typeof import('$lib/codemirror/livePreview.js').livePreview;
     MergeView: typeof import('@codemirror/merge').MergeView;
-  } | null = null;
+  } | null>(null);
 
   const activeArtifact = $derived(
     openArtifacts.find((a) => a.id === activeArtifactId) ?? null
@@ -96,63 +120,51 @@
     );
   }
 
-  function handleSave() {
+  // Auto-save function with debouncing
+  function autoSave() {
     if (!activeArtifact || !editor) return;
 
     const content = editor.state.doc.toString();
     const currentVersion = currentContent();
     
-    artifactStore.updateArtifact(
-      activeArtifact.id,
-      currentVersion?.title || 'Untitled',
-      content
-    );
-    
-    hasUnsavedChanges = false;
-    isEditing = false;
-  }
-
-  function handleRevert() {
-    if (!editor || !activeArtifact || !cmModules) return;
-    const content = currentContent();
-    if (content) {
-      editor.dispatch({
-        changes: {
-          from: 0,
-          to: editor.state.doc.length,
-          insert: content.content
-        }
-      });
-      hasUnsavedChanges = false;
+    // Only save if content actually changed
+    if (currentVersion && content !== currentVersion.content) {
+      artifactStore.updateArtifact(
+        activeArtifact.id,
+        currentVersion.title || 'Untitled',
+        content
+      );
     }
+  }
+  
+  function scheduleAutoSave() {
+    // Clear any pending save
+    if (saveTimeout) {
+      clearTimeout(saveTimeout);
+    }
+    // Schedule new save
+    saveTimeout = setTimeout(autoSave, AUTOSAVE_DELAY);
   }
 
   // Custom theme that matches the existing socratic-dark aesthetic
+  // Uses a clean sans-serif for markdown, monospace only for code
   function createSocraticTheme(EditorView: typeof import('@codemirror/view').EditorView) {
     return EditorView.theme({
       '&': {
         height: '100%',
-        fontSize: '15px',
-        fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', monospace"
+        fontSize: '16px',
+        fontFamily: "'Inter', 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
       },
       '.cm-content': {
-        padding: '16px 0',
+        padding: '24px 16px',
         caretColor: '#f59e0b'
       },
       '.cm-cursor': {
-        borderLeftColor: '#f59e0b'
+        borderLeftColor: '#f59e0b',
+        borderLeftWidth: '2px'
       },
       '&.cm-focused .cm-cursor': {
         borderLeftColor: '#f59e0b'
-      },
-      '.cm-gutters': {
-        backgroundColor: '#0a0a0a',
-        color: '#52525b',
-        border: 'none'
-      },
-      '.cm-activeLineGutter': {
-        backgroundColor: '#18181b',
-        color: '#a1a1aa'
       },
       '.cm-activeLine': {
         backgroundColor: '#18181b'
@@ -161,7 +173,8 @@
         backgroundColor: '#f59e0b33'
       },
       '.cm-line': {
-        lineHeight: '1.6'
+        lineHeight: '1.75',
+        padding: '0 8px'
       },
       '.cm-scroller': {
         overflow: 'auto'
@@ -171,7 +184,7 @@
 
   onMount(async () => {
     if (!browser) return;
-
+    
     // Dynamically import CodeMirror modules
     const [
       viewModule,
@@ -196,9 +209,7 @@
     cmModules = {
       EditorView: viewModule.EditorView,
       keymap: viewModule.keymap,
-      lineNumbers: viewModule.lineNumbers,
       highlightActiveLine: viewModule.highlightActiveLine,
-      highlightActiveLineGutter: viewModule.highlightActiveLineGutter,
       EditorState: stateModule.EditorState,
       markdown: markdownModule.markdown,
       languages: langDataModule.languages,
@@ -214,16 +225,26 @@
   });
 
   onDestroy(() => {
+    // Clear any pending auto-save
+    if (saveTimeout) {
+      clearTimeout(saveTimeout);
+      // Save immediately on unmount
+      autoSave();
+    }
     editor?.destroy();
   });
 
   // Create/update editor when active artifact changes
   $effect(() => {
     // Wait for all dependencies to be ready
-    if (!browser || !isEditorReady || !cmModules || !editorContainer || showDiff) return;
+    if (!browser || !isEditorReady || !cmModules || !containerMounted || !editorContainer || showDiff) {
+      return;
+    }
     
     // Also check we have artifacts to display
-    if (openArtifacts.length === 0 || !activeArtifactId) return;
+    if (openArtifacts.length === 0 || !activeArtifactId) {
+      return;
+    }
 
     const content = currentContent();
     const artifactChanged = activeArtifactId !== currentEditorArtifactId;
@@ -233,9 +254,7 @@
       const {
         EditorView,
         keymap,
-        lineNumbers,
         highlightActiveLine,
-        highlightActiveLineGutter,
         EditorState,
         markdown,
         languages,
@@ -246,34 +265,22 @@
         livePreview
       } = cmModules;
 
-      // Save command
-      const saveKeymap = keymap.of([{
-        key: 'Mod-s',
-        run: () => {
-          handleSave();
-          return true;
-        }
-      }]);
-
       editor = new EditorView({
         state: EditorState.create({
           doc: content?.content || '',
           extensions: [
-            lineNumbers(),
             highlightActiveLine(),
-            highlightActiveLineGutter(),
             history(),
             markdown({ codeLanguages: languages }),
             keymap.of([...defaultKeymap, ...historyKeymap]),
-            saveKeymap,
             oneDark,
             createSocraticTheme(EditorView),
             livePreview,
             EditorView.lineWrapping,
             EditorView.updateListener.of((update) => {
               if (update.docChanged) {
-                hasUnsavedChanges = true;
-                isEditing = true;
+                // Auto-save on any change
+                scheduleAutoSave();
               }
             })
           ]
@@ -283,7 +290,12 @@
       
       currentEditorArtifactId = activeArtifactId;
     } else if (artifactChanged) {
-      // Tab switched - update editor content for new artifact
+      // Tab switched - save current content first, then switch
+      if (saveTimeout) {
+        clearTimeout(saveTimeout);
+        autoSave();
+      }
+      
       const newValue = content?.content || '';
       editor.dispatch({
         changes: {
@@ -292,15 +304,13 @@
           insert: newValue
         }
       });
-      hasUnsavedChanges = false;
-      isEditing = false;
       currentEditorArtifactId = activeArtifactId;
     } else {
-      // Same artifact - only update if no unsaved changes (e.g., version navigation)
+      // Same artifact - update for version navigation
       const currentValue = editor.state.doc.toString();
       const newValue = content?.content || '';
       
-      if (currentValue !== newValue && !hasUnsavedChanges) {
+      if (currentValue !== newValue) {
         editor.dispatch({
           changes: {
             from: 0,
@@ -370,9 +380,6 @@
             tabindex="0"
           >
             <span class="max-w-[120px] truncate">{version?.title || 'Untitled'}</span>
-            {#if artifact.id === activeArtifactId && hasUnsavedChanges}
-              <span class="h-2 w-2 rounded-full bg-amber-500"></span>
-            {/if}
             <button
               onclick={(e) => {
                 e.stopPropagation();
@@ -409,25 +416,6 @@
           >
             <ChevronRight class="h-4 w-4" />
           </button>
-
-          {#if hasUnsavedChanges}
-            <div class="ml-2 flex items-center gap-1">
-              <button
-                onclick={handleRevert}
-                class="rounded p-1 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-300"
-                title="Revert changes"
-              >
-                <RotateCcw class="h-4 w-4" />
-              </button>
-              <button
-                onclick={handleSave}
-                class="flex items-center gap-1 rounded bg-amber-600 px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-amber-500"
-              >
-                <Save class="h-3.5 w-3.5" />
-                Save
-              </button>
-            </div>
-          {/if}
         </div>
       {/if}
     </div>
@@ -464,11 +452,11 @@
               </button>
             </div>
           </div>
-          <div bind:this={diffContainer} class="flex-1 overflow-auto"></div>
+          <div use:setDiffContainer class="flex-1 overflow-auto"></div>
         </div>
       {:else}
         <!-- Regular editor -->
-        <div bind:this={editorContainer} class="absolute inset-0"></div>
+        <div use:setEditorContainer class="absolute inset-0 bg-zinc-950"></div>
       {/if}
     </div>
   {/if}
@@ -482,7 +470,14 @@
   }
 
   :global(.cm-scroller) {
-    font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+    font-family: 'Inter', 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  
+  /* Monospace font only for code elements */
+  :global(.cm-editor .cm-inline-code),
+  :global(.cm-editor .cm-codeblock-line) {
+    font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', ui-monospace, monospace !important;
+    font-size: 0.9em;
   }
 
   /* Merge view styling */
