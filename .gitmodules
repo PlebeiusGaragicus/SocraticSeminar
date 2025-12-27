@@ -14,3 +14,7 @@
 	path = open-canvas
 	url = https://github.com/langchain-ai/open-canvas
 	branch = main
+[submodule "nutshell"]
+	path = nutshell
+	url = https://github.com/cashubtc/nutshell
+	branch = main
