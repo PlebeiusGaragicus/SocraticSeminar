@@ -1,12 +1,10 @@
 <script lang="ts">
-  import File from '@lucide/svelte/icons/file';
-  import FileCode from '@lucide/svelte/icons/file-code';
   import FileText from '@lucide/svelte/icons/file-text';
   import Plus from '@lucide/svelte/icons/plus';
   import Trash2 from '@lucide/svelte/icons/trash-2';
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import { artifactStore, projectStore } from '$lib/stores/index.js';
-  import type { Artifact, ArtifactType } from '$lib/stores/types.js';
+  import type { Artifact } from '$lib/stores/types.js';
 
   interface Props {
     onArtifactSelect: (artifact: Artifact) => void;
@@ -17,7 +15,6 @@
 
   let isCreating = $state(false);
   let newFileName = $state('');
-  let newFileType = $state<ArtifactType>('text');
   let artifactToDelete = $state<string | null>(null);
 
   const currentProjectId = $derived(projectStore.currentProjectId);
@@ -25,44 +22,19 @@
     currentProjectId ? artifactStore.getProjectArtifacts(currentProjectId) : []
   );
 
-  function getFileIcon(type: ArtifactType) {
-    switch (type) {
-      case 'code':
-        return FileCode;
-      case 'socratic':
-        return FileText;
-      default:
-        return File;
-    }
-  }
-
-  function getFileExtension(type: ArtifactType, language?: string): string {
-    if (type === 'code' && language) {
-      const langMap: Record<string, string> = {
-        javascript: '.js',
-        typescript: '.ts',
-        python: '.py',
-        rust: '.rs',
-        go: '.go',
-        java: '.java',
-        cpp: '.cpp',
-        c: '.c'
-      };
-      return langMap[language.toLowerCase()] || `.${language}`;
-    }
-    if (type === 'socratic') return '.sem';
-    return '.md';
-  }
-
   function handleCreateFile() {
     if (!newFileName.trim() || !currentProjectId) return;
     
+    // Ensure .md extension
+    let fileName = newFileName.trim();
+    if (!fileName.endsWith('.md')) {
+      fileName += '.md';
+    }
+    
     const artifact = artifactStore.createArtifact(
       currentProjectId,
-      newFileType,
-      newFileName.trim(),
-      '',
-      newFileType === 'code' ? 'typescript' : undefined
+      fileName,
+      '' // Empty initial content
     );
     
     newFileName = '';
@@ -113,36 +85,10 @@
         type="text"
         bind:value={newFileName}
         onkeydown={handleKeydown}
-        placeholder="File name..."
+        placeholder="document.md"
         class="mb-2 w-full rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
         autofocus
       />
-      <div class="mb-2 flex gap-1">
-        <button
-          onclick={() => (newFileType = 'text')}
-          class="flex-1 rounded px-2 py-1 text-xs transition-colors {newFileType === 'text'
-            ? 'bg-amber-500/20 text-amber-400'
-            : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}"
-        >
-          Text
-        </button>
-        <button
-          onclick={() => (newFileType = 'code')}
-          class="flex-1 rounded px-2 py-1 text-xs transition-colors {newFileType === 'code'
-            ? 'bg-amber-500/20 text-amber-400'
-            : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}"
-        >
-          Code
-        </button>
-        <button
-          onclick={() => (newFileType = 'socratic')}
-          class="flex-1 rounded px-2 py-1 text-xs transition-colors {newFileType === 'socratic'
-            ? 'bg-amber-500/20 text-amber-400'
-            : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}"
-        >
-          Seminar
-        </button>
-      </div>
       <div class="flex gap-2">
         <button
           onclick={handleCreateFile}
@@ -172,7 +118,6 @@
       </div>
     {:else}
       {#each artifacts as artifact (artifact.id)}
-        {@const Icon = getFileIcon(artifact.type)}
         {@const currentVersion = artifact.versions[artifact.currentVersionIndex]}
         <div class="group relative">
           <button
@@ -184,19 +129,9 @@
               class="h-3 w-3 text-zinc-600 transition-transform
                 {isOpen(artifact.id) ? 'rotate-90' : ''}"
             />
-            <Icon
-              class="h-4 w-4 flex-shrink-0
-                {artifact.type === 'code'
-                  ? 'text-blue-400'
-                  : artifact.type === 'socratic'
-                    ? 'text-amber-400'
-                    : 'text-zinc-400'}"
-            />
+            <FileText class="h-4 w-4 flex-shrink-0 text-amber-400" />
             <span class="flex-1 truncate text-sm text-zinc-300">
               {currentVersion?.title || 'Untitled'}
-            </span>
-            <span class="text-xs text-zinc-600">
-              {getFileExtension(artifact.type, currentVersion?.language)}
             </span>
           </button>
 
@@ -243,4 +178,3 @@
     </div>
   </div>
 {/if}
-

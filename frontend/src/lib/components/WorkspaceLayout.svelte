@@ -1,10 +1,9 @@
 <script lang="ts">
-  import FileExplorer from './FileExplorer.svelte';
-  import ThreadPanel from './ThreadPanel.svelte';
+  import Sidebar from './Sidebar.svelte';
+  import ChatPanel from './ChatPanel.svelte';
   import TabbedEditor from './TabbedEditor.svelte';
-  import AgentPicker from './AgentPicker.svelte';
-  import { artifactStore, projectStore } from '$lib/stores/index.js';
-  import type { Artifact } from '$lib/stores/types.js';
+  import { artifactStore, threadStore, projectStore } from '$lib/stores/index.js';
+  import type { Artifact, Thread } from '$lib/stores/types.js';
   import { onMount } from 'svelte';
 
   interface Props {
@@ -13,16 +12,25 @@
 
   let { userNpub = null }: Props = $props();
 
-  let chatCollapsed = $state(false);
-  let fileExplorerWidth = $state(220);
+  // Panel state
+  let sidebarCollapsed = $state(false);
+  let sidebarWidth = $state(240);
+  let chatWidth = $state(400);
+  let isDraggingSidebar = $state(false);
+  let isDraggingChat = $state(false);
 
   const openArtifacts = $derived(artifactStore.openArtifacts);
   const activeArtifactId = $derived(artifactStore.currentArtifactId);
   const pendingChanges = $derived(artifactStore.pendingChanges);
   const currentProjectId = $derived(projectStore.currentProjectId);
+  const currentThreadId = $derived(threadStore.currentThreadId);
 
-  function handleArtifactSelect(artifact: Artifact) {
+  function handleSelectFile(artifact: Artifact) {
     artifactStore.selectArtifact(artifact.id);
+  }
+
+  function handleSelectThread(thread: Thread) {
+    threadStore.selectThread(thread.id);
   }
 
   function handleTabSelect(id: string) {
@@ -41,64 +49,108 @@
     artifactStore.rejectPendingChanges();
   }
 
-  // Load artifacts when project changes
+  function handleToggleSidebar() {
+    sidebarCollapsed = !sidebarCollapsed;
+  }
+
+  // Handle sidebar resize
+  function handleSidebarMouseDown(e: MouseEvent) {
+    if (sidebarCollapsed) return;
+    e.preventDefault();
+    isDraggingSidebar = true;
+    document.addEventListener('mousemove', handleSidebarMouseMove);
+    document.addEventListener('mouseup', handleSidebarMouseUp);
+  }
+
+  function handleSidebarMouseMove(e: MouseEvent) {
+    if (!isDraggingSidebar) return;
+    const newWidth = Math.max(180, Math.min(400, e.clientX));
+    sidebarWidth = newWidth;
+  }
+
+  function handleSidebarMouseUp() {
+    isDraggingSidebar = false;
+    document.removeEventListener('mousemove', handleSidebarMouseMove);
+    document.removeEventListener('mouseup', handleSidebarMouseUp);
+  }
+
+  // Handle chat resize
+  function handleChatMouseDown(e: MouseEvent) {
+    e.preventDefault();
+    isDraggingChat = true;
+    document.addEventListener('mousemove', handleChatMouseMove);
+    document.addEventListener('mouseup', handleChatMouseUp);
+  }
+
+  function handleChatMouseMove(e: MouseEvent) {
+    if (!isDraggingChat) return;
+    const offset = sidebarCollapsed ? 48 : sidebarWidth;
+    const newWidth = Math.max(300, Math.min(600, e.clientX - offset));
+    chatWidth = newWidth;
+  }
+
+  function handleChatMouseUp() {
+    isDraggingChat = false;
+    document.removeEventListener('mousemove', handleChatMouseMove);
+    document.removeEventListener('mouseup', handleChatMouseUp);
+  }
+
+  // Load artifacts and threads when project changes
   onMount(() => {
     if (currentProjectId) {
       artifactStore.loadProjectArtifacts(currentProjectId);
+      threadStore.loadProjectThreads(currentProjectId);
     }
   });
 
   $effect(() => {
     if (currentProjectId) {
       artifactStore.loadProjectArtifacts(currentProjectId);
+      threadStore.loadProjectThreads(currentProjectId);
     }
   });
 </script>
 
 <div class="flex h-[calc(100vh-3.5rem)] w-full bg-zinc-950">
-  <!-- Chat Panel (collapsible) -->
-  <div
-    class="flex-shrink-0 transition-all duration-300"
-    style="width: {chatCollapsed ? '48px' : '320px'}"
-  >
-    <ThreadPanel collapsed={chatCollapsed} onToggleCollapse={() => (chatCollapsed = !chatCollapsed)} />
-  </div>
-
-  <!-- File Explorer -->
-  <div class="flex-shrink-0" style="width: {fileExplorerWidth}px">
-    <FileExplorer
-      onArtifactSelect={handleArtifactSelect}
+  <!-- Sidebar: Threads + Files picker -->
+  <div class="flex-shrink-0" style="width: {sidebarCollapsed ? '48px' : sidebarWidth + 'px'}">
+    <Sidebar
+      onSelectFile={handleSelectFile}
+      onSelectThread={handleSelectThread}
       openArtifactIds={artifactStore.openArtifactIds}
+      {currentThreadId}
+      collapsed={sidebarCollapsed}
+      onToggleCollapse={handleToggleSidebar}
     />
   </div>
 
-  <!-- Main Editor Area -->
-  <div class="flex flex-1 flex-col overflow-hidden">
-    <!-- Editor Toolbar -->
-    <div class="flex items-center justify-between border-b border-zinc-800 bg-zinc-900/30 px-4 py-2">
-      <div class="text-sm text-zinc-400">
-        {#if activeArtifactId}
-          {@const artifact = openArtifacts.find(a => a.id === activeArtifactId)}
-          {#if artifact}
-            {@const version = artifact.versions[artifact.currentVersionIndex]}
-            <span class="text-zinc-200">{version?.title || 'Untitled'}</span>
-            <span class="mx-2 text-zinc-600">|</span>
-            <span>{artifact.type}</span>
-            {#if version?.language}
-              <span class="mx-1 text-zinc-600">·</span>
-              <span>{version.language}</span>
-            {/if}
-          {/if}
-        {:else}
-          <span>No file selected</span>
-        {/if}
-      </div>
-      
-      <AgentPicker />
+  <!-- Sidebar resize handle (only when not collapsed) -->
+  {#if !sidebarCollapsed}
+    <div
+      class="w-1 cursor-col-resize bg-zinc-800 hover:bg-amber-500/50 transition-colors {isDraggingSidebar ? 'bg-amber-500' : ''}"
+      onmousedown={handleSidebarMouseDown}
+      role="separator"
+      aria-orientation="vertical"
+    ></div>
+  {/if}
+
+  <!-- Main Content Area: Chat + Editor side by side -->
+  <div class="flex flex-1 overflow-hidden">
+    <!-- Chat Panel -->
+    <div class="flex-shrink-0 overflow-hidden" style="width: {chatWidth}px">
+      <ChatPanel />
     </div>
 
-    <!-- Tabbed Editor -->
-    <div class="flex-1 overflow-hidden">
+    <!-- Chat resize handle -->
+    <div
+      class="w-1 cursor-col-resize bg-zinc-800 hover:bg-amber-500/50 transition-colors {isDraggingChat ? 'bg-amber-500' : ''}"
+      onmousedown={handleChatMouseDown}
+      role="separator"
+      aria-orientation="vertical"
+    ></div>
+
+    <!-- Editor Panel -->
+    <div class="flex flex-1 flex-col overflow-hidden">
       <TabbedEditor
         {openArtifacts}
         {activeArtifactId}

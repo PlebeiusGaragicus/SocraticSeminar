@@ -65,16 +65,6 @@
     pendingChanges && pendingChanges.artifactId === activeArtifactId
   );
 
-  function getLanguage(artifact: Artifact | null): string {
-    if (!artifact) return 'plaintext';
-    if (artifact.type === 'code') {
-      const version = artifact.versions[artifact.currentVersionIndex];
-      return version?.language?.toLowerCase() || 'typescript';
-    }
-    if (artifact.type === 'socratic') return 'markdown';
-    return 'markdown';
-  }
-
   function handlePrevVersion() {
     if (!activeArtifact || !canGoPrev) return;
     artifactStore.setArtifactVersion(
@@ -100,8 +90,7 @@
     artifactStore.updateArtifact(
       activeArtifact.id,
       currentVersion?.title || 'Untitled',
-      content,
-      currentVersion?.language
+      content
     );
     
     hasUnsavedChanges = false;
@@ -123,11 +112,17 @@
     // Dynamically import Monaco on client only
     monaco = await import('monaco-editor');
 
-    // Configure Monaco theme
+    // Configure Monaco theme with markdown-friendly styling
     monaco.editor.defineTheme('socratic-dark', {
       base: 'vs-dark',
       inherit: true,
-      rules: [],
+      rules: [
+        { token: 'keyword.md', foreground: 'f59e0b' },
+        { token: 'string.link.md', foreground: '3b82f6' },
+        { token: 'markup.heading.md', foreground: 'f59e0b', fontStyle: 'bold' },
+        { token: 'markup.bold.md', fontStyle: 'bold' },
+        { token: 'markup.italic.md', fontStyle: 'italic' },
+      ],
       colors: {
         'editor.background': '#0a0a0a',
         'editor.foreground': '#e4e4e7',
@@ -153,26 +148,41 @@
     if (!browser || !isMonacoReady || !monaco || !editorContainer || showDiff) return;
 
     const content = currentContent();
-    const lang = getLanguage(activeArtifact);
 
     if (!editor) {
       editor = monaco.editor.create(editorContainer, {
         value: content?.content || '',
-        language: lang,
+        language: 'markdown',
         theme: 'socratic-dark',
-        fontSize: 14,
-        fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+        fontSize: 15,
+        fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', monospace",
         minimap: { enabled: false },
         lineNumbers: 'on',
         scrollBeyondLastLine: false,
         automaticLayout: true,
-        padding: { top: 16 },
-        wordWrap: activeArtifact?.type !== 'code' ? 'on' : 'off'
+        padding: { top: 16, bottom: 16 },
+        wordWrap: 'on',
+        wrappingStrategy: 'advanced',
+        lineHeight: 1.6,
+        renderWhitespace: 'selection',
+        quickSuggestions: false,
+        suggestOnTriggerCharacters: false,
+        acceptSuggestionOnEnter: 'off',
+        tabSize: 2,
+        insertSpaces: true,
+        smoothScrolling: true,
+        cursorBlinking: 'smooth',
+        cursorSmoothCaretAnimation: 'on'
       });
 
       editor.onDidChangeModelContent(() => {
         hasUnsavedChanges = true;
         isEditing = true;
+      });
+
+      // Keyboard shortcut for save
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+        handleSave();
       });
     } else {
       const currentValue = editor.getValue();
@@ -181,8 +191,6 @@
       if (currentValue !== newValue && !hasUnsavedChanges) {
         editor.setValue(newValue);
       }
-      
-      monaco.editor.setModelLanguage(editor.getModel()!, lang);
     }
   });
 
@@ -194,21 +202,23 @@
 
     const originalModel = monaco.editor.createModel(
       pendingChanges.oldContent,
-      getLanguage(activeArtifact)
+      'markdown'
     );
     const modifiedModel = monaco.editor.createModel(
       pendingChanges.newContent,
-      getLanguage(activeArtifact)
+      'markdown'
     );
 
     diffEditor = monaco.editor.createDiffEditor(diffContainer, {
       theme: 'socratic-dark',
-      fontSize: 14,
-      fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+      fontSize: 15,
+      fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', monospace",
       minimap: { enabled: false },
       automaticLayout: true,
       readOnly: true,
-      renderSideBySide: true
+      renderSideBySide: true,
+      wordWrap: 'on',
+      lineHeight: 1.6
     });
 
     diffEditor.setModel({
@@ -224,7 +234,7 @@
     <div class="flex h-full items-center justify-center text-zinc-600">
       <div class="text-center">
         <p class="text-lg">No files open</p>
-        <p class="mt-1 text-sm">Select a file from the explorer to edit</p>
+        <p class="mt-1 text-sm">Select a file from the explorer to start editing</p>
       </div>
     </div>
   {:else}

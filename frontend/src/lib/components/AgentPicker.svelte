@@ -3,6 +3,7 @@
   import Bot from '@lucide/svelte/icons/bot';
   import Loader2 from '@lucide/svelte/icons/loader-2';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
+  import AlertCircle from '@lucide/svelte/icons/alert-circle';
   import { assistantStore } from '$lib/stores/assistants.svelte.js';
   import { onMount } from 'svelte';
 
@@ -12,9 +13,12 @@
   const assistants = $derived(assistantStore.assistants);
   const selectedAssistant = $derived(assistantStore.selectedAssistant);
   const isLoading = $derived(assistantStore.isLoading);
+  const hasError = $derived(!!assistantStore.error);
 
   function getAssistantName(assistant: typeof selectedAssistant): string {
-    if (!assistant) return 'Select Agent';
+    if (!assistant) {
+      return isLoading ? 'Loading...' : 'Select Agent';
+    }
     const metadata = assistant.metadata as Record<string, unknown> | undefined;
     return (metadata?.name as string) || assistant.name || assistant.assistant_id.slice(0, 8);
   }
@@ -53,10 +57,12 @@
   >
     {#if isLoading}
       <Loader2 class="h-4 w-4 animate-spin text-zinc-400" />
+    {:else if hasError}
+      <AlertCircle class="h-4 w-4 text-red-500" />
     {:else}
       <Bot class="h-4 w-4 text-amber-500" />
     {/if}
-    <span class="max-w-[150px] truncate">
+    <span class="max-w-[120px] truncate">
       {getAssistantName(selectedAssistant)}
     </span>
     <ChevronDown
@@ -65,7 +71,7 @@
   </button>
 
   {#if isOpen}
-    <div class="absolute left-0 top-full z-50 mt-1 min-w-[240px] rounded-lg border border-zinc-700 bg-zinc-800 py-1 shadow-xl">
+    <div class="absolute right-0 top-full z-50 mt-1 min-w-[220px] rounded-lg border border-zinc-700 bg-zinc-800 py-1 shadow-xl">
       <!-- Header -->
       <div class="flex items-center justify-between border-b border-zinc-700 px-3 py-2">
         <span class="text-xs font-semibold uppercase tracking-wider text-zinc-500">
@@ -83,9 +89,29 @@
 
       <!-- Agent list -->
       <div class="max-h-[300px] overflow-y-auto py-1">
-        {#if assistants.length === 0 && !isLoading}
+        {#if isLoading}
+          <div class="flex items-center justify-center px-3 py-4">
+            <Loader2 class="h-5 w-5 animate-spin text-zinc-500" />
+          </div>
+        {:else if hasError}
+          <div class="px-3 py-3">
+            <div class="flex items-center gap-2 text-red-400 mb-2">
+              <AlertCircle class="h-4 w-4" />
+              <span class="text-sm font-medium">Connection Error</span>
+            </div>
+            <p class="text-xs text-zinc-500 mb-3">
+              Could not connect to agent server. Make sure it's running.
+            </p>
+            <button
+              onclick={() => assistantStore.fetchAssistants()}
+              class="w-full rounded bg-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-600 transition-colors"
+            >
+              Try Again
+            </button>
+          </div>
+        {:else if assistants.length === 0}
           <div class="px-3 py-4 text-center text-sm text-zinc-500">
-            No agents available
+            No agents found on server
           </div>
         {:else}
           {#each assistants as assistant (assistant.assistant_id)}
@@ -120,13 +146,6 @@
           {/each}
         {/if}
       </div>
-
-      {#if assistantStore.error}
-        <div class="border-t border-zinc-700 px-3 py-2 text-xs text-red-500">
-          {assistantStore.error}
-        </div>
-      {/if}
     </div>
   {/if}
 </div>
-

@@ -10,15 +10,14 @@
 
   // Reactive CypherTap state
   const isLoggedIn = $derived(cyphertap.isLoggedIn);
-  const isReady = $derived(cyphertap.isReady);
   const userNpub = $derived(cyphertap.npub);
 
   // Current project
   const currentProject = $derived(projectStore.currentProject);
 
-  // Initialize stores when user is ready
+  // Initialize stores when user is logged in
   $effect(() => {
-    if (isReady && userNpub) {
+    if (isLoggedIn && userNpub) {
       projectStore.init(userNpub);
     }
   });
@@ -51,7 +50,7 @@
   />
 
   <!-- Main Content -->
-  {#if isReady}
+  {#if isLoggedIn}
     {#if currentView === 'workspace' && currentProject}
       <WorkspaceLayout userNpub={userNpub} />
     {:else}
@@ -60,14 +59,6 @@
         onProjectSelect={handleProjectSelect}
       />
     {/if}
-  {:else if isLoggedIn}
-    <!-- Loading state while wallet initializes -->
-    <div class="flex flex-1 items-center justify-center">
-      <div class="text-center">
-        <div class="mb-4 inline-block h-8 w-8 animate-spin rounded-full border-4 border-amber-500 border-t-transparent"></div>
-        <p class="text-zinc-400">Initializing wallet...</p>
-      </div>
-    </div>
   {:else}
     <!-- Login Screen -->
     <div class="flex flex-1 items-center justify-center">

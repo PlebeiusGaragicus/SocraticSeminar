@@ -3,8 +3,8 @@
 
 import { Client, type Assistant } from '@langchain/langgraph-sdk';
 
-// Configuration
-const LANGGRAPH_URL = import.meta.env.PUBLIC_LANGGRAPH_URL ?? 'http://localhost:54367';
+// Configuration - LangGraph server default port is 2024
+const LANGGRAPH_URL = import.meta.env.PUBLIC_LANGGRAPH_URL ?? 'http://localhost:2024';
 
 // LangGraph client (lazy initialized)
 let client: Client | null = null;

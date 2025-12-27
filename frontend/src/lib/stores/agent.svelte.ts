@@ -7,8 +7,8 @@ import { threadStore } from './threads.svelte.js';
 import { artifactStore } from './artifacts.svelte.js';
 import { assistantStore } from './assistants.svelte.js';
 
-// Configuration
-const LANGGRAPH_URL = import.meta.env.PUBLIC_LANGGRAPH_URL ?? 'http://localhost:54367';
+// Configuration - LangGraph server default port is 2024
+const LANGGRAPH_URL = import.meta.env.PUBLIC_LANGGRAPH_URL ?? 'http://localhost:2024';
 
 // LangGraph client (lazy initialized)
 let client: Client | null = null;
@@ -38,7 +38,7 @@ function formatArtifactsForContext(artifacts: Artifact[]): string {
     const version = artifact.versions[artifact.currentVersionIndex];
     if (!version) return null;
     
-    const header = `=== ${version.title} (${artifact.type}${version.language ? `, ${version.language}` : ''}) ===`;
+    const header = `=== ${version.title} ===`;
     return `${header}\n${version.content}`;
   }).filter(Boolean);
   
@@ -123,9 +123,7 @@ async function sendMessage(
               return {
                 index: a.currentVersionIndex,
                 title: v?.title || 'Untitled',
-                content: v?.content || '',
-                language: v?.language,
-                type: a.type
+                content: v?.content || ''
               };
             })
           };

@@ -94,11 +94,35 @@ function clearMessages(threadId: string): void {
   messages.set(threadId, []);
 }
 
+function getThreadMessageCount(threadId: string): number {
+  return messages.get(threadId)?.length ?? 0;
+}
+
 function loadThreads(loadedThreads: Thread[], loadedMessages?: Map<string, Message[]>): void {
   threads = loadedThreads;
   if (loadedMessages) {
     messages = loadedMessages;
   }
+}
+
+// Load threads for a specific project (threads are currently in-memory only)
+function loadProjectThreads(projectId: string): void {
+  // Threads are stored in memory for now
+  // In the future, this could load from IndexedDB or LangGraph server
+  // For now, just ensure the currentThreadId is valid for this project
+  const projectThreads = getProjectThreads(projectId);
+  if (currentThreadId) {
+    const isCurrentValid = projectThreads.some(t => t.id === currentThreadId);
+    if (!isCurrentValid) {
+      currentThreadId = projectThreads[0]?.id ?? null;
+    }
+  }
+}
+
+function reset(): void {
+  threads = [];
+  messages = new Map();
+  currentThreadId = null;
 }
 
 // Export reactive getters and actions
@@ -109,6 +133,8 @@ export const threadStore = {
   get currentMessages() { return currentMessages; },
   
   getProjectThreads,
+  getThreadMessageCount,
+  loadProjectThreads,
   createThread,
   updateThread,
   deleteThread,
@@ -116,6 +142,7 @@ export const threadStore = {
   addMessage,
   updateMessage,
   clearMessages,
-  loadThreads
+  loadThreads,
+  reset
 };
 

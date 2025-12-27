@@ -1,7 +1,5 @@
 // Core data types for Socratic Seminar
 
-export type ArtifactType = 'text' | 'code' | 'socratic';
-
 export interface User {
   npub: string;
   pubkeyHex: string;
@@ -43,15 +41,13 @@ export interface ToolCall {
 export interface ArtifactVersion {
   index: number;
   title: string;
-  content: string;
-  language?: string;
+  content: string; // Markdown content
   createdAt: number;
 }
 
 export interface Artifact {
   id: string;
   projectId: string;
-  type: ArtifactType;
   currentVersionIndex: number;
   versions: ArtifactVersion[];
   createdAt: number;
@@ -71,4 +67,3 @@ export interface AgentStreamState {
   currentRunId: string | null;
   error: string | null;
 }
-

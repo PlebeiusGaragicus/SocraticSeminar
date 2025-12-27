@@ -10,10 +10,6 @@
 	path = deepagents
 	url = https://github.com/langchain-ai/deepagents
 	branch = master
-[submodule "open-canvas"]
-	path = open-canvas
-	url = https://github.com/langchain-ai/open-canvas
-	branch = main
 [submodule "nutshell"]
 	path = nutshell
 	url = https://github.com/cashubtc/nutshell

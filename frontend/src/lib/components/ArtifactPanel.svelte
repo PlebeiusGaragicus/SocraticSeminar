@@ -30,8 +30,7 @@
     artifactStore.updateArtifact(
       currentArtifact.id,
       editedTitle || 'Untitled',
-      editedContent,
-      currentContent()?.language
+      editedContent
     );
     isEditing = false;
   }
@@ -78,7 +77,7 @@
           placeholder="Untitled"
         />
         <span class="text-sm text-muted-foreground">
-          ({currentArtifact.type})
+          (Markdown)
         </span>
       </div>
       
@@ -116,24 +115,13 @@
       </div>
     </div>
 
-    <!-- Content editor -->
+    <!-- Content editor - Markdown only -->
     <div class="flex-1 overflow-hidden p-4">
-      {#if currentArtifact.type === 'code'}
-        <!-- Code editor -->
-        <textarea
-          bind:value={editedContent}
-          onfocus={() => isEditing = true}
-          class="h-full w-full resize-none rounded-md border border-input bg-muted/50 p-4 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          spellcheck="false"
-        ></textarea>
-      {:else}
-        <!-- Markdown/text editor -->
-        <textarea
-          bind:value={editedContent}
-          onfocus={() => isEditing = true}
-          class="h-full w-full resize-none rounded-md border border-input bg-background p-4 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-        ></textarea>
-      {/if}
+      <textarea
+        bind:value={editedContent}
+        onfocus={() => isEditing = true}
+        class="h-full w-full resize-none rounded-md border border-input bg-background p-4 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+      ></textarea>
     </div>
 
     <!-- Footer with metadata -->
@@ -144,4 +132,3 @@
     </div>
   {/if}
 </div>
-

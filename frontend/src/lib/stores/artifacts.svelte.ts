@@ -1,8 +1,8 @@
 // Artifact store using Svelte 5 runes
-// Manages versioned artifacts within projects with IndexedDB persistence
+// Manages versioned markdown artifacts within projects with IndexedDB persistence
 
 import { nanoid } from 'nanoid';
-import type { Artifact, ArtifactVersion, ArtifactType } from './types.js';
+import type { Artifact, ArtifactVersion } from './types.js';
 import { db } from '$lib/services/indexeddb.js';
 
 // Reactive state
@@ -60,24 +60,20 @@ async function loadProjectArtifacts(projectId: string): Promise<void> {
 // Actions
 function createArtifact(
   projectId: string,
-  type: ArtifactType,
   title: string,
-  content: string,
-  language?: string
+  content: string = ''
 ): Artifact {
   const now = Date.now();
   const version: ArtifactVersion = {
     index: 0,
     title,
     content,
-    language,
     createdAt: now
   };
   
   const artifact: Artifact = {
     id: nanoid(),
     projectId,
-    type,
     currentVersionIndex: 0,
     versions: [version],
     createdAt: now,
@@ -101,8 +97,7 @@ function createArtifact(
 function updateArtifact(
   id: string,
   title: string,
-  content: string,
-  language?: string
+  content: string
 ): ArtifactVersion {
   const artifact = artifacts.find((a) => a.id === id);
   if (!artifact) {
@@ -114,7 +109,6 @@ function updateArtifact(
     index: artifact.versions.length,
     title,
     content,
-    language,
     createdAt: now
   };
   
@@ -213,8 +207,7 @@ function acceptPendingChanges(): void {
   updateArtifact(
     pendingChanges.artifactId,
     currentVersion?.title || 'Untitled',
-    pendingChanges.newContent,
-    currentVersion?.language
+    pendingChanges.newContent
   );
   
   pendingChanges = null;
