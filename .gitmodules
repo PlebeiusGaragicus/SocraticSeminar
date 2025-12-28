@@ -14,3 +14,11 @@
 	path = nutshell
 	url = https://github.com/cashubtc/nutshell
 	branch = main
+[submodule "deep-agents-ui"]
+	path = deep-agents-ui
+	url = https://github.com/langchain-ai/deep-agents-ui
+	branch = main
+[submodule "deepagents-quickstarts"]
+	path = deepagents-quickstarts
+	url = https://github.com/langchain-ai/deepagents-quickstarts
+	branch = main
