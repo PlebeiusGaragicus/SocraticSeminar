@@ -11,6 +11,7 @@
   import { Button, Textarea } from './ui/index.js';
   import AgentPicker from './AgentPicker.svelte';
   import ToolCallDisplay from './ToolCallDisplay.svelte';
+  import HumanInterruptPanel from './HumanInterruptPanel.svelte';
   import { threadStore, agentStore, projectStore } from '$lib/stores/index.js';
   import { cyphertap } from 'cyphertap';
   import type { ToolCallWithStatus, ToolCall } from '$lib/stores/types.js';
@@ -45,6 +46,7 @@
   const isInterrupted = $derived.by(() => agentStore.isInterrupted);
   const pendingToolCalls = $derived.by(() => agentStore.pendingToolCalls);
   const streamingContent = $derived.by(() => agentStore.streamingContent);
+  const awaitingHumanResponse = $derived.by(() => agentStore.awaitingHumanResponse);
   
   // LangGraph messages during streaming (live from server)
   const langGraphMessages = $derived.by(() => agentStore.langGraphMessages);
@@ -266,6 +268,9 @@
     {/if}
   </div>
 
+  <!-- Human-in-the-Loop Interrupt Panel -->
+  <HumanInterruptPanel />
+
   <!-- Input -->
   <div class="border-t border-zinc-800 p-3">
     {#if backendAvailable === false}
@@ -284,16 +289,16 @@
     
     <div class="flex gap-2">
       <Textarea
-        placeholder={currentThread ? "Type your message..." : "Select a thread first..."}
+        placeholder={awaitingHumanResponse ? "Respond to the agent above..." : currentThread ? "Type your message..." : "Select a thread first..."}
         bind:value={messageInput}
         onkeydown={handleKeydown}
-        disabled={isStreaming || !currentThread || !isWalletReady || backendAvailable === false}
+        disabled={isStreaming || awaitingHumanResponse || !currentThread || !isWalletReady || backendAvailable === false}
         rows={2}
         class="flex-1 resize-none bg-zinc-800 border-zinc-700 text-zinc-100 placeholder-zinc-500"
       />
       <Button
         onclick={handleSendMessage}
-        disabled={!messageInput.trim() || isStreaming || !currentThread || !isWalletReady || backendAvailable === false}
+        disabled={!messageInput.trim() || isStreaming || awaitingHumanResponse || !currentThread || !isWalletReady || backendAvailable === false}
         size="icon"
         class="self-end bg-amber-600 hover:bg-amber-500"
       >

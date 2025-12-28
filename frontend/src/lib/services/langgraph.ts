@@ -13,10 +13,21 @@
 
 import { Client } from '@langchain/langgraph-sdk';
 import type { Message, Thread } from '@langchain/langgraph-sdk';
-import type { ToolCall, ToolResult, ProjectFile } from '../stores/types.js';
+import type { 
+	ToolCall, 
+	ToolResult, 
+	ProjectFile, 
+	HITLInterrupt, 
+	HITLDecision,
+	HITLResumeResponse,
+	AUTO_APPROVE_TOOLS 
+} from '../stores/types.js';
 
 // Re-export Message type for use in other modules
 export type { Message, Thread };
+
+// Import the auto-approve list
+import { AUTO_APPROVE_TOOLS as autoApproveTools } from '../stores/types.js';
 
 // Configuration
 const LANGGRAPH_URL = import.meta.env.PUBLIC_LANGGRAPH_URL ?? 'http://localhost:2024';
@@ -49,6 +60,8 @@ export interface StreamCallbacks {
 	onToolCall?: (toolCalls: ToolCall[]) => void;
 	onToolExecuting?: (toolCalls: ToolCall[]) => void;
 	onToolComplete?: (results: ToolResult[]) => void;
+	// Human-in-the-loop callbacks (new format with action_requests/review_configs)
+	onHITLInterrupt?: (interrupt: HITLInterrupt, interruptId: string) => void;
 }
 
 export interface SubmitOptions {
@@ -242,7 +255,99 @@ export async function submitMessage(
 				break;
 			}
 			
-			// Execute tools locally
+			// Check for Human-in-the-Loop interrupt by examining thread state
+			// HITL interrupts have action_requests and review_configs
+			try {
+				const threadState = await client.threads.getState(threadId);
+				const tasks = (threadState as { tasks?: Array<{ id?: string; interrupts?: Array<{ value?: unknown }> }> }).tasks;
+				
+				if (tasks && tasks.length > 0) {
+					const task = tasks[0];
+					const interrupts = task.interrupts;
+					
+					if (interrupts && interrupts.length > 0) {
+						const interruptData = interrupts[0];
+						const interruptValue = interruptData.value;
+						const interruptId = (interruptData as { id?: string }).id || task.id || '';
+						
+						// Check if this is a HITL interrupt (has action_requests and review_configs)
+						if (isHITLInterrupt(interruptValue)) {
+							console.log('[LangGraph] HITL interrupt detected:', 
+								interruptValue.action_requests.map(a => a.name));
+							
+							// Check if all actions should be auto-approved (read-only tools)
+							if (shouldAutoApprove(interruptValue)) {
+								console.log('[LangGraph] Auto-approving read-only tools:', 
+									interruptValue.action_requests.map(a => a.name));
+								const autoResponse = createAutoApproveResponse(interruptValue);
+								
+								// Resume with auto-approve - set up for next iteration
+								const resumePayload = { [interruptId]: autoResponse };
+								
+								// Stream the resumed execution
+								const resumeStream = client.runs.stream(threadId, assistantId, {
+									input: null,
+									command: { resume: resumePayload },
+									streamMode: options.streamMode || ['messages', 'values'],
+								});
+								
+								// Process the resume stream
+								for await (const resumeEvent of resumeStream) {
+									if (resumeEvent.event === 'messages/partial') {
+										const chunks = resumeEvent.data as Array<{ type: string; content?: string; tool_calls?: unknown[] }>;
+										if (chunks && chunks.length > 0) {
+											const lastChunk = chunks[chunks.length - 1];
+											if (lastChunk?.type === 'ai' && lastChunk.content) {
+												const newContent = lastChunk.content;
+												if (newContent.length > currentContent.length) {
+													const newTokens = newContent.slice(currentContent.length);
+													callbacks.onToken?.(newTokens);
+													currentContent = newContent;
+												}
+											}
+										}
+									}
+									
+									if (resumeEvent.event === 'values') {
+										const data = resumeEvent.data as { messages?: Message[] };
+										if (data.messages) {
+											messages.length = 0;
+											messages.push(...data.messages);
+											callbacks.onMessagesSync?.(messages);
+										}
+									}
+								}
+								
+								// After resume stream - check if we're done or need another iteration
+								const lastMsg = messages[messages.length - 1];
+								if (lastMsg?.type === 'ai' && (lastMsg as { tool_calls?: unknown[] }).tool_calls?.length) {
+									// More tool calls - continue the loop
+									pendingToolCalls = ((lastMsg as { tool_calls: Array<{ id: string; name: string; args?: Record<string, unknown> }> }).tool_calls).map((tc) => ({
+										id: tc.id,
+										name: tc.name,
+										args: tc.args || {},
+									}));
+									interrupted = true;
+									callbacks.onToolCall?.(pendingToolCalls);
+									continue;
+								} else {
+									// No more tool calls - we're done
+									interrupted = false;
+									break;
+								}
+							}
+							
+							// Not auto-approvable - notify UI and return
+							callbacks.onHITLInterrupt?.(interruptValue, interruptId);
+							return { threadId, messages };
+						}
+					}
+				}
+			} catch (stateError) {
+				console.warn('[LangGraph] Could not check thread state for HITL:', stateError);
+			}
+			
+			// Not a HITL interrupt - execute tools locally (automatic tool execution)
 			if (!projectId) {
 				console.warn('[LangGraph] Tool calls require projectId but none provided');
 			}
@@ -298,6 +403,142 @@ export async function submitMessage(
 		
 		callbacks.onComplete?.(messages);
 		
+		return { threadId, messages };
+		
+	} catch (error) {
+		callbacks.onError?.(error as Error);
+		throw error;
+	}
+}
+
+// =============================================================================
+// HUMAN-IN-THE-LOOP HELPERS
+// =============================================================================
+
+/**
+ * Check if an interrupt value matches the HITLInterrupt schema.
+ * This is the format returned by HumanInTheLoopMiddleware.
+ */
+export function isHITLInterrupt(value: unknown): value is HITLInterrupt {
+	if (!value || typeof value !== 'object') return false;
+	
+	const obj = value as Record<string, unknown>;
+	
+	// Check for required fields: action_requests and review_configs
+	return (
+		'action_requests' in obj && 
+		Array.isArray(obj.action_requests) &&
+		'review_configs' in obj &&
+		Array.isArray(obj.review_configs)
+	);
+}
+
+/**
+ * Check if all action requests in an interrupt should be auto-approved.
+ * Returns true if all actions are read-only tools that don't need human approval.
+ */
+export function shouldAutoApprove(interrupt: HITLInterrupt): boolean {
+	return interrupt.action_requests.every(
+		action => autoApproveTools.includes(action.name)
+	);
+}
+
+/**
+ * Create auto-approve decisions for all actions in an interrupt.
+ */
+export function createAutoApproveResponse(interrupt: HITLInterrupt): HITLResumeResponse {
+	return {
+		decisions: interrupt.action_requests.map(() => ({ type: 'approve' as const }))
+	};
+}
+
+/**
+ * Resume a thread with HITL decisions after an interrupt.
+ * 
+ * @param threadId - The thread ID to resume
+ * @param interruptId - The interrupt ID from the thread state
+ * @param response - The HITL resume response with decisions
+ * @param assistantId - The assistant ID to use
+ * @param callbacks - Stream callbacks for the resumed execution
+ */
+export async function resumeWithHITLDecisions(
+	threadId: string,
+	interruptId: string,
+	response: HITLResumeResponse,
+	assistantId: string,
+	callbacks: StreamCallbacks
+): Promise<{ threadId: string; messages: Message[] }> {
+	const client = getClient();
+	const messages: Message[] = [];
+	let currentContent = '';
+	
+	// Build the resume payload: { [interrupt_id]: { decisions: [...] } }
+	const resumePayload = {
+		[interruptId]: response
+	};
+	
+	console.log('[LangGraph] Resuming with HITL decisions:', resumePayload);
+	
+	try {
+		// Stream the response with resume command
+		const stream = client.runs.stream(threadId, assistantId, {
+			input: null, // null input means resume from interrupt
+			command: {
+				resume: resumePayload,
+			},
+			streamMode: ['messages', 'values'],
+		});
+		
+		for await (const event of stream) {
+			// Handle streaming message chunks
+			if (event.event === 'messages/partial') {
+				const chunks = event.data as Array<{ type: string; content?: string; tool_calls?: unknown[] }>;
+				if (chunks && chunks.length > 0) {
+					const lastChunk = chunks[chunks.length - 1];
+					if (lastChunk?.type === 'ai' && lastChunk.content) {
+						const newContent = lastChunk.content;
+						if (newContent.length > currentContent.length) {
+							const newTokens = newContent.slice(currentContent.length);
+							callbacks.onToken?.(newTokens);
+							currentContent = newContent;
+						}
+					}
+					// Check for new tool calls
+					if (lastChunk?.type === 'ai' && lastChunk.tool_calls && lastChunk.tool_calls.length > 0) {
+						const toolCalls = (lastChunk.tool_calls as Array<{ id: string; name: string; args?: Record<string, unknown> }>).map((tc) => ({
+							id: tc.id,
+							name: tc.name,
+							args: tc.args || {},
+						}));
+						callbacks.onToolCall?.(toolCalls);
+					}
+				}
+			}
+			
+			// Handle values events (full state snapshots)
+			if (event.event === 'values') {
+				const data = event.data as { messages?: Message[] };
+				
+				if (data.messages) {
+					messages.length = 0;
+					messages.push(...data.messages);
+					callbacks.onMessagesSync?.(messages);
+					
+					// Check for tool calls in last message
+					const lastMessage = messages[messages.length - 1];
+					if (lastMessage?.type === 'ai' && (lastMessage as { tool_calls?: unknown[] }).tool_calls?.length) {
+						const toolCalls = ((lastMessage as { tool_calls: Array<{ id: string; name: string; args?: Record<string, unknown> }> }).tool_calls).map((tc) => ({
+							id: tc.id,
+							name: tc.name,
+							args: tc.args || {},
+						}));
+						callbacks.onToolCall?.(toolCalls);
+					}
+				}
+			}
+		}
+		
+		callbacks.onComplete?.(messages);
 		return { threadId, messages };
 		
 	} catch (error) {

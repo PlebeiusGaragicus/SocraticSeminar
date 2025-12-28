@@ -14,3 +14,7 @@
 	path = nutshell
 	url = https://github.com/cashubtc/nutshell
 	branch = main
+[submodule "SvelteReader"]
+	path = SvelteReader
+	url = git@github.com:PlebeiusGaragicus/SvelteReader.git
+	branch = main

@@ -6,13 +6,17 @@ import type {
   ToolCallWithStatus,
   ToolResult,
   ProjectFile,
-  Message as LocalMessage
+  Message as LocalMessage,
+  HITLInterrupt,
+  HITLDecision,
+  HITLResumeResponse
 } from './types.js';
 import { threadStore } from './threads.svelte.js';
 import { artifactStore } from './artifacts.svelte.js';
 import { assistantStore } from './assistants.svelte.js';
 import { 
   submitMessage as submitToLangGraph,
+  resumeWithHITLDecisions,
   setToolExecutor,
   checkHealth,
   getClient,
@@ -80,6 +84,14 @@ let streamingContent = $state<string>('');
 // Track LangGraph messages for the current conversation
 let langGraphMessages = $state<LangGraphMessage[]>([]);
 
+// Human-in-the-loop interrupt state
+let hitlInterrupt = $state<HITLInterrupt | null>(null);
+let hitlInterruptId = $state<string | null>(null);
+let awaitingHumanResponse = $state(false);
+
+// Store the local thread ID for resuming after HITL
+let currentLocalThreadId = $state<string | null>(null);
+
 // =============================================================================
 // HELPERS
 // =============================================================================
@@ -125,6 +137,10 @@ async function sendMessage(
   isInterrupted = false;
   threadId = langGraphThreadId;
   error = null;
+  hitlInterrupt = null;
+  hitlInterruptId = null;
+  awaitingHumanResponse = false;
+  currentLocalThreadId = localThreadId;
   setPendingToolCalls([]);
   setStreamingContent('');
   
@@ -224,6 +240,16 @@ async function sendMessage(
           isInterrupted = false;
         },
         
+        onHITLInterrupt: (interrupt, interruptId) => {
+          console.log('[Agent] HITL interrupt received:', interrupt.action_requests.map(a => a.name));
+          hitlInterrupt = interrupt;
+          hitlInterruptId = interruptId;
+          awaitingHumanResponse = true;
+          isInterrupted = true;
+          // Keep streaming false since we're waiting for human input
+          isStreaming = false;
+        },
+        
         onComplete: (finalMessages) => {
           console.log('[Agent] Stream completed. Messages:', finalMessages.length);
           langGraphMessages = [...finalMessages];
@@ -271,6 +297,146 @@ async function sendMessage(
 }
 
 // =============================================================================
+// HUMAN-IN-THE-LOOP RESPONSE
+// =============================================================================
+
+/**
+ * Resume the agent after a HITL interrupt with the user's decisions.
+ * 
+ * @param decisions - Array of decisions for each action_request
+ */
+async function resumeWithDecisions(decisions: HITLDecision[]): Promise<void> {
+  if (!threadId || !awaitingHumanResponse || !hitlInterruptId) {
+    console.error('[Agent] Cannot resume: no active HITL interrupt');
+    return;
+  }
+  
+  const assistantId = assistantStore.selectedAssistantId || 'deeptutor';
+  const localThreadId = currentLocalThreadId;
+  const interruptId = hitlInterruptId;
+  
+  // Reset HITL state
+  hitlInterrupt = null;
+  hitlInterruptId = null;
+  awaitingHumanResponse = false;
+  isStreaming = true;
+  isInterrupted = false;
+  setStreamingContent('');
+  
+  const response: HITLResumeResponse = { decisions };
+  console.log('[Agent] Resuming with HITL decisions:', decisions);
+  
+  try {
+    await resumeWithHITLDecisions(
+      threadId,
+      interruptId,
+      response,
+      assistantId,
+      {
+        onToken: (token) => {
+          streamingContent += token;
+        },
+        
+        onMessagesSync: (messages) => {
+          langGraphMessages = [...messages];
+        },
+        
+        onToolCall: (toolCalls) => {
+          console.log('[Agent] Tool calls detected after resume:', toolCalls.map(t => t.name));
+          isInterrupted = true;
+          setPendingToolCalls(toolCalls.map(tc => ({
+            ...tc,
+            status: 'pending' as const
+          })));
+        },
+        
+        onHITLInterrupt: (interrupt, newInterruptId) => {
+          console.log('[Agent] Another HITL interrupt received:', interrupt.action_requests.map(a => a.name));
+          hitlInterrupt = interrupt;
+          hitlInterruptId = newInterruptId;
+          awaitingHumanResponse = true;
+          isInterrupted = true;
+          isStreaming = false;
+        },
+        
+        onComplete: (finalMessages) => {
+          console.log('[Agent] Resumed stream completed. Messages:', finalMessages.length);
+          langGraphMessages = [...finalMessages];
+          
+          // Sync messages to local store
+          if (localThreadId) {
+            const convertedMessages = convertLangGraphMessages(finalMessages, localThreadId);
+            threadStore.syncMessages(localThreadId, convertedMessages);
+          }
+          
+          isStreaming = false;
+          isInterrupted = false;
+          setPendingToolCalls([]);
+          setStreamingContent('');
+        },
+        
+        onError: (err) => {
+          console.error('[Agent] Resume error:', err.message);
+          error = err.message;
+          isStreaming = false;
+          isInterrupted = false;
+          awaitingHumanResponse = false;
+          setPendingToolCalls([]);
+          setStreamingContent('');
+        }
+      }
+    );
+    
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+    console.error('[Agent] Resume error:', errorMessage);
+    error = errorMessage;
+    isStreaming = false;
+    isInterrupted = false;
+    awaitingHumanResponse = false;
+    setPendingToolCalls([]);
+    setStreamingContent('');
+    throw err;
+  }
+}
+
+/**
+ * Approve all actions in the current HITL interrupt.
+ */
+async function approveAllActions(): Promise<void> {
+  if (!hitlInterrupt) return;
+  
+  const decisions: HITLDecision[] = hitlInterrupt.action_requests.map(() => ({
+    type: 'approve' as const
+  }));
+  
+  await resumeWithDecisions(decisions);
+}
+
+/**
+ * Reject all actions in the current HITL interrupt.
+ */
+async function rejectAllActions(): Promise<void> {
+  if (!hitlInterrupt) return;
+  
+  const decisions: HITLDecision[] = hitlInterrupt.action_requests.map(() => ({
+    type: 'reject' as const
+  }));
+  
+  await resumeWithDecisions(decisions);
+}
+
+/**
+ * Dismiss the current HITL interrupt without responding.
+ * This will leave the agent in an interrupted state.
+ */
+function dismissHITLInterrupt(): void {
+  hitlInterrupt = null;
+  hitlInterruptId = null;
+  awaitingHumanResponse = false;
+}
+
+// =============================================================================
 // UTILITY FUNCTIONS
 // =============================================================================
 
@@ -283,6 +449,10 @@ function resetStream(): void {
   isInterrupted = false;
   threadId = null;
   error = null;
+  hitlInterrupt = null;
+  hitlInterruptId = null;
+  awaitingHumanResponse = false;
+  currentLocalThreadId = null;
   setPendingToolCalls([]);
   setStreamingContent('');
   langGraphMessages = [];
@@ -302,10 +472,20 @@ export const agentStore = {
   get threadId() { return threadId; },
   get langGraphMessages() { return langGraphMessages; },
   
+  // Human-in-the-loop getters
+  get hitlInterrupt() { return hitlInterrupt; },
+  get awaitingHumanResponse() { return awaitingHumanResponse; },
+  
   // Actions
   sendMessage,
   clearError,
   resetStream,
   checkHealth,
-  getClient
+  getClient,
+  
+  // Human-in-the-loop actions
+  resumeWithDecisions,
+  approveAllActions,
+  rejectAllActions,
+  dismissHITLInterrupt
 };
