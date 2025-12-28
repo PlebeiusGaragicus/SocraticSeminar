@@ -693,6 +693,20 @@ async function handleClientToolInterrupt(
             isInterrupted = true;
             isStreaming = false;
           },
+          onClarificationInterrupt: (newInterrupt, newInterruptId) => {
+            clarificationInterrupt = newInterrupt;
+            hitlInterruptId = newInterruptId;
+            awaitingHumanResponse = true;
+            isInterrupted = true;
+            isStreaming = false;
+          },
+          onClientToolInterrupt: (newInterrupt, newInterruptId) => {
+            clientToolInterrupt = newInterrupt;
+            hitlInterruptId = newInterruptId;
+            awaitingHumanResponse = true;
+            isInterrupted = true;
+            isStreaming = false;
+          },
           onError: (err) => {
             error = err.message;
             isStreaming = false;
@@ -785,6 +799,20 @@ async function executeApprovedWriteTools(): Promise<void> {
         isInterrupted = true;
         isStreaming = false;
       },
+      onClarificationInterrupt: (newInterrupt, newInterruptId) => {
+        clarificationInterrupt = newInterrupt;
+        hitlInterruptId = newInterruptId;
+        awaitingHumanResponse = true;
+        isInterrupted = true;
+        isStreaming = false;
+      },
+      onClientToolInterrupt: (newInterrupt, newInterruptId) => {
+        clientToolInterrupt = newInterrupt;
+        hitlInterruptId = newInterruptId;
+        awaitingHumanResponse = true;
+        isInterrupted = true;
+        isStreaming = false;
+      },
       onError: (err) => {
         error = err.message;
         isStreaming = false;
@@ -858,6 +886,20 @@ async function rejectClientToolInterrupt(): Promise<void> {
         },
         onHITLInterrupt: (newInterrupt, newInterruptId) => {
           hitlInterrupt = newInterrupt;
+          hitlInterruptId = newInterruptId;
+          awaitingHumanResponse = true;
+          isInterrupted = true;
+          isStreaming = false;
+        },
+        onClarificationInterrupt: (newInterrupt, newInterruptId) => {
+          clarificationInterrupt = newInterrupt;
+          hitlInterruptId = newInterruptId;
+          awaitingHumanResponse = true;
+          isInterrupted = true;
+          isStreaming = false;
+        },
+        onClientToolInterrupt: (newInterrupt, newInterruptId) => {
+          clientToolInterrupt = newInterrupt;
           hitlInterruptId = newInterruptId;
           awaitingHumanResponse = true;
           isInterrupted = true;
@@ -961,6 +1003,15 @@ async function resumeWithClarificationResponse(response: ClarificationResponse):
         },
         onClarificationInterrupt: (newInterrupt, newInterruptId) => {
           clarificationInterrupt = newInterrupt;
+          hitlInterruptId = newInterruptId;
+          awaitingHumanResponse = true;
+          isInterrupted = true;
+          isStreaming = false;
+        },
+        onClientToolInterrupt: (interrupt, newInterruptId) => {
+          // Client tool interrupt after clarification - handle it
+          console.log('[Agent] Client tool interrupt after clarification:', interrupt.tool_calls.map(tc => tc.name));
+          clientToolInterrupt = interrupt;
           hitlInterruptId = newInterruptId;
           awaitingHumanResponse = true;
           isInterrupted = true;

@@ -301,7 +301,27 @@ Agent receives user's answer as ToolMessage
          │
          ▼
 Agent continues with clarified intent
+         │
+         ▼ (may trigger another interrupt)
+┌────────────────────────────────────────┐
+│ Chained Interrupt Handling:            │
+│ - Another clarification (ask_user)     │
+│ - Client tool (list_files, etc.)       │
+│ - HITL approval (write operations)     │
+└────────────────────────────────────────┘
 ```
+
+### Chained Interrupt Handling
+
+After resuming from any interrupt type, the agent may immediately trigger another
+interrupt. All resume functions include callbacks for all interrupt types:
+
+- `onClarificationInterrupt` - Another clarification question
+- `onClientToolInterrupt` - Client-side tool execution needed  
+- `onHITLInterrupt` - Human approval required
+
+This allows seamless handling of multi-step interactions where the agent asks
+clarifying questions, then uses tools, then requests approvals, etc.
 
 ### Interrupt Data Format
 
