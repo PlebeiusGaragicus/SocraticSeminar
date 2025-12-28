@@ -3,20 +3,19 @@
 Architecture: Agent using create_agent() with client-executed tools
 1. Payment validation node checks ecash token
 2. create_agent() handles the agent loop with tool calling
-3. Tools are stubs - execution happens on the client via interrupts
-4. Graph uses interrupt_on to pause before tool execution
-5. Client executes tools locally (against IndexedDB)
-6. Client resumes graph with tool results
-7. Payment redemption on completion
+3. Tools read project_files from config (passed by wrapper node)
+4. Read-only tools (list_files, get_file, search_files) work server-side
+5. Only edit_file requires human approval (when enabled)
+6. Payment redemption on completion
 """
 
 import os
-from typing import Literal
+from typing import Any
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
-from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
+from langgraph.config import RunnableConfig
 from langgraph.graph import StateGraph, END
 
 from .state import DeeptutorState
@@ -27,6 +26,9 @@ from .nodes import (
     route_after_validation,
     build_system_prompt,
 )
+
+# Tools that require human approval before execution (write operations)
+HITL_TOOLS = {"edit_file"}
 
 
 # Configuration
@@ -45,70 +47,97 @@ def get_model():
     )
 
 
-def should_continue(state: DeeptutorState) -> Literal["tools", "redeem_payment"]:
-    """Determine if the agent wants to call tools or is done.
-    
-    If the last message has tool calls, route to tools node.
-    Otherwise, proceed to payment redemption and finish.
-    """
-    messages = state.get("messages", [])
-    if not messages:
-        return "redeem_payment"
-    
-    last_message = messages[-1]
-    
-    # Check if the last message has tool calls
-    if isinstance(last_message, AIMessage) and last_message.tool_calls:
-        return "tools"
-    
-    return "redeem_payment"
-
-
 def create_deeptutor_agent():
     """Create the core agent using create_agent() with middleware.
     
-    Uses HumanInTheLoopMiddleware to interrupt before client-executed tools,
-    allowing the client to execute them locally and resume.
+    Only uses HumanInTheLoopMiddleware for write operations (edit_file).
+    Read-only tools (list_files, get_file, search_files) work server-side
+    by reading project_files from the config.
     """
     model = get_model()
-    
-    # Get project files from state to build dynamic system prompt
-    # Note: The system prompt with project files will be built in the node
     system_prompt = build_system_prompt(None)
     
-    # Create agent with middleware
-    # HumanInTheLoopMiddleware handles interrupts for client-side tool execution
+    # Build middleware list - only add HITL for write operations
+    middleware = []
+    
+    # Check if any HITL tools are in CLIENT_TOOLS
+    tool_names = {t.name for t in CLIENT_TOOLS}
+    hitl_tools_enabled = tool_names & HITL_TOOLS
+    
+    if hitl_tools_enabled:
+        # Only interrupt on write operations that require human approval
+        middleware.append(
+            HumanInTheLoopMiddleware(interrupt_on={
+                tool_name: True for tool_name in hitl_tools_enabled
+            })
+        )
+    
+    # Create agent with conditional middleware
     agent = create_agent(
         model,
         system_prompt=system_prompt,
         tools=CLIENT_TOOLS,
-        middleware=[
-            HumanInTheLoopMiddleware(interrupt_on={
-                "list_files": True,
-                "get_file": True,
-                "search_files": True,
-            }),
-        ],
+        middleware=middleware,
     )
     
     return agent
 
 
+# Store the compiled agent at module level
+_deeptutor_agent = None
+
+
+def get_deeptutor_agent():
+    """Get or create the deeptutor agent singleton."""
+    global _deeptutor_agent
+    if _deeptutor_agent is None:
+        _deeptutor_agent = create_deeptutor_agent()
+    return _deeptutor_agent
+
+
+async def agent_node(state: DeeptutorState, config: RunnableConfig) -> dict[str, Any]:
+    """Wrapper node that invokes the agent with project_files in config.
+    
+    This is necessary because create_agent() creates an inner graph with its own
+    state schema. The tools inside that graph can't see our outer state keys.
+    We solve this by passing project_files through the config's 'configurable'.
+    """
+    agent = get_deeptutor_agent()
+    
+    # Extract project_files from our state and pass via config
+    project_files = state.get("project_files", [])
+    
+    # Merge project_files into the configurable section of the config
+    agent_config = {
+        **config,
+        "configurable": {
+            **config.get("configurable", {}),
+            "project_files": project_files,
+        }
+    }
+    
+    # Invoke the agent with only the keys it understands (messages)
+    # The agent will return updated messages
+    result = await agent.ainvoke(
+        {"messages": state.get("messages", [])},
+        agent_config
+    )
+    
+    return {"messages": result.get("messages", [])}
+
+
 def create_graph() -> StateGraph:
     """Create the Deeptutor Agent graph with payment wrapper.
     
-    The graph embeds the create_agent() result as a node within
-    a larger graph that handles payment validation/redemption.
+    The graph uses a wrapper node (agent_node) that passes project_files
+    through config to the inner agent's tools.
     """
     
     builder = StateGraph(DeeptutorState)
     
-    # Create the core agent (compiled graph from create_agent)
-    deeptutor_agent = create_deeptutor_agent()
-    
     # Add nodes
     builder.add_node("validate_payment", validate_payment_node)
-    builder.add_node("agent", deeptutor_agent)  # Embed compiled agent as node
+    builder.add_node("agent", agent_node)  # Wrapper that passes project_files via config
     builder.add_node("redeem_payment", redeem_payment_node)
     
     # Define edges
@@ -123,7 +152,6 @@ def create_graph() -> StateGraph:
     )
     
     # agent -> redeem_payment (agent handles its own tool loop internally)
-    # The interrupt_on in HumanInTheLoopMiddleware will pause before tools
     builder.add_edge("agent", "redeem_payment")
     
     # redeem_payment -> end
@@ -133,6 +161,5 @@ def create_graph() -> StateGraph:
 
 
 # Compile the graph
-# The agent node internally handles tool interrupts via HumanInTheLoopMiddleware
 graph = create_graph().compile()
 

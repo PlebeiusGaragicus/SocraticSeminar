@@ -90,3 +90,7 @@ The main agent node:
 - **deepagents integration** - Planning, filesystem, subagents
 - **Memory** - User preferences and conversation history
 
+## Debugging
+
+To debug agent runs, see the [Debugging and Tracing](debugging.md) guide.
+

@@ -31,3 +31,7 @@ cd agents && langgraph dev
 ## Architecture
 
 See [Architecture Documentation](architecture/overview.md) for details.
+
+## Debugging
+
+See [Debugging and Tracing](architecture/debugging.md) for info on inspecting agent behavior and LangSmith integration.

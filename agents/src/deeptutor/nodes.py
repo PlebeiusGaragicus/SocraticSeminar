@@ -77,7 +77,8 @@ When referencing content from files, cite with the file title:
         files_section += "\nUse the file IDs above with get_file() to read content."
         base_prompt += files_section
     else:
-        base_prompt += "\n\n## Project Files\n\nNo files are currently in this project. The user can create files which will then be available via tools."
+        # System prompt doesn't have access to dynamic state, so instruct model to discover files
+        base_prompt += "\n\n## Project Files\n\nUse list_files() to discover available files. The project may contain files that you should discover before attempting to answer file-related questions."
 
     return base_prompt
 
