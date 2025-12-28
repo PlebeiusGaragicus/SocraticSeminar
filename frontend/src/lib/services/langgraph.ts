@@ -28,7 +28,9 @@ import type {
 import { 
 	AUTO_APPROVE_TOOLS as autoApproveTools,
 	isClientToolInterrupt,
-	isPaymentExhaustedInterrupt
+	isPaymentExhaustedInterrupt,
+	isClarificationInterrupt,
+	type ClarificationInterrupt
 } from '../stores/types.js';
 
 // Re-export Message type for use in other modules
@@ -69,6 +71,8 @@ export interface StreamCallbacks {
 	onHITLInterrupt?: (interrupt: HITLInterrupt, interruptId: string) => void;
 	// Client tool execution interrupt (write operations needing approval + execution)
 	onClientToolInterrupt?: (interrupt: ClientToolInterrupt, interruptId: string) => void;
+	// Clarification interrupt (ask_user / ask_choices)
+	onClarificationInterrupt?: (interrupt: ClarificationInterrupt, interruptId: string) => void;
 }
 
 export interface SubmitOptions {
@@ -466,8 +470,18 @@ export async function submitMessage(
 							console.log('[LangGraph] HITL interrupt requires human approval - notifying UI');
 							callbacks.onHITLInterrupt?.(interruptValue, interruptId);
 							return { threadId, messages };
+						}
+						
+						// Check if this is a clarification interrupt (ask_user / ask_choices)
+						const isClarify = isClarificationInterrupt(interruptValue);
+						console.log('[LangGraph] Is clarification interrupt?', isClarify);
+						
+						if (isClarify) {
+							console.log('[LangGraph] Clarification interrupt detected:', interruptValue.tool);
+							callbacks.onClarificationInterrupt?.(interruptValue, interruptId);
+							return { threadId, messages };
 						} else {
-							console.log('[LangGraph] Interrupt value is not a HITL format');
+							console.log('[LangGraph] Interrupt value is not a recognized format');
 						}
 					} else {
 						console.log('[LangGraph] No interrupts found in task');
@@ -685,9 +699,9 @@ export async function resumeWithHITLDecisions(
 			}
 		}
 		
-		// After stream ends, check thread state for HITL interrupts
+		// After stream ends, check thread state for interrupts
 		// The backend may have triggered another interrupt during the resume
-		console.log('[LangGraph] Resume stream ended, checking for HITL interrupts...');
+		console.log('[LangGraph] Resume stream ended, checking for interrupts...');
 		try {
 			const threadState = await client.threads.getState(threadId);
 			const tasks = (threadState as { tasks?: Array<{ id?: string; interrupts?: Array<{ value?: unknown; id?: string }> }> }).tasks;
@@ -701,8 +715,23 @@ export async function resumeWithHITLDecisions(
 					const interruptValue = interruptData.value;
 					const newInterruptId = (interruptData as { id?: string }).id || task.id || '';
 					
+					// Check for clarification interrupt
+					if (isClarificationInterrupt(interruptValue)) {
+						console.log('[LangGraph] Clarification interrupt detected after resume');
+						callbacks.onClarificationInterrupt?.(interruptValue, newInterruptId);
+						return { threadId, messages };
+					}
+					
+					// Check for client tool interrupt
+					if (isClientToolInterrupt(interruptValue)) {
+						console.log('[LangGraph] Client tool interrupt detected after resume');
+						callbacks.onClientToolInterrupt?.(interruptValue, newInterruptId);
+						return { threadId, messages };
+					}
+					
+					// Check for HITL interrupt
 					if (isHITLInterrupt(interruptValue)) {
-						console.log('[LangGraph] Another HITL interrupt detected after resume:', 
+						console.log('[LangGraph] HITL interrupt detected after resume:', 
 							interruptValue.action_requests.map(a => a.name));
 						callbacks.onHITLInterrupt?.(interruptValue, newInterruptId);
 						return { threadId, messages };
@@ -904,6 +933,40 @@ export async function resumeWithPayment(
 			}
 		}
 		
+		// Check for interrupts after payment resume
+		try {
+			const threadState = await client.threads.getState(threadId);
+			const tasks = (threadState as { tasks?: Array<{ id?: string; interrupts?: Array<{ value?: unknown; id?: string }> }> }).tasks;
+			
+			if (tasks && tasks.length > 0) {
+				const task = tasks[0];
+				const interrupts = task.interrupts;
+				
+				if (interrupts && interrupts.length > 0) {
+					const interruptData = interrupts[0];
+					const interruptValue = interruptData.value;
+					const newInterruptId = (interruptData as { id?: string }).id || task.id || '';
+					
+					if (isClarificationInterrupt(interruptValue)) {
+						callbacks.onClarificationInterrupt?.(interruptValue, newInterruptId);
+						return { threadId, messages };
+					}
+					
+					if (isClientToolInterrupt(interruptValue)) {
+						callbacks.onClientToolInterrupt?.(interruptValue, newInterruptId);
+						return { threadId, messages };
+					}
+					
+					if (isHITLInterrupt(interruptValue)) {
+						callbacks.onHITLInterrupt?.(interruptValue, newInterruptId);
+						return { threadId, messages };
+					}
+				}
+			}
+		} catch (stateError) {
+			console.warn('[LangGraph] Could not check thread state after payment resume:', stateError);
+		}
+		
 		callbacks.onComplete?.(messages);
 		return { threadId, messages };
 		
@@ -985,7 +1048,21 @@ export async function resumeWithToolResults(
 					const interruptValue = interruptData.value;
 					const newInterruptId = (interruptData as { id?: string }).id || task.id || '';
 					
-					// Check for HITL or client tool interrupt
+					// Check for clarification interrupt
+					if (isClarificationInterrupt(interruptValue)) {
+						console.log('[LangGraph] Clarification interrupt detected after tool resume');
+						callbacks.onClarificationInterrupt?.(interruptValue, newInterruptId);
+						return { threadId, messages };
+					}
+					
+					// Check for client tool interrupt
+					if (isClientToolInterrupt(interruptValue)) {
+						console.log('[LangGraph] Client tool interrupt detected after tool resume');
+						callbacks.onClientToolInterrupt?.(interruptValue, newInterruptId);
+						return { threadId, messages };
+					}
+					
+					// Check for HITL interrupt
 					if (isHITLInterrupt(interruptValue)) {
 						callbacks.onHITLInterrupt?.(interruptValue, newInterruptId);
 						return { threadId, messages };

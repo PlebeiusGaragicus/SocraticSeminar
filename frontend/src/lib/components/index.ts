@@ -8,6 +8,7 @@ export { default as TabbedEditor } from './TabbedEditor.svelte';
 export { default as AgentPicker } from './AgentPicker.svelte';
 export { default as ToolCallDisplay } from './ToolCallDisplay.svelte';
 export { default as HumanInterruptPanel } from './HumanInterruptPanel.svelte';
+export { default as ClarificationPanel } from './ClarificationPanel.svelte';
 
 // Legacy components (kept for compatibility)
 export { default as ProjectSidebar } from './ProjectSidebar.svelte';

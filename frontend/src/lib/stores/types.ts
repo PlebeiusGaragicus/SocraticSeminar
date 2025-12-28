@@ -65,6 +65,7 @@ export interface ProjectFile {
   title: string;
   file_type: 'artifact' | 'document' | 'code';
   content?: string;  // Optional: included for file reading via get_file tool
+  tags?: string[];   // Optional: tags for organization and filtering
 }
 
 export interface ArtifactVersion {
@@ -79,6 +80,7 @@ export interface Artifact {
   projectId: string;
   currentVersionIndex: number;
   versions: ArtifactVersion[];
+  tags?: string[];     // Tags for organization and filtering
   createdAt: number;
   updatedAt: number;
 }
@@ -158,10 +160,10 @@ export interface HITLResumeResponse {
 }
 
 // Read-only tools that should be auto-approved (client-side execution)
-export const AUTO_APPROVE_TOOLS = ['list_files', 'read_file', 'search_files'];
+export const AUTO_APPROVE_TOOLS = ['list_files', 'read_file', 'search_files', 'grep_files', 'glob_files'];
 
 // Write tools that require human approval
-export const WRITE_TOOLS = ['write_file', 'edit_file'];
+export const WRITE_TOOLS = ['write_file', 'edit_file', 'tag_file'];
 
 // =============================================================================
 // CASHU PAYMENT TYPES
@@ -222,6 +224,46 @@ export interface ClientToolInterrupt {
   /** HITL data for approval UI (only for write tools) */
   action_requests?: HITLActionRequest[];
   review_configs?: HITLReviewConfig[];
+}
+
+/**
+ * Clarification request interrupt from ClarifyWithHumanMiddleware.
+ */
+export interface ClarificationInterrupt {
+  type: 'clarification_request';
+  /** Tool that triggered this: 'ask_user' or 'ask_choices' */
+  tool: 'ask_user' | 'ask_choices';
+  /** Tool call ID for resumption */
+  tool_call_id: string;
+  /** The question being asked */
+  question: string;
+  /** Options for ask_choices (empty for ask_user) */
+  options?: Array<{ id: string; label: string }>;
+  /** Allow multiple selections (ask_choices only) */
+  allow_multiple?: boolean;
+  /** Allow free-form text input (ask_choices only) */
+  allow_freeform?: boolean;
+}
+
+/**
+ * Response to a clarification request.
+ */
+export interface ClarificationResponse {
+  /** For ask_user: the user's text response */
+  response?: string;
+  /** For ask_choices: selected option IDs */
+  selected?: string[];
+  /** For ask_choices with allow_freeform: optional free text */
+  freeform?: string;
+}
+
+/**
+ * Check if an interrupt is a clarification request.
+ */
+export function isClarificationInterrupt(value: unknown): value is ClarificationInterrupt {
+  if (!value || typeof value !== 'object') return false;
+  const obj = value as Record<string, unknown>;
+  return obj.type === 'clarification_request' && typeof obj.tool === 'string';
 }
 
 /**

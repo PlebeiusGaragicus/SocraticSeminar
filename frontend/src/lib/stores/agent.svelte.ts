@@ -14,11 +14,14 @@ import type {
   CashuPaymentState,
   ClientToolInterrupt,
   PaymentExhaustedInterrupt,
-  StoredRefund
+  StoredRefund,
+  ClarificationInterrupt,
+  ClarificationResponse
 } from './types.js';
 import { 
   isClientToolInterrupt,
-  isPaymentExhaustedInterrupt
+  isPaymentExhaustedInterrupt,
+  isClarificationInterrupt
 } from './types.js';
 import { threadStore } from './threads.svelte.js';
 import { artifactStore } from './artifacts.svelte.js';
@@ -113,6 +116,7 @@ let paymentState = $state<CashuPaymentState | null>(null);
 let pendingRefund = $state<StoredRefund | null>(null);
 let paymentInterrupt = $state<PaymentExhaustedInterrupt | null>(null);
 let clientToolInterrupt = $state<ClientToolInterrupt | null>(null);
+let clarificationInterrupt = $state<ClarificationInterrupt | null>(null);
 
 // =============================================================================
 // HELPERS
@@ -167,6 +171,7 @@ async function sendMessage(
   hitlInterruptId = null;
   awaitingHumanResponse = false;
   currentLocalThreadId = localThreadId;
+  clarificationInterrupt = null;
   setPendingToolCalls([]);
   setStreamingContent('');
   
@@ -287,6 +292,17 @@ async function sendMessage(
           
           // Store the interrupt for the UI to handle
           clientToolInterrupt = interrupt;
+          hitlInterruptId = interruptId;  // Reuse hitlInterruptId for the resume
+          awaitingHumanResponse = true;
+          isInterrupted = true;
+          isStreaming = false;
+        },
+        
+        onClarificationInterrupt: (interrupt, interruptId) => {
+          console.log('[Agent] Clarification interrupt received:', interrupt.tool, interrupt.question);
+          
+          // Store the interrupt for the UI to handle
+          clarificationInterrupt = interrupt;
           hitlInterruptId = interruptId;  // Reuse hitlInterruptId for the resume
           awaitingHumanResponse = true;
           isInterrupted = true;
@@ -865,6 +881,109 @@ async function rejectClientToolInterrupt(): Promise<void> {
 }
 
 // =============================================================================
+// CLARIFICATION RESPONSE
+// =============================================================================
+
+/**
+ * Resume the agent with a user's response to a clarification question.
+ */
+async function resumeWithClarificationResponse(response: ClarificationResponse): Promise<void> {
+  if (!clarificationInterrupt || !threadId || !hitlInterruptId) {
+    console.error('[Agent] No pending clarification interrupt to respond to');
+    return;
+  }
+  
+  console.log('[Agent] Resuming with clarification response:', response);
+  
+  const interrupt = clarificationInterrupt;
+  const assistantId = assistantStore.selectedAssistantId || 'deeptutor';
+  const interruptId = hitlInterruptId;
+  
+  // Reset states
+  clarificationInterrupt = null;
+  hitlInterrupt = null;
+  hitlInterruptId = null;
+  awaitingHumanResponse = false;
+  isStreaming = true;
+  isInterrupted = false;
+  
+  // Format the response content based on tool type
+  let responseContent: string;
+  if (interrupt.tool === 'ask_user') {
+    // Free-form response
+    responseContent = response.response || '';
+  } else {
+    // ask_choices - format as JSON with selected IDs and optional freeform
+    responseContent = JSON.stringify({
+      selected: response.selected || [],
+      freeform: response.freeform
+    });
+  }
+  
+  // Create tool result for the clarification
+  const toolResult = [{
+    tool_call_id: interrupt.tool_call_id,
+    content: responseContent
+  }];
+  
+  try {
+    await resumeWithToolResults(
+      threadId,
+      interruptId,
+      toolResult,
+      assistantId,
+      {
+        onToken: (token) => {
+          streamingContent += token;
+        },
+        onMessagesSync: (messages) => {
+          langGraphMessages = [...messages];
+        },
+        onComplete: (finalMessages) => {
+          langGraphMessages = [...finalMessages];
+          
+          if (currentLocalThreadId) {
+            const convertedMessages = convertLangGraphMessages(finalMessages, currentLocalThreadId);
+            threadStore.syncMessages(currentLocalThreadId, convertedMessages);
+          }
+          
+          isStreaming = false;
+          isInterrupted = false;
+          setPendingToolCalls([]);
+          setStreamingContent('');
+        },
+        onHITLInterrupt: (newInterrupt, newInterruptId) => {
+          hitlInterrupt = newInterrupt;
+          hitlInterruptId = newInterruptId;
+          awaitingHumanResponse = true;
+          isInterrupted = true;
+          isStreaming = false;
+        },
+        onClarificationInterrupt: (newInterrupt, newInterruptId) => {
+          clarificationInterrupt = newInterrupt;
+          hitlInterruptId = newInterruptId;
+          awaitingHumanResponse = true;
+          isInterrupted = true;
+          isStreaming = false;
+        },
+        onError: (err) => {
+          error = err.message;
+          isStreaming = false;
+          isInterrupted = false;
+        }
+      }
+    );
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+    console.error('[Agent] Clarification response error:', errorMessage);
+    error = errorMessage;
+    isStreaming = false;
+    isInterrupted = false;
+    awaitingHumanResponse = false;
+  }
+}
+
+// =============================================================================
 // UTILITY FUNCTIONS
 // =============================================================================
 
@@ -885,6 +1004,7 @@ function resetStream(): void {
   pendingRefund = null;
   paymentInterrupt = null;
   clientToolInterrupt = null;
+  clarificationInterrupt = null;
   setPendingToolCalls([]);
   setStreamingContent('');
   langGraphMessages = [];
@@ -914,6 +1034,9 @@ export const agentStore = {
   get paymentInterrupt() { return paymentInterrupt; },
   get clientToolInterrupt() { return clientToolInterrupt; },
   
+  // Clarification getter
+  get clarificationInterrupt() { return clarificationInterrupt; },
+  
   // Actions
   sendMessage,
   clearError,
@@ -937,4 +1060,7 @@ export const agentStore = {
   handleClientToolInterrupt,
   executeApprovedWriteTools,
   rejectClientToolInterrupt,
+  
+  // Clarification actions
+  resumeWithClarificationResponse,
 };

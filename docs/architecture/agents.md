@@ -1,5 +1,49 @@
 # Agent Architecture
 
+## Available Agents
+
+| Agent | Path | Description |
+|-------|------|-------------|
+| `deeptutor` | `./src/deeptutor/__init__.py:graph` | Socratic dialogue assistant with full middleware stack |
+| `seminar_agent` | `./src/agent/__init__.py:graph` | Legacy seminar agent |
+| `simple_agent` | `./src/simple_agent/__init__.py:graph` | Minimal agent for testing |
+
+## Deeptutor (Primary Agent)
+
+The **deeptutor** agent is the primary implementation with:
+
+- **Middleware-based architecture** for modularity
+- **Two file systems**: Client-side (user's files) and server-side (agent memory)
+- **Clarification tools** for handling ambiguous user intent
+- **Task tracking** with TodoListMiddleware
+- **Streaming payments** with Cashu micropayments
+
+See [Deeptutor Architecture](deeptutor.md) for full details.
+
+### Middleware Stack
+
+1. `CashuPaymentMiddleware` - Payment validation and per-iteration deduction
+2. `TodoListMiddleware` - Task tracking for complex operations
+3. `ClarifyWithHumanMiddleware` - Ask user for intent clarification
+4. `FilesystemMiddleware` - Server-side ephemeral storage (StateBackend)
+5. `ClientToolsMiddleware` - Client-side file operations via interrupts
+6. `HumanInTheLoopMiddleware` - Approval for funding requests
+
+## Deepagents Reference
+
+The `deepagents/` directory contains a **reference implementation** of the deepagents library, which provides:
+
+- `FilesystemMiddleware` - File tools with backend abstraction
+- `TodoListMiddleware` - Task tracking (also available from langchain)
+- `SubAgentMiddleware` - Spawn subagents for complex tasks
+- `StateBackend` / `StoreBackend` - Storage backends
+
+**Note**: This is included for reference only. The actual `deepagents` package should be installed separately via pip:
+
+```bash
+pip install -e ./deepagents/libs/deepagents
+```
+
 ## LangGraph Configuration
 
 ```json
@@ -7,12 +51,16 @@
   "python_version": "3.11",
   "dependencies": ["."],
   "graphs": {
-    "seminar_agent": "./src/seminar/graph.py:graph"
+    "deeptutor": "./src/deeptutor/__init__.py:graph",
+    "seminar_agent": "./src/agent/__init__.py:graph",
+    "simple_agent": "./src/simple_agent/__init__.py:graph"
   }
 }
 ```
 
-## Graph Structure
+## Legacy: Seminar Agent
+
+The original seminar agent with simpler architecture:
 
 ```
 __start__
@@ -30,65 +78,6 @@ redeem_payment
     ▼
    END
 ```
-
-## State Definition
-
-```python
-class AgentState(TypedDict, total=False):
-    # Conversation
-    messages: Annotated[Sequence[BaseMessage], add_messages]
-    
-    # Payment
-    payment: Optional[PaymentInfo]
-    payment_validated: bool
-    payment_token: Optional[str]
-    
-    # Artifact context
-    artifact: Optional[Artifact]
-    highlighted_text: Optional[str]
-    
-    # Control
-    next: Optional[str]
-    run_id: Optional[str]
-    refund: bool
-```
-
-## Payment Validation Node
-
-```python
-async def validate_payment_node(state, config) -> dict:
-    payment = state.get("payment")
-    
-    # Free mode for development
-    if not payment or not payment.get("ecash_token"):
-        return {"payment_validated": True, "payment_token": None}
-    
-    # Debug tokens
-    if token.startswith("cashu_debug_"):
-        return {"payment_validated": True, "payment_token": None}
-    
-    # Production: call backend wallet service
-    # is_valid = await validate_with_backend(token)
-    
-    return {
-        "payment_validated": True,
-        "payment_token": token,  # For redemption after success
-    }
-```
-
-## Agent Node
-
-The main agent node:
-1. Gets the configured model (OpenAI-compatible endpoint)
-2. Builds system prompt for Socratic dialogue
-3. Includes artifact context if available
-4. Returns AI response
-
-## Future Enhancements
-
-- **Artifact tools** - Create, update, fork artifacts
-- **deepagents integration** - Planning, filesystem, subagents
-- **Memory** - User preferences and conversation history
 
 ## Debugging
 

@@ -12,6 +12,7 @@
   import AgentPicker from './AgentPicker.svelte';
   import ToolCallDisplay from './ToolCallDisplay.svelte';
   import HumanInterruptPanel from './HumanInterruptPanel.svelte';
+  import ClarificationPanel from './ClarificationPanel.svelte';
   import { threadStore, agentStore, projectStore } from '$lib/stores/index.js';
   import { cyphertap } from 'cyphertap';
   import type { ToolCallWithStatus, ToolCall } from '$lib/stores/types.js';
@@ -274,6 +275,9 @@
 
   <!-- Human-in-the-Loop Interrupt Panel -->
   <HumanInterruptPanel />
+  
+  <!-- Clarification Panel (ask_user / ask_choices) -->
+  <ClarificationPanel />
 
   <!-- Input -->
   <div class="border-t border-zinc-800 p-3">

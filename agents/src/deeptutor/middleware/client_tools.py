@@ -42,25 +42,33 @@ class ClientToolsState(AgentState):
 # SYSTEM PROMPT
 # =============================================================================
 
-CLIENT_TOOLS_SYSTEM_PROMPT = """## File Operations
+CLIENT_TOOLS_SYSTEM_PROMPT = """## Project File Operations
 
-You have access to tools for working with project files. These files are stored
-locally on the user's device and will be provided when you request them.
+You have access to tools for working with the user's project files. These files are
+stored locally on the user's device (browser) and will be provided when you request them.
 
-Available tools:
-- `list_files()` - List all files in the current project
+### Available Tools
+
+**Discovery & Reading:**
+- `list_files(tag?, file_type?)` - List files, optionally filtered by tag or type
 - `read_file(file_id)` - Read the full content of a file by ID
-- `search_files(query)` - Search files by content
-- `write_file(title, content, file_type)` - Create a new file (requires approval)
-- `edit_file(file_id, new_content, description)` - Edit an existing file (requires approval)
+- `search_files(query, top_k?)` - Semantic search across file contents
+- `grep_files(pattern, glob_pattern?, case_sensitive?)` - Pattern search in file contents
+- `glob_files(pattern)` - Find files by title/name pattern (e.g., "*.md", "*bitcoin*")
+
+**Writing (requires approval):**
+- `write_file(title, content, file_type)` - Create a new file
+- `edit_file(file_id, new_content, description)` - Edit an existing file
+- `tag_file(file_id, tags, replace?)` - Add or update tags on a file
 
 ### Guidelines
 
 1. **Use list_files first** to discover what files exist before reading
-2. **Read files before editing** to understand current content
-3. **Provide clear descriptions** when creating/editing files
-4. **Write operations require approval** - explain your changes clearly
-5. **Be specific** with file IDs when reading or editing"""
+2. **Use grep_files** when searching for specific text patterns across files
+3. **Use glob_files** when looking for files by name pattern
+4. **Read files before editing** to understand current content
+5. **Write operations require approval** - explain your changes clearly
+6. **Tag files** to help organize research materials, drafts, and sources"""
 
 
 # =============================================================================
@@ -70,15 +78,24 @@ Available tools:
 def _create_list_files_tool() -> StructuredTool:
     """Create the list_files tool."""
     
-    def list_files(runtime: ToolRuntime) -> str:
-        """List all files in the current project.
+    def list_files(
+        tag: str | None = None,
+        file_type: Literal["artifact", "document", "code"] | None = None,
+        runtime: ToolRuntime = None,
+    ) -> str:
+        """List all files in the current project, optionally filtered.
         
         Returns metadata about available files including:
         - id: Unique file identifier
         - title: File display name
         - file_type: Type ('artifact', 'document', 'code')
+        - tags: List of tags (if any)
         
         Use this to discover files before reading them.
+        
+        Args:
+            tag: Optional tag to filter by (e.g., "research", "draft")
+            file_type: Optional file type filter
         """
         # This will be handled by the middleware's wrap_tool_call
         # which interrupts for client execution
@@ -87,9 +104,13 @@ def _create_list_files_tool() -> StructuredTool:
     return StructuredTool.from_function(
         name="list_files",
         func=list_files,
-        description="""List all files in the current project.
+        description="""List all files in the current project, optionally filtered.
 
-Returns JSON array of file metadata with id, title, and file_type.
+Args:
+    tag: Optional tag to filter by (e.g., "research", "draft")
+    file_type: Optional filter by type ('artifact', 'document', 'code')
+
+Returns JSON array of file metadata with id, title, file_type, and tags.
 Use this first to discover what files are available.""",
     )
 
@@ -228,11 +249,117 @@ User will see a diff and must approve changes.""",
     )
 
 
+def _create_grep_files_tool() -> StructuredTool:
+    """Create the grep_files tool for pattern search in file contents."""
+    
+    def grep_files(
+        pattern: str,
+        glob_pattern: str | None = None,
+        case_sensitive: bool = False,
+        runtime: ToolRuntime = None,
+    ) -> str:
+        """Search for a text pattern across all project files.
+        
+        Searches file contents for the given pattern and returns
+        matching excerpts with file context.
+        
+        Args:
+            pattern: Text pattern to search for (e.g., "Bitcoin", "monetary policy")
+            glob_pattern: Optional glob to filter files (e.g., "*.md", "article-*")
+            case_sensitive: Whether search is case-sensitive (default: False)
+        
+        Returns:
+            JSON array of matches with file_id, title, line_number, excerpt
+        """
+        return "Tool execution pending - awaiting client response"
+    
+    return StructuredTool.from_function(
+        name="grep_files",
+        func=grep_files,
+        description="""Search for a text pattern across all project files.
+
+Args:
+    pattern: Text to search for (e.g., "Bitcoin", "monetary policy")
+    glob_pattern: Optional filter (e.g., "*.md", "article-*")
+    case_sensitive: Case-sensitive search (default: False)
+
+Returns matches with file_id, title, line_number, and excerpt.""",
+    )
+
+
+def _create_glob_files_tool() -> StructuredTool:
+    """Create the glob_files tool for finding files by name pattern."""
+    
+    def glob_files(
+        pattern: str,
+        runtime: ToolRuntime = None,
+    ) -> str:
+        """Find files matching a glob pattern.
+        
+        Use glob patterns to find files by title/name.
+        
+        Args:
+            pattern: Glob pattern (e.g., "*.md", "article-*", "*bitcoin*")
+        
+        Returns:
+            JSON array of matching file metadata
+        """
+        return "Tool execution pending - awaiting client response"
+    
+    return StructuredTool.from_function(
+        name="glob_files",
+        func=glob_files,
+        description="""Find files matching a glob pattern.
+
+Args:
+    pattern: Glob pattern (e.g., "*.md", "article-*", "*bitcoin*")
+
+Returns array of matching files with id, title, file_type.""",
+    )
+
+
+def _create_tag_file_tool() -> StructuredTool:
+    """Create the tag_file tool for adding/updating file tags."""
+    
+    def tag_file(
+        file_id: str,
+        tags: list[str],
+        replace: bool = False,
+        runtime: ToolRuntime = None,
+    ) -> str:
+        """Add or update tags on a file.
+        
+        Tags help organize files and enable filtering with list_files(tag=...).
+        
+        Args:
+            file_id: ID of the file to tag
+            tags: List of tags to add (e.g., ["research", "bitcoin", "draft"])
+            replace: If True, replace all tags; if False, merge with existing
+        
+        Returns:
+            Success message with updated tags
+        """
+        return "Tool execution pending - awaiting client response"
+    
+    return StructuredTool.from_function(
+        name="tag_file",
+        func=tag_file,
+        description="""Add or update tags on a file.
+
+Args:
+    file_id: File ID from list_files()
+    tags: Tags to add (e.g., ["research", "bitcoin"])
+    replace: Replace all tags (True) or merge (False, default)
+
+Returns success message with updated tags.""",
+    )
+
+
 # Tools that can be auto-approved by the client (read-only)
-AUTO_APPROVE_TOOLS = {"list_files", "read_file", "search_files"}
+AUTO_APPROVE_TOOLS = {"list_files", "read_file", "search_files", "grep_files", "glob_files"}
 
 # Tools that require explicit human approval (write operations)
-REQUIRE_APPROVAL_TOOLS = {"write_file", "edit_file"}
+REQUIRE_APPROVAL_TOOLS = {"write_file", "edit_file", "tag_file"}
 
 
 # =============================================================================
@@ -291,6 +418,9 @@ class ClientToolsMiddleware(AgentMiddleware[ClientToolsState, None]):
             _create_search_files_tool(),
             _create_write_file_tool(),
             _create_edit_file_tool(),
+            _create_grep_files_tool(),
+            _create_glob_files_tool(),
+            _create_tag_file_tool(),
         ]
     
     async def awrap_model_call(

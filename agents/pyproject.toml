@@ -10,6 +10,8 @@ dependencies = [
     "langchain-anthropic>=1.2.0",
     "httpx>=0.27.0",
     "pydantic>=2.0.0",
+    # Note: deepagents/ is a reference submodule, not a direct dependency.
+    # Install separately if needed: pip install -e ../deepagents/libs/deepagents
 ]
 
 [project.optional-dependencies]

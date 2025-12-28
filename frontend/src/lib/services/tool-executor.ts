@@ -11,8 +11,8 @@
  * 4. This service executes tools against local IndexedDB
  * 5. Frontend resumes the graph with tool results
  * 
- * Read operations (list_files, read_file, search_files) are auto-approved.
- * Write operations (write_file, edit_file) require human approval first.
+ * Read operations (list_files, read_file, search_files, grep_files, glob_files) are auto-approved.
+ * Write operations (write_file, edit_file, tag_file) require human approval first.
  */
 
 import { db } from './indexeddb.js';
@@ -31,7 +31,13 @@ export async function executeToolCall(
   try {
     switch (name) {
       case 'list_files':
-        return await executeListFiles(toolCallId, name, projectId);
+        return await executeListFiles(
+          toolCallId, 
+          name, 
+          projectId,
+          args.tag as string | undefined,
+          args.file_type as 'artifact' | 'document' | 'code' | undefined
+        );
 
       case 'read_file':
         // Support both file_id (new) and args.file_id (legacy)
@@ -70,6 +76,33 @@ export async function executeToolCall(
           args.description as string || ''
         );
 
+      case 'grep_files':
+        return await executeGrepFiles(
+          toolCallId,
+          name,
+          projectId,
+          args.pattern as string,
+          args.glob_pattern as string | undefined,
+          (args.case_sensitive as boolean) || false
+        );
+
+      case 'glob_files':
+        return await executeGlobFiles(
+          toolCallId,
+          name,
+          projectId,
+          args.pattern as string
+        );
+
+      case 'tag_file':
+        return await executeTagFile(
+          toolCallId,
+          name,
+          args.file_id as string,
+          args.tags as string[],
+          (args.replace as boolean) || false
+        );
+
       default:
         return {
           tool_call_id: toolCallId,
@@ -103,19 +136,33 @@ export async function executeToolCalls(
 }
 
 /**
- * list_files() - List all files in the project
+ * list_files(tag?, file_type?) - List files in the project, optionally filtered
  */
 async function executeListFiles(
   toolCallId: string,
   toolName: string,
-  projectId: string
+  projectId: string,
+  filterTag?: string,
+  filterFileType?: 'artifact' | 'document' | 'code'
 ): Promise<ToolResult> {
-  const artifacts = await db.artifacts.getByProject(projectId);
+  let artifacts = await db.artifacts.getByProject(projectId);
+  
+  // Filter by tag if provided
+  if (filterTag) {
+    const tagLower = filterTag.toLowerCase();
+    artifacts = artifacts.filter(a => 
+      a.tags?.some(t => t.toLowerCase() === tagLower)
+    );
+  }
+  
+  // Filter by file_type if provided (for now all are 'artifact')
+  // This filter is a placeholder for when we support different types
   
   const files: ProjectFile[] = artifacts.map(artifact => ({
     id: artifact.id,
     title: artifact.versions[artifact.currentVersionIndex]?.title || 'Untitled',
-    file_type: 'artifact' as const
+    file_type: 'artifact' as const,
+    tags: artifact.tags || []
   }));
 
   return {
@@ -411,6 +458,224 @@ async function executeSearchFiles(
     name: toolName,
     content: JSON.stringify({ results: limitedResults })
   };
+}
+
+/**
+ * grep_files(pattern, glob_pattern?, case_sensitive?) - Search file contents for pattern
+ */
+async function executeGrepFiles(
+  toolCallId: string,
+  toolName: string,
+  projectId: string,
+  pattern: string,
+  globPattern?: string,
+  caseSensitive: boolean = false
+): Promise<ToolResult> {
+  if (!pattern) {
+    return {
+      tool_call_id: toolCallId,
+      name: toolName,
+      content: '',
+      error: 'pattern is required'
+    };
+  }
+
+  let artifacts = await db.artifacts.getByProject(projectId);
+  
+  // Filter by glob pattern if provided (matches against title)
+  if (globPattern) {
+    const globRegex = globToRegex(globPattern);
+    artifacts = artifacts.filter(a => {
+      const title = a.versions[a.currentVersionIndex]?.title || '';
+      return globRegex.test(title);
+    });
+  }
+
+  const searchPattern = caseSensitive ? pattern : pattern.toLowerCase();
+  
+  const matches: Array<{
+    file_id: string;
+    file_title: string;
+    line_number: number;
+    excerpt: string;
+  }> = [];
+
+  for (const artifact of artifacts) {
+    const currentVersion = artifact.versions[artifact.currentVersionIndex];
+    if (!currentVersion?.content) continue;
+
+    const content = currentVersion.content;
+    const lines = content.split('\n');
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const searchLine = caseSensitive ? line : line.toLowerCase();
+      
+      if (searchLine.includes(searchPattern)) {
+        // Get context: line with surrounding context
+        const startLine = Math.max(0, i - 1);
+        const endLine = Math.min(lines.length - 1, i + 1);
+        const excerpt = lines.slice(startLine, endLine + 1).join('\n');
+        
+        matches.push({
+          file_id: artifact.id,
+          file_title: currentVersion.title,
+          line_number: i + 1,
+          excerpt: excerpt.length > 300 ? excerpt.slice(0, 300) + '...' : excerpt
+        });
+        
+        // Limit matches per file to avoid huge responses
+        if (matches.filter(m => m.file_id === artifact.id).length >= 5) {
+          break;
+        }
+      }
+    }
+  }
+
+  // Limit total matches
+  const limitedMatches = matches.slice(0, 50);
+
+  return {
+    tool_call_id: toolCallId,
+    name: toolName,
+    content: JSON.stringify({ 
+      matches: limitedMatches,
+      total_matches: matches.length,
+      truncated: matches.length > 50
+    })
+  };
+}
+
+/**
+ * glob_files(pattern) - Find files by name/title pattern
+ */
+async function executeGlobFiles(
+  toolCallId: string,
+  toolName: string,
+  projectId: string,
+  pattern: string
+): Promise<ToolResult> {
+  if (!pattern) {
+    return {
+      tool_call_id: toolCallId,
+      name: toolName,
+      content: '',
+      error: 'pattern is required'
+    };
+  }
+
+  const artifacts = await db.artifacts.getByProject(projectId);
+  const globRegex = globToRegex(pattern);
+  
+  const matchingFiles: ProjectFile[] = [];
+  
+  for (const artifact of artifacts) {
+    const title = artifact.versions[artifact.currentVersionIndex]?.title || 'Untitled';
+    
+    if (globRegex.test(title)) {
+      matchingFiles.push({
+        id: artifact.id,
+        title: title,
+        file_type: 'artifact',
+        tags: artifact.tags || []
+      });
+    }
+  }
+
+  return {
+    tool_call_id: toolCallId,
+    name: toolName,
+    content: JSON.stringify(matchingFiles, null, 2)
+  };
+}
+
+/**
+ * tag_file(file_id, tags, replace?) - Add or update tags on a file
+ */
+async function executeTagFile(
+  toolCallId: string,
+  toolName: string,
+  fileId: string,
+  tags: string[],
+  replace: boolean = false
+): Promise<ToolResult> {
+  if (!fileId) {
+    return {
+      tool_call_id: toolCallId,
+      name: toolName,
+      content: '',
+      error: 'file_id is required'
+    };
+  }
+
+  if (!tags || !Array.isArray(tags)) {
+    return {
+      tool_call_id: toolCallId,
+      name: toolName,
+      content: '',
+      error: 'tags must be an array of strings'
+    };
+  }
+
+  const artifact = await db.artifacts.get(fileId);
+  
+  if (!artifact) {
+    return {
+      tool_call_id: toolCallId,
+      name: toolName,
+      content: '',
+      error: `File not found: ${fileId}`
+    };
+  }
+
+  // Normalize tags (lowercase, trim, dedupe)
+  const normalizedNewTags = tags.map(t => t.toLowerCase().trim()).filter(t => t.length > 0);
+  
+  let updatedTags: string[];
+  if (replace) {
+    updatedTags = normalizedNewTags;
+  } else {
+    // Merge with existing, avoiding duplicates
+    const existingTags = artifact.tags || [];
+    const combined = new Set([...existingTags.map(t => t.toLowerCase()), ...normalizedNewTags]);
+    updatedTags = Array.from(combined);
+  }
+
+  // Update artifact
+  const updatedArtifact: Artifact = {
+    ...artifact,
+    tags: updatedTags,
+    updatedAt: Date.now()
+  };
+
+  await db.artifacts.save(updatedArtifact);
+
+  const title = artifact.versions[artifact.currentVersionIndex]?.title || 'Untitled';
+  console.log(`[ToolExecutor] Tagged file "${title}": ${updatedTags.join(', ')}`);
+
+  return {
+    tool_call_id: toolCallId,
+    name: toolName,
+    content: JSON.stringify({
+      success: true,
+      message: `Tags updated for "${title}"`,
+      file_id: fileId,
+      tags: updatedTags
+    })
+  };
+}
+
+/**
+ * Convert a glob pattern to a regular expression.
+ * Supports: * (any chars), ? (single char)
+ */
+function globToRegex(pattern: string): RegExp {
+  const escaped = pattern
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&') // Escape regex special chars
+    .replace(/\*/g, '.*')                  // * -> .*
+    .replace(/\?/g, '.');                  // ? -> .
+  
+  return new RegExp(`^${escaped}$`, 'i'); // Case-insensitive, full match
 }
 
 /**

@@ -3,27 +3,34 @@
 Architecture:
 - Uses create_agent() with middleware composition
 - CashuPaymentMiddleware: Streaming micropayments with per-iteration deduction
+- TodoListMiddleware: Task tracking for complex multi-step operations
+- ClarifyWithHumanMiddleware: Ask user for intent clarification
+- FilesystemMiddleware: Server-side ephemeral storage for agent working memory
 - ClientToolsMiddleware: Client-side file operations via interrupts
 - HumanInTheLoopMiddleware: Approval for write operations
 
 The agent operates with:
-1. Files stored in the browser (client provides via interrupts)
+1. Two file systems: User's project files (client) and agent working memory (server)
 2. Streaming Cashu payments (deducted per LLM iteration)
 3. Human approval for write operations and funding requests
+4. Clarification tools when user intent is unclear
 """
 
 import os
 from typing import Any
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langchain.agents.middleware import HumanInTheLoopMiddleware, TodoListMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Checkpointer
 
-from .middleware import CashuPaymentMiddleware, ClientToolsMiddleware
+from deepagents.middleware.filesystem import FilesystemMiddleware
+from deepagents.backends import StateBackend
+
+from .middleware import CashuPaymentMiddleware, ClientToolsMiddleware, ClarifyWithHumanMiddleware
 from .state import DeeptutorState, COST_PER_ITERATION_SATS
 
 
@@ -92,13 +99,42 @@ When helping with Socratic Seminar documents, follow this structure:
 - **Refutations**: Counter-arguments addressed honestly
 - **Replies**: Responses that strengthen the original argument
 
+## Two File Systems
+
+You have access to TWO separate file systems:
+
+### 1. User's Project Files (Client-side)
+These are the user's actual documents stored in their browser. Use these tools:
+- `list_files(tag?, file_type?)` - List user's files, optionally filtered
+- `read_file(file_id)` - Read a user file
+- `search_files(query)` - Semantic search across user files
+- `grep_files(pattern)` - Pattern search in file contents
+- `glob_files(pattern)` - Find files by name pattern
+- `write_file(title, content)` - Create new file (requires approval)
+- `edit_file(file_id, new_content)` - Edit file (requires approval)
+- `tag_file(file_id, tags)` - Tag a file (requires approval)
+
+### 2. Your Working Memory (Server-side)
+Ephemeral storage for your notes, analysis, and drafts. Use these tools:
+- `ls(path)` - List files in your working memory
+- `read_file(file_path)` - Read from working memory
+- `write_file(file_path, content)` - Write to working memory (no approval needed)
+- `edit_file(file_path, old_string, new_string)` - Edit working memory files
+- `grep(pattern)` / `glob(pattern)` - Search working memory
+
+Use working memory at paths like `/scratch/`, `/summaries/`, `/analysis/` to:
+- Store intermediate analysis and notes
+- Draft content before presenting to user
+- Keep track of research findings within a session
+
 ## Guidelines
 
 - Be helpful, thoughtful, and encourage critical thinking
-- Ask clarifying questions when the user's intent is unclear
-- When editing files, explain your changes clearly
-- Use list_files() first to discover available files
+- Use `ask_user()` or `ask_choices()` when the user's intent is unclear
+- When editing user files, explain your changes clearly
+- Use `list_files()` first to discover available files
 - Read files before attempting to edit them
+- Tag user files to help organize research materials
 
 ## Citation Format
 
@@ -122,9 +158,12 @@ def create_deeptutor_agent(
     
     Middleware Stack (in order):
     1. CashuPaymentMiddleware - Payment validation and per-iteration deduction
-    2. ClientToolsMiddleware - File operations via client interrupts
-    3. HumanInTheLoopMiddleware - Approval for writes and funding
-    4. Any additional middleware
+    2. TodoListMiddleware - Task tracking for complex operations
+    3. ClarifyWithHumanMiddleware - Ask user for intent clarification
+    4. FilesystemMiddleware - Server-side ephemeral storage for agent memory
+    5. ClientToolsMiddleware - File operations via client interrupts
+    6. HumanInTheLoopMiddleware - Approval for writes and funding
+    7. Any additional middleware
     
     Args:
         checkpointer: Optional checkpointer for persistence
@@ -166,11 +205,21 @@ def create_deeptutor_agent(
         # 1. Payment middleware - validates token, tracks balance, deducts per iteration
         CashuPaymentMiddleware(cost_per_iteration=cost_per_iteration),
         
-        # 2. Client tools - ALL file operations interrupt for client-side execution
+        # 2. Todo list - task tracking for complex multi-step operations
+        TodoListMiddleware(),
+        
+        # 3. Clarification tools - ask user for intent clarification
+        ClarifyWithHumanMiddleware(),
+        
+        # 4. Filesystem - server-side ephemeral storage for agent working memory
+        #    Agent can write to /scratch/, /summaries/, /analysis/ without approval
+        FilesystemMiddleware(backend=StateBackend),
+        
+        # 5. Client tools - ALL file operations interrupt for client-side execution
         #    Write tools include requires_approval=True for frontend approval UI
         ClientToolsMiddleware(),
         
-        # 3. Human-in-the-loop - ONLY for payment funding requests
+        # 6. Human-in-the-loop - ONLY for payment funding requests
         #    File operations are handled by ClientToolsMiddleware above
         HumanInTheLoopMiddleware(
             interrupt_on={
