@@ -4,14 +4,24 @@
   import Bot from '@lucide/svelte/icons/bot';
   import Loader2 from '@lucide/svelte/icons/loader-2';
   import AlertCircle from '@lucide/svelte/icons/alert-circle';
+  import Check from '@lucide/svelte/icons/check';
+  import X from '@lucide/svelte/icons/x';
+  import HelpCircle from '@lucide/svelte/icons/help-circle';
+  import Wrench from '@lucide/svelte/icons/wrench';
+  import FileText from '@lucide/svelte/icons/file-text';
+  import FolderOpen from '@lucide/svelte/icons/folder-open';
+  import Search from '@lucide/svelte/icons/search';
+  import Edit from '@lucide/svelte/icons/edit';
+  import FilePlus from '@lucide/svelte/icons/file-plus';
+  import ChevronDown from '@lucide/svelte/icons/chevron-down';
+  import ChevronUp from '@lucide/svelte/icons/chevron-up';
+  import Maximize2 from '@lucide/svelte/icons/maximize-2';
   import { Button, Textarea } from './ui/index.js';
   import AgentPicker from './AgentPicker.svelte';
   import ToolCallDisplay from './ToolCallDisplay.svelte';
-  import HumanInterruptPanel from './HumanInterruptPanel.svelte';
-  import ClarificationPanel from './ClarificationPanel.svelte';
   import { threadStore, agentStore, projectStore } from '$lib/stores/index.js';
   import { cyphertap } from 'cyphertap';
-  import type { ToolCallWithStatus, ToolCall } from '$lib/stores/types.js';
+  import type { ToolCallWithStatus, ToolCall, ClarificationResponse, HITLActionRequest, HITLReviewConfig } from '$lib/stores/types.js';
   import { tick, onMount } from 'svelte';
   import { checkHealth, type Message as LangGraphMessage } from '$lib/services/langgraph.js';
   import { extractStringFromMessageContent } from '$lib/utils.js';
@@ -28,6 +38,8 @@
     showAvatar: boolean;
   }
 
+  type InputMode = 'normal' | 'hitl' | 'clarification' | 'choices';
+
   // =============================================================================
   // LOCAL STATE
   // =============================================================================
@@ -35,6 +47,12 @@
   let messageInput = $state('');
   let messagesContainer: HTMLDivElement | undefined = $state();
   let backendAvailable = $state<boolean | null>(null);
+  let isSubmitting = $state(false);
+  let selectedChoices = $state<string[]>([]);
+  
+  // HITL details UI state
+  let hitlDetailsExpanded = $state(false);
+  let showDetailsModal = $state(false);
 
   // Track if we've loaded state for the current thread
   let loadedLangGraphThreadId = $state<string | null>(null);
@@ -44,18 +62,15 @@
   // LIFECYCLE
   // =============================================================================
 
-  // Check backend health on mount and load threads
   onMount(() => {
     checkHealth().then(available => {
       backendAvailable = available;
     });
-    
-    // Load threads from IndexedDB
     threadStore.loadFromStorage();
   });
 
   // =============================================================================
-  // REACTIVE DERIVATIONS - Using simpler $derived pattern (Bug 5 fix)
+  // REACTIVE DERIVATIONS
   // =============================================================================
 
   // Core store derivations
@@ -64,36 +79,103 @@
   const isWalletReady = $derived(cyphertap.isReady);
   const persistedMessages = $derived(threadStore.currentMessages);
   
-  // Agent store derivations - using direct $derived instead of $derived.by
+  // Agent store derivations
   const isStreaming = $derived(agentStore.isStreaming);
   const isInterrupted = $derived(agentStore.isInterrupted);
   const streamingContent = $derived(agentStore.streamingContent);
   const awaitingHumanResponse = $derived(agentStore.awaitingHumanResponse);
   const langGraphMessages = $derived(agentStore.langGraphMessages);
+  
+  // Interrupt state
+  const hitlInterrupt = $derived(agentStore.hitlInterrupt);
+  const clientToolInterrupt = $derived(agentStore.clientToolInterrupt);
+  const clarificationInterrupt = $derived(agentStore.clarificationInterrupt);
 
   // =============================================================================
-  // PROCESSED MESSAGES - Following reference implementation pattern (Bug 2, 3, 4 fix)
+  // INPUT MODE LOGIC - Unified input area adapts to current context
   // =============================================================================
 
-  /**
-   * Process messages following the reference implementation pattern.
-   * Builds a messageMap that:
-   * - Uses stable IDs from LangGraph messages
-   * - Tracks tool call status by correlating tool result messages
-   * - Provides unified message source to avoid flickering
-   */
+  const inputMode = $derived.by((): InputMode => {
+    if (!awaitingHumanResponse) return 'normal';
+    
+    if (clarificationInterrupt) {
+      if (clarificationInterrupt.tool === 'ask_choices' && clarificationInterrupt.options?.length) {
+        return 'choices';
+      }
+      return 'clarification';
+    }
+    
+    if (hitlInterrupt || clientToolInterrupt) {
+      return 'hitl';
+    }
+    
+    return 'normal';
+  });
+
+  // Unified interrupt for HITL display
+  const activeHitlInterrupt = $derived.by(() => {
+    if (clientToolInterrupt) {
+      return {
+        action_requests: clientToolInterrupt.action_requests || clientToolInterrupt.tool_calls.map(tc => ({
+          name: tc.name,
+          args: tc.args,
+          description: `Execute ${tc.name}`
+        })),
+        review_configs: clientToolInterrupt.review_configs || [{
+          action_name: clientToolInterrupt.tool_calls[0]?.name || '',
+          allowed_decisions: ['approve', 'reject'] as const
+        }]
+      };
+    }
+    return hitlInterrupt;
+  });
+
+  const isClientTool = $derived(!!clientToolInterrupt);
+
+  // Placeholder text based on mode
+  const inputPlaceholder = $derived.by(() => {
+    switch (inputMode) {
+      case 'hitl':
+        return 'Optional: Provide feedback or edits for the agent...';
+      case 'clarification':
+        return 'Type your response...';
+      case 'choices':
+        return clarificationInterrupt?.allow_freeform 
+          ? 'Or type your own response...' 
+          : 'Select an option above...';
+      default:
+        return currentThread ? 'Type your message...' : 'Create a new thread to start chatting...';
+    }
+  });
+
+  // Can submit based on mode
+  const canSubmit = $derived.by(() => {
+    if (isStreaming || !isWalletReady || backendAvailable === false) return false;
+    
+    switch (inputMode) {
+      case 'hitl':
+        return true;
+      case 'clarification':
+        return messageInput.trim().length > 0;
+      case 'choices':
+        return selectedChoices.length > 0 || (clarificationInterrupt?.allow_freeform && messageInput.trim().length > 0);
+      default:
+        return messageInput.trim().length > 0 && currentThread !== null;
+    }
+  });
+
+  // =============================================================================
+  // PROCESSED MESSAGES
+  // =============================================================================
+
   const processedMessages = $derived.by((): ProcessedMessage[] => {
-    // Determine which message source to use:
-    // - During streaming/interrupt: use langGraphMessages (live server state)
-    // - Otherwise: convert persistedMessages
     const useServerMessages = (isStreaming || awaitingHumanResponse || isInterrupted) && langGraphMessages.length > 0;
     
     if (!useServerMessages) {
-      // Convert persisted messages to ProcessedMessage format
       return persistedMessages.map((msg, index) => {
         const prevMsg = index > 0 ? persistedMessages[index - 1] : null;
         return {
-          id: msg.id, // Stable ID from persistence
+          id: msg.id,
           type: msg.role === 'user' ? 'human' : 'ai',
           content: msg.content,
           toolCalls: msg.toolCalls?.map(tc => ({
@@ -105,13 +187,10 @@
       });
     }
 
-    // Build message map following reference pattern
-    // This correlates AI messages with their tool calls and updates status from tool result messages
     const messageMap = new Map<string, { message: LangGraphMessage; toolCalls: ToolCallWithStatus[] }>();
     
     langGraphMessages.forEach((message: LangGraphMessage) => {
       if (message.type === 'ai') {
-        // Extract tool calls from various possible locations
         const toolCallsInMessage: Array<{
           id?: string;
           function?: { name?: string; arguments?: unknown };
@@ -134,7 +213,6 @@
           toolCallsInMessage.push(...toolUseBlocks);
         }
         
-        // Map tool calls with status - initially pending/interrupted based on current state
         const toolCallsWithStatus: ToolCallWithStatus[] = toolCallsInMessage.map(toolCall => {
           const name = toolCall.function?.name || toolCall.name || toolCall.type || 'unknown';
           const args = (toolCall.function?.arguments || toolCall.args || toolCall.input || {}) as Record<string, unknown>;
@@ -146,12 +224,10 @@
           };
         });
         
-        // Use stable ID from LangGraph message (Bug 3 fix)
         const stableId = message.id || `ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         messageMap.set(stableId, { message, toolCalls: toolCallsWithStatus });
         
       } else if (message.type === 'tool') {
-        // Find the corresponding AI message and update tool call status
         const toolMsg = message as { tool_call_id?: string };
         const toolCallId = toolMsg.tool_call_id;
         if (!toolCallId) return;
@@ -159,7 +235,6 @@
         for (const [, data] of messageMap.entries()) {
           const toolCallIndex = data.toolCalls.findIndex(tc => tc.id === toolCallId);
           if (toolCallIndex !== -1) {
-            // Update status to completed and add result
             data.toolCalls[toolCallIndex] = {
               ...data.toolCalls[toolCallIndex],
               status: 'completed' as const,
@@ -174,13 +249,11 @@
         }
         
       } else if (message.type === 'human') {
-        // Use stable ID from LangGraph message
         const stableId = message.id || `human-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         messageMap.set(stableId, { message, toolCalls: [] });
       }
     });
     
-    // Convert map to array and add showAvatar flag
     const processedArray = Array.from(messageMap.entries()).map(([id, data]) => ({
       id,
       ...data
@@ -198,21 +271,10 @@
     });
   });
 
-  // =============================================================================
-  // STREAMING CONTENT DISPLAY (Bug 3 fix)
-  // Determine if we should show streaming content separately or it's already in messages
-  // =============================================================================
-  
   const showStreamingBubble = $derived.by(() => {
     if (!isStreaming || !streamingContent) return false;
-    
-    // Check if the last AI message already has this content
     const lastMessage = processedMessages[processedMessages.length - 1];
-    if (lastMessage?.type === 'ai' && lastMessage.content) {
-      // Content is already being shown via processedMessages
-      return false;
-    }
-    
+    if (lastMessage?.type === 'ai' && lastMessage.content) return false;
     return true;
   });
 
@@ -224,18 +286,20 @@
   // EFFECTS
   // =============================================================================
 
-  // Load LangGraph thread state when selecting a thread with langGraphThreadId
-  // This restores chat history and any pending interrupts (like clarification questions)
+  // Reset input state when interrupt changes
+  $effect(() => {
+    if (clarificationInterrupt || hitlInterrupt || clientToolInterrupt) {
+      selectedChoices = [];
+      hitlDetailsExpanded = false;
+    }
+  });
+
+  // Load LangGraph thread state when selecting a thread
   $effect(() => {
     const thread = currentThread;
     const langGraphThreadId = thread?.langGraphThreadId;
     const localThreadId = thread?.id;
     
-    // Only load if:
-    // 1. We have a thread with a langGraphThreadId
-    // 2. We haven't already loaded this thread's state
-    // 3. We're not currently streaming (don't interrupt active conversations)
-    // 4. Backend is available
     if (
       langGraphThreadId &&
       localThreadId &&
@@ -259,25 +323,17 @@
         });
     }
     
-    // Reset loaded thread ID when switching to a different thread
     if (!langGraphThreadId && loadedLangGraphThreadId) {
       loadedLangGraphThreadId = null;
     }
   });
 
-  // Debug logging for message count
+  // Auto-scroll
   $effect(() => {
-    console.log('[ChatPanel] Processed messages:', processedMessages.length, 'Streaming:', isStreaming, 'LG messages:', langGraphMessages.length);
-  });
-
-  // Auto-scroll to bottom when messages change
-  $effect(() => {
-    // Access dependencies to trigger effect
     const _msgs = processedMessages.length;
     const _streaming = streamingContent;
     const _lgMsgs = langGraphMessages.length;
     
-    // Scroll after DOM update
     tick().then(() => {
       if (messagesContainer) {
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -289,37 +345,80 @@
   // HANDLERS
   // =============================================================================
 
+  function getToolIcon(name: string) {
+    switch (name) {
+      case 'list_files': return FolderOpen;
+      case 'get_file': return FileText;
+      case 'search_files': return Search;
+      case 'edit_file': return Edit;
+      case 'create_file': return FilePlus;
+      case 'write_file': return FilePlus;
+      default: return Wrench;
+    }
+  }
+
+  function getActionDescription(action: HITLActionRequest): string {
+    const args = action.args || {};
+    switch (action.name) {
+      case 'list_files': return 'List all files in your project';
+      case 'get_file': return `Read file: "${args.file_id || 'unknown'}"`;
+      case 'search_files': return `Search files for: "${args.query || 'unknown'}"`;
+      case 'edit_file': return `Edit file: "${args.file_id || 'unknown'}"`;
+      case 'create_file': return `Create new file: "${args.title || 'unknown'}"`;
+      case 'write_file': return `Create file "${args.title || 'unknown'}"`;
+      default: return action.description || `Execute: ${action.name}`;
+    }
+  }
+
+  function formatArgValue(value: unknown): string {
+    if (typeof value === 'string') {
+      // Truncate long strings for display
+      return value.length > 100 ? value.slice(0, 100) + '...' : value;
+    }
+    return JSON.stringify(value, null, 2);
+  }
+
+  function toggleChoice(optionId: string) {
+    if (!clarificationInterrupt) return;
+    
+    if (clarificationInterrupt.allow_multiple) {
+      if (selectedChoices.includes(optionId)) {
+        selectedChoices = selectedChoices.filter(id => id !== optionId);
+      } else {
+        selectedChoices = [...selectedChoices, optionId];
+      }
+    } else {
+      selectedChoices = [optionId];
+    }
+  }
+
   async function handleSendMessage() {
     if (!messageInput.trim() || isStreaming || !isWalletReady) return;
 
     const message = messageInput.trim();
     messageInput = '';
 
-    // If no local thread, create one first
     let localThreadId = threadStore.currentThreadId;
     if (!localThreadId && currentProjectId) {
-      // Use first 10 chars of message as initial thread title
-      const initialTitle = message.length > 10 ? message.slice(0, 10) + '...' : message;
+      // Use first 25 chars of message as initial thread title
+      const initialTitle = message.length > 25 ? message.slice(0, 25) + '...' : message;
       const thread = threadStore.createThread(currentProjectId, initialTitle);
       localThreadId = thread.id;
     }
 
     if (!localThreadId) return;
 
-    // Get the LangGraph thread ID if it exists (from previous messages)
     const thread = threadStore.threads.find(t => t.id === localThreadId);
     const langGraphThreadId = thread?.langGraphThreadId ?? null;
 
-    // Update thread title if it's the first message and title is generic
-    if (currentThread?.title === 'Chat' || currentThread?.title === 'New Thread') {
-      const titlePreview = message.length > 10 ? message.slice(0, 10) + '...' : message;
+    // Update thread title if it's a generic title and this is effectively the first real message
+    if (currentThread?.title === 'New Chat' || currentThread?.title === 'New Thread') {
+      const titlePreview = message.length > 25 ? message.slice(0, 25) + '...' : message;
       threadStore.updateThread(localThreadId, { title: titlePreview });
     }
 
     try {
       const result = await agentStore.sendMessage(message, langGraphThreadId, localThreadId);
-      
-      // If a new LangGraph thread was created, store its ID
       if (!langGraphThreadId && result.langGraphThreadId) {
         threadStore.updateThread(localThreadId, { langGraphThreadId: result.langGraphThreadId });
       }
@@ -328,10 +427,76 @@
     }
   }
 
+  async function handleClarificationSubmit() {
+    if (!clarificationInterrupt) return;
+    isSubmitting = true;
+
+    try {
+      if (clarificationInterrupt.tool === 'ask_user') {
+        const response: ClarificationResponse = { response: messageInput.trim() };
+        await agentStore.resumeWithClarificationResponse(response);
+      } else {
+        const response: ClarificationResponse = {
+          selected: selectedChoices.length > 0 ? selectedChoices : undefined,
+          freeform: messageInput.trim() || undefined
+        };
+        await agentStore.resumeWithClarificationResponse(response);
+      }
+      messageInput = '';
+      selectedChoices = [];
+    } finally {
+      isSubmitting = false;
+    }
+  }
+
+  async function handleApprove() {
+    isSubmitting = true;
+    showDetailsModal = false;
+    try {
+      if (isClientTool) {
+        await agentStore.executeApprovedWriteTools();
+      } else {
+        await agentStore.approveAllActions();
+      }
+      messageInput = '';
+    } finally {
+      isSubmitting = false;
+    }
+  }
+
+  async function handleReject() {
+    isSubmitting = true;
+    showDetailsModal = false;
+    try {
+      if (isClientTool) {
+        await agentStore.rejectClientToolInterrupt();
+      } else {
+        await agentStore.rejectAllActions();
+      }
+      messageInput = '';
+    } finally {
+      isSubmitting = false;
+    }
+  }
+
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSendMessage();
+      handleSubmit();
+    }
+  }
+
+  function handleSubmit() {
+    switch (inputMode) {
+      case 'clarification':
+      case 'choices':
+        handleClarificationSubmit();
+        break;
+      case 'hitl':
+        handleApprove();
+        break;
+      default:
+        handleSendMessage();
     }
   }
 </script>
@@ -376,7 +541,6 @@
         </div>
       </div>
     {:else}
-      <!-- Render processed messages with stable IDs -->
       {#each processedMessages as message (message.id)}
         {@const isUser = message.type === 'human'}
         <div class="flex {isUser ? 'justify-end' : 'justify-start'}">
@@ -388,13 +552,11 @@
             {#if message.content}
               <p class="whitespace-pre-wrap text-sm">{message.content}</p>
             {:else if !isUser}
-              <!-- AI message with no content yet (tool calls only) -->
               <p class="text-sm text-zinc-400 italic">Processing...</p>
             {/if}
           </div>
         </div>
         
-        <!-- Show tool calls for AI messages (unified display - Bug 4 fix) -->
         {#if !isUser && message.toolCalls.length > 0}
           <div class="flex justify-start">
             <div class="max-w-[85%]">
@@ -404,17 +566,15 @@
         {/if}
       {/each}
 
-      <!-- Show streaming content bubble only when needed (Bug 3 fix) -->
       {#if showStreamingBubble}
-        <div class="flex justify-start">
-          <div class="max-w-[85%] rounded-xl bg-zinc-800 px-4 py-2 text-zinc-200">
-            <p class="whitespace-pre-wrap text-sm">{streamingContent}</p>
-            <span class="animate-pulse text-amber-500">▊</span>
+          <div class="flex justify-start">
+            <div class="max-w-[85%] rounded-xl bg-zinc-800 px-4 py-2 text-zinc-200">
+              <p class="whitespace-pre-wrap text-sm">{streamingContent}</p>
+              <span class="animate-pulse text-amber-500">▊</span>
+            </div>
           </div>
-        </div>
-      {/if}
+        {/if}
       
-      <!-- Show thinking indicator when no content yet -->
       {#if showThinkingIndicator}
         <div class="flex justify-start">
           <div class="max-w-[85%] rounded-xl bg-zinc-800 px-4 py-2 text-zinc-400">
@@ -425,14 +585,119 @@
     {/if}
   </div>
 
-  <!-- Human-in-the-Loop Interrupt Panel -->
-  <HumanInterruptPanel />
-  
-  <!-- Clarification Panel (ask_user / ask_choices) -->
-  <ClarificationPanel />
+  <!-- Unified Input Area -->
+  <div class="border-t border-zinc-800">
+    <!-- HITL Info Card with collapsible details -->
+    {#if inputMode === 'hitl' && activeHitlInterrupt}
+      <div class="mx-3 mt-3 rounded-lg border border-amber-500/30 bg-gradient-to-r from-amber-900/20 to-zinc-900/80 overflow-hidden">
+        <div class="flex items-center justify-between border-b border-amber-500/20 bg-amber-900/30 px-3 py-2">
+          <div class="flex items-center gap-2">
+            <MessageCircle class="h-4 w-4 text-amber-400" />
+            <span class="text-sm font-medium text-amber-200">Agent Needs Approval</span>
+            <span class="text-xs text-amber-300/60">
+              ({activeHitlInterrupt.action_requests.length} action{activeHitlInterrupt.action_requests.length !== 1 ? 's' : ''})
+              </span>
+            </div>
+          <div class="flex items-center gap-1">
+            <!-- Expand/Collapse button -->
+            <button
+              onclick={() => hitlDetailsExpanded = !hitlDetailsExpanded}
+              class="p-1 rounded text-amber-300/70 hover:text-amber-200 hover:bg-amber-500/10"
+              title={hitlDetailsExpanded ? 'Collapse details' : 'Expand details'}
+            >
+              {#if hitlDetailsExpanded}
+                <ChevronUp class="h-4 w-4" />
+              {:else}
+                <ChevronDown class="h-4 w-4" />
+              {/if}
+            </button>
+            <!-- Modal button -->
+            <button
+              onclick={() => showDetailsModal = true}
+              class="p-1 rounded text-amber-300/70 hover:text-amber-200 hover:bg-amber-500/10"
+              title="View full details"
+            >
+              <Maximize2 class="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+        
+        <!-- Collapsed summary -->
+        {#if !hitlDetailsExpanded}
+          <div class="p-3">
+            {#each activeHitlInterrupt.action_requests as action}
+              {@const ActionIcon = getToolIcon(action.name)}
+              <div class="flex items-center gap-2">
+                <svelte:component this={ActionIcon} class="h-4 w-4 text-zinc-400 shrink-0" />
+                <span class="text-sm font-medium text-zinc-200">{action.name}</span>
+                <span class="text-xs text-zinc-400 truncate">{getActionDescription(action)}</span>
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <!-- Expanded details -->
+          <div class="p-3 space-y-3 max-h-64 overflow-y-auto">
+            {#each activeHitlInterrupt.action_requests as action}
+              {@const ActionIcon = getToolIcon(action.name)}
+              <div class="rounded bg-zinc-800/50 p-3">
+                <div class="flex items-center gap-2 mb-2">
+                  <svelte:component this={ActionIcon} class="h-4 w-4 text-zinc-400 shrink-0" />
+                  <span class="text-sm font-medium text-zinc-200">{action.name}</span>
+                </div>
+                <p class="text-xs text-zinc-400 mb-2">{getActionDescription(action)}</p>
+                {#if Object.keys(action.args || {}).length > 0}
+                  <div class="text-xs space-y-1 border-t border-zinc-700/50 pt-2">
+                    {#each Object.entries(action.args || {}) as [key, value]}
+                      <div class="grid grid-cols-[80px_1fr] gap-2">
+                        <span class="font-mono text-zinc-500">{key}:</span>
+                        <span class="text-zinc-300 break-all">{formatArgValue(value)}</span>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/each}
+        </div>
+      {/if}
+      </div>
+    {/if}
 
-  <!-- Input -->
-  <div class="border-t border-zinc-800 p-3">
+    <!-- Clarification Info Card -->
+    {#if (inputMode === 'clarification' || inputMode === 'choices') && clarificationInterrupt}
+      <div class="mx-3 mt-3 rounded-lg border border-blue-500/30 bg-gradient-to-r from-blue-900/20 to-zinc-900/80 overflow-hidden">
+        <div class="flex items-center gap-2 border-b border-blue-500/20 bg-blue-900/30 px-3 py-2">
+          <HelpCircle class="h-4 w-4 text-blue-400" />
+          <span class="text-sm font-medium text-blue-200">Agent Needs Clarification</span>
+  </div>
+        <div class="p-3">
+          <p class="text-sm text-zinc-200 leading-relaxed">{clarificationInterrupt.question}</p>
+          
+          {#if inputMode === 'choices' && clarificationInterrupt.options}
+            <div class="mt-3 flex flex-wrap gap-2">
+              {#each clarificationInterrupt.options as option}
+                <button
+                  type="button"
+                  onclick={() => toggleChoice(option.id)}
+                  disabled={isSubmitting}
+                  class="px-3 py-1.5 text-sm rounded-lg border transition-colors
+                    {selectedChoices.includes(option.id)
+                      ? 'border-blue-500 bg-blue-500/20 text-blue-200'
+                      : 'border-zinc-600 bg-zinc-800/50 text-zinc-300 hover:border-zinc-500'}"
+                >
+                  {#if selectedChoices.includes(option.id)}
+                    <Check class="h-3 w-3 inline mr-1" />
+                  {/if}
+                  {option.label}
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </div>
+    {/if}
+
+    <!-- Main Input -->
+    <div class="p-3">
     {#if backendAvailable === false}
       <div class="mb-2 flex items-center gap-2 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-400">
         <AlertCircle class="h-3 w-3" />
@@ -449,24 +714,139 @@
     
     <div class="flex gap-2">
       <Textarea
-        placeholder={awaitingHumanResponse ? "Respond to the agent above..." : currentThread ? "Type your message..." : "Create a new thread to start chatting..."}
+          placeholder={inputPlaceholder}
         bind:value={messageInput}
         onkeydown={handleKeydown}
-        disabled={isStreaming || awaitingHumanResponse || !currentThread || !isWalletReady || backendAvailable === false}
+          disabled={isStreaming || !currentThread || !isWalletReady || backendAvailable === false}
         rows={2}
-        class="flex-1 resize-none bg-zinc-800 border-zinc-700 text-zinc-100 placeholder-zinc-500"
-      />
+          class="flex-1 resize-none bg-zinc-800 border-zinc-700 text-zinc-100 placeholder-zinc-500
+            {inputMode === 'hitl' ? 'border-amber-500/30' : ''}
+            {inputMode === 'clarification' || inputMode === 'choices' ? 'border-blue-500/30' : ''}"
+        />
+        
+        <!-- Action buttons based on mode -->
+        <div class="flex flex-col gap-1 self-end">
+          {#if inputMode === 'hitl'}
+            <!-- HITL: Approve and Reject buttons -->
+            <Button
+              onclick={handleApprove}
+              disabled={isSubmitting || isStreaming}
+              size="icon"
+              class="bg-emerald-600 hover:bg-emerald-500"
+              title="Approve"
+            >
+              <Check class="h-4 w-4" />
+            </Button>
+            <Button
+              onclick={handleReject}
+              disabled={isSubmitting || isStreaming}
+              size="icon"
+              class="bg-red-600 hover:bg-red-500 text-white"
+              title="Reject"
+            >
+              <X class="h-4 w-4" />
+            </Button>
+          {:else}
+            <!-- Normal/Clarification: Send button -->
       <Button
-        onclick={handleSendMessage}
-        disabled={!messageInput.trim() || isStreaming || awaitingHumanResponse || !currentThread || !isWalletReady || backendAvailable === false}
+              onclick={handleSubmit}
+              disabled={!canSubmit || isSubmitting}
         size="icon"
-        class="self-end bg-amber-600 hover:bg-amber-500"
+              class="self-end {inputMode === 'clarification' || inputMode === 'choices' 
+                ? 'bg-blue-600 hover:bg-blue-500' 
+                : 'bg-amber-600 hover:bg-amber-500'}"
       >
         <Send class="h-4 w-4" />
       </Button>
+          {/if}
+        </div>
     </div>
+      
     {#if agentStore.error}
       <p class="mt-2 text-xs text-red-500">{agentStore.error}</p>
     {/if}
+    </div>
   </div>
 </div>
+
+<!-- HITL Details Modal -->
+{#if showDetailsModal && activeHitlInterrupt}
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+    <div class="w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col rounded-xl border border-amber-500/30 bg-zinc-900 shadow-2xl overflow-hidden">
+      <!-- Modal Header -->
+      <div class="flex items-center justify-between border-b border-amber-500/20 bg-amber-900/30 px-4 py-3">
+        <div class="flex items-center gap-2">
+          <MessageCircle class="h-5 w-5 text-amber-400" />
+          <span class="font-semibold text-amber-200">Action Details</span>
+        </div>
+        <button
+          onclick={() => showDetailsModal = false}
+          class="p-1 rounded text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700"
+        >
+          <X class="h-5 w-5" />
+        </button>
+      </div>
+      
+      <!-- Modal Content -->
+      <div class="flex-1 overflow-y-auto p-4 space-y-4">
+        {#each activeHitlInterrupt.action_requests as action}
+          {@const ActionIcon = getToolIcon(action.name)}
+          <div class="rounded-lg border border-zinc-700 bg-zinc-800/50 overflow-hidden">
+            <div class="flex items-center gap-3 border-b border-zinc-700 bg-zinc-800 px-4 py-3">
+              <svelte:component this={ActionIcon} class="h-5 w-5 text-amber-400 shrink-0" />
+              <div>
+                <p class="font-medium text-zinc-100">{action.name}</p>
+                <p class="text-sm text-zinc-400">{getActionDescription(action)}</p>
+              </div>
+            </div>
+            
+            {#if Object.keys(action.args || {}).length > 0}
+              <div class="p-4 space-y-3">
+                {#each Object.entries(action.args || {}) as [key, value]}
+                  <div>
+                    <label class="block text-xs font-medium text-zinc-500 mb-1">{key}</label>
+                    <div class="rounded bg-zinc-900 p-2 text-sm text-zinc-200 max-h-48 overflow-y-auto">
+                      <pre class="whitespace-pre-wrap break-all font-mono text-xs">{typeof value === 'string' ? value : JSON.stringify(value, null, 2)}</pre>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/each}
+        
+        <!-- Edit feedback input -->
+        <div>
+          <label class="block text-sm font-medium text-zinc-300 mb-2">Feedback (optional)</label>
+          <textarea
+            bind:value={messageInput}
+            placeholder="Provide feedback or suggest edits..."
+            rows="3"
+            class="w-full rounded-lg border border-zinc-600 bg-zinc-800 px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-500 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 resize-none"
+          ></textarea>
+  </div>
+</div>
+      
+      <!-- Modal Footer -->
+      <div class="flex items-center justify-between border-t border-zinc-700 bg-zinc-800/50 px-4 py-3">
+        <Button
+          onclick={handleReject}
+          disabled={isSubmitting}
+          variant="ghost"
+          class="text-red-400 hover:text-red-300 hover:bg-red-500/10 border border-red-500/30"
+        >
+          <X class="h-4 w-4 mr-2" />
+          Reject
+        </Button>
+        <Button
+          onclick={handleApprove}
+          disabled={isSubmitting}
+          class="bg-emerald-600 hover:bg-emerald-500"
+        >
+          <Check class="h-4 w-4 mr-2" />
+          Approve
+        </Button>
+      </div>
+    </div>
+  </div>
+{/if}

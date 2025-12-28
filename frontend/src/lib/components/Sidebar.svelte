@@ -6,7 +6,7 @@
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import PanelLeftClose from '@lucide/svelte/icons/panel-left-close';
   import PanelLeft from '@lucide/svelte/icons/panel-left';
-  import { artifactStore, threadStore, projectStore } from '$lib/stores/index.js';
+  import { artifactStore, threadStore, projectStore, agentStore } from '$lib/stores/index.js';
   import type { Artifact, Thread } from '$lib/stores/types.js';
 
   interface Props {
@@ -50,9 +50,9 @@
     currentProjectId ? threadStore.getProjectThreads(currentProjectId) : []
   );
 
-  // Check if there's already an empty "New Chat" thread
+  // Check if there's already an empty thread (no messages)
   const hasEmptyNewThread = $derived(
-    threads.some(t => t.title === 'New Chat' && threadStore.getThreadMessageCount(t.id) === 0)
+    threads.some(t => threadStore.getThreadMessageCount(t.id) === 0)
   );
 
   function handleCreateFile() {
@@ -72,9 +72,13 @@
   function handleCreateThread() {
     if (!currentProjectId) return;
     
-    // If there's already an empty "New Chat" thread, select it instead
+    // Reset agent state first - this clears any pending interrupts
+    // so the new thread starts fresh
+    agentStore.resetStream();
+    
+    // If there's already an empty thread (no messages), select it instead
     const existingEmptyThread = threads.find(
-      t => t.title === 'New Chat' && threadStore.getThreadMessageCount(t.id) === 0
+      t => threadStore.getThreadMessageCount(t.id) === 0
     );
     
     if (existingEmptyThread) {
@@ -82,7 +86,17 @@
       return;
     }
     
+    // Create with a temporary title - it will be updated on first message
     const thread = threadStore.createThread(currentProjectId, 'New Chat');
+    onSelectThread(thread);
+  }
+  
+  function handleSelectThread(thread: Thread) {
+    // If there's a pending interrupt on the current thread and we're switching,
+    // reset the agent state to prevent UI confusion
+    if (agentStore.awaitingHumanResponse && thread.id !== currentThreadId) {
+      agentStore.resetStream();
+    }
     onSelectThread(thread);
   }
 
@@ -191,7 +205,7 @@
           {#each threads as thread (thread.id)}
             <div class="group relative">
               <button
-                onclick={() => onSelectThread(thread)}
+                onclick={() => handleSelectThread(thread)}
                 class="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-zinc-800/50
                   {thread.id === currentThreadId ? 'bg-zinc-800/70 border-l-2 border-amber-500' : ''}"
               >
