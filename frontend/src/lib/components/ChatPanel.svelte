@@ -3,11 +3,7 @@
   import MessageCircle from '@lucide/svelte/icons/message-circle';
   import Bot from '@lucide/svelte/icons/bot';
   import Loader2 from '@lucide/svelte/icons/loader-2';
-  import Wrench from '@lucide/svelte/icons/wrench';
   import AlertCircle from '@lucide/svelte/icons/alert-circle';
-  import Search from '@lucide/svelte/icons/search';
-  import FileText from '@lucide/svelte/icons/file-text';
-  import FolderOpen from '@lucide/svelte/icons/folder-open';
   import { Button, Textarea } from './ui/index.js';
   import AgentPicker from './AgentPicker.svelte';
   import ToolCallDisplay from './ToolCallDisplay.svelte';
@@ -17,7 +13,24 @@
   import { cyphertap } from 'cyphertap';
   import type { ToolCallWithStatus, ToolCall } from '$lib/stores/types.js';
   import { tick, onMount } from 'svelte';
-  import { checkHealth } from '$lib/services/langgraph.js';
+  import { checkHealth, type Message as LangGraphMessage } from '$lib/services/langgraph.js';
+  import { extractStringFromMessageContent } from '$lib/utils.js';
+
+  // =============================================================================
+  // TYPES
+  // =============================================================================
+
+  interface ProcessedMessage {
+    id: string;
+    type: 'human' | 'ai';
+    content: string;
+    toolCalls: ToolCallWithStatus[];
+    showAvatar: boolean;
+  }
+
+  // =============================================================================
+  // LOCAL STATE
+  // =============================================================================
 
   let messageInput = $state('');
   let messagesContainer: HTMLDivElement | undefined = $state();
@@ -26,6 +39,10 @@
   // Track if we've loaded state for the current thread
   let loadedLangGraphThreadId = $state<string | null>(null);
   let isLoadingThreadState = $state(false);
+
+  // =============================================================================
+  // LIFECYCLE
+  // =============================================================================
 
   // Check backend health on mount and load threads
   onMount(() => {
@@ -36,6 +53,176 @@
     // Load threads from IndexedDB
     threadStore.loadFromStorage();
   });
+
+  // =============================================================================
+  // REACTIVE DERIVATIONS - Using simpler $derived pattern (Bug 5 fix)
+  // =============================================================================
+
+  // Core store derivations
+  const currentThread = $derived(threadStore.currentThread);
+  const currentProjectId = $derived(projectStore.currentProjectId);
+  const isWalletReady = $derived(cyphertap.isReady);
+  const persistedMessages = $derived(threadStore.currentMessages);
+  
+  // Agent store derivations - using direct $derived instead of $derived.by
+  const isStreaming = $derived(agentStore.isStreaming);
+  const isInterrupted = $derived(agentStore.isInterrupted);
+  const streamingContent = $derived(agentStore.streamingContent);
+  const awaitingHumanResponse = $derived(agentStore.awaitingHumanResponse);
+  const langGraphMessages = $derived(agentStore.langGraphMessages);
+
+  // =============================================================================
+  // PROCESSED MESSAGES - Following reference implementation pattern (Bug 2, 3, 4 fix)
+  // =============================================================================
+
+  /**
+   * Process messages following the reference implementation pattern.
+   * Builds a messageMap that:
+   * - Uses stable IDs from LangGraph messages
+   * - Tracks tool call status by correlating tool result messages
+   * - Provides unified message source to avoid flickering
+   */
+  const processedMessages = $derived.by((): ProcessedMessage[] => {
+    // Determine which message source to use:
+    // - During streaming/interrupt: use langGraphMessages (live server state)
+    // - Otherwise: convert persistedMessages
+    const useServerMessages = (isStreaming || awaitingHumanResponse || isInterrupted) && langGraphMessages.length > 0;
+    
+    if (!useServerMessages) {
+      // Convert persisted messages to ProcessedMessage format
+      return persistedMessages.map((msg, index) => {
+        const prevMsg = index > 0 ? persistedMessages[index - 1] : null;
+        return {
+          id: msg.id, // Stable ID from persistence
+          type: msg.role === 'user' ? 'human' : 'ai',
+          content: msg.content,
+          toolCalls: msg.toolCalls?.map(tc => ({
+            ...tc,
+            status: 'completed' as const
+          })) ?? [],
+          showAvatar: msg.role !== prevMsg?.role
+        };
+      });
+    }
+
+    // Build message map following reference pattern
+    // This correlates AI messages with their tool calls and updates status from tool result messages
+    const messageMap = new Map<string, { message: LangGraphMessage; toolCalls: ToolCallWithStatus[] }>();
+    
+    langGraphMessages.forEach((message: LangGraphMessage) => {
+      if (message.type === 'ai') {
+        // Extract tool calls from various possible locations
+        const toolCallsInMessage: Array<{
+          id?: string;
+          function?: { name?: string; arguments?: unknown };
+          name?: string;
+          type?: string;
+          args?: unknown;
+          input?: unknown;
+        }> = [];
+        
+        const msgWithKwargs = message as { additional_kwargs?: { tool_calls?: unknown[] }; tool_calls?: unknown[]; content?: unknown };
+        
+        if (msgWithKwargs.additional_kwargs?.tool_calls && Array.isArray(msgWithKwargs.additional_kwargs.tool_calls)) {
+          toolCallsInMessage.push(...msgWithKwargs.additional_kwargs.tool_calls);
+        } else if (msgWithKwargs.tool_calls && Array.isArray(msgWithKwargs.tool_calls)) {
+          toolCallsInMessage.push(
+            ...(msgWithKwargs.tool_calls as Array<{ name?: string }>).filter(tc => tc.name !== '')
+          );
+        } else if (Array.isArray(msgWithKwargs.content)) {
+          const toolUseBlocks = (msgWithKwargs.content as Array<{ type?: string }>).filter(block => block.type === 'tool_use');
+          toolCallsInMessage.push(...toolUseBlocks);
+        }
+        
+        // Map tool calls with status - initially pending/interrupted based on current state
+        const toolCallsWithStatus: ToolCallWithStatus[] = toolCallsInMessage.map(toolCall => {
+          const name = toolCall.function?.name || toolCall.name || toolCall.type || 'unknown';
+          const args = (toolCall.function?.arguments || toolCall.args || toolCall.input || {}) as Record<string, unknown>;
+          return {
+            id: toolCall.id || `tool-${Math.random().toString(36).substr(2, 9)}`,
+            name,
+            args,
+            status: isInterrupted ? 'pending' : 'pending' as const
+          };
+        });
+        
+        // Use stable ID from LangGraph message (Bug 3 fix)
+        const stableId = message.id || `ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        messageMap.set(stableId, { message, toolCalls: toolCallsWithStatus });
+        
+      } else if (message.type === 'tool') {
+        // Find the corresponding AI message and update tool call status
+        const toolMsg = message as { tool_call_id?: string };
+        const toolCallId = toolMsg.tool_call_id;
+        if (!toolCallId) return;
+        
+        for (const [, data] of messageMap.entries()) {
+          const toolCallIndex = data.toolCalls.findIndex(tc => tc.id === toolCallId);
+          if (toolCallIndex !== -1) {
+            // Update status to completed and add result
+            data.toolCalls[toolCallIndex] = {
+              ...data.toolCalls[toolCallIndex],
+              status: 'completed' as const,
+              result: {
+                tool_call_id: toolCallId,
+                name: data.toolCalls[toolCallIndex].name,
+                content: extractStringFromMessageContent(message)
+              }
+            };
+            break;
+          }
+        }
+        
+      } else if (message.type === 'human') {
+        // Use stable ID from LangGraph message
+        const stableId = message.id || `human-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        messageMap.set(stableId, { message, toolCalls: [] });
+      }
+    });
+    
+    // Convert map to array and add showAvatar flag
+    const processedArray = Array.from(messageMap.entries()).map(([id, data]) => ({
+      id,
+      ...data
+    }));
+    
+    return processedArray.map((data, index): ProcessedMessage => {
+      const prevMessage = index > 0 ? processedArray[index - 1].message : null;
+      return {
+        id: data.id,
+        type: data.message.type as 'human' | 'ai',
+        content: extractStringFromMessageContent(data.message),
+        toolCalls: data.toolCalls,
+        showAvatar: data.message.type !== prevMessage?.type
+      };
+    });
+  });
+
+  // =============================================================================
+  // STREAMING CONTENT DISPLAY (Bug 3 fix)
+  // Determine if we should show streaming content separately or it's already in messages
+  // =============================================================================
+  
+  const showStreamingBubble = $derived.by(() => {
+    if (!isStreaming || !streamingContent) return false;
+    
+    // Check if the last AI message already has this content
+    const lastMessage = processedMessages[processedMessages.length - 1];
+    if (lastMessage?.type === 'ai' && lastMessage.content) {
+      // Content is already being shown via processedMessages
+      return false;
+    }
+    
+    return true;
+  });
+
+  const showThinkingIndicator = $derived.by(() => {
+    return isStreaming && !isInterrupted && processedMessages.length === 0 && !streamingContent;
+  });
+
+  // =============================================================================
+  // EFFECTS
+  // =============================================================================
 
   // Load LangGraph thread state when selecting a thread with langGraphThreadId
   // This restores chat history and any pending interrupts (like clarification questions)
@@ -78,81 +265,29 @@
     }
   });
 
-  // Reactive derivations from stores
-  const currentThread = $derived(threadStore.currentThread);
-  const currentProjectId = $derived(projectStore.currentProjectId);
-  const isWalletReady = $derived(cyphertap.isReady);
-
-  // Messages from thread store (persisted)
-  const persistedMessages = $derived.by(() => {
-    return threadStore.currentMessages;
-  });
-
-  const isStreaming = $derived.by(() => agentStore.isStreaming);
-  const isInterrupted = $derived.by(() => agentStore.isInterrupted);
-  const pendingToolCalls = $derived.by(() => agentStore.pendingToolCalls);
-  const streamingContent = $derived.by(() => agentStore.streamingContent);
-  const awaitingHumanResponse = $derived.by(() => agentStore.awaitingHumanResponse);
-  
-  // LangGraph messages during streaming (live from server)
-  const langGraphMessages = $derived.by(() => agentStore.langGraphMessages);
-
-  // Client tool interrupt (for write operations needing approval)
-  const clientToolInterrupt = $derived.by(() => agentStore.clientToolInterrupt);
-  
-  // Display messages: show LangGraph messages during streaming OR when waiting for approval
-  // This prevents flickering by showing the stable server state during execution
-  const displayMessages = $derived.by(() => {
-    // Show LangGraph messages if streaming, interrupted, or waiting for human response
-    if ((isStreaming || awaitingHumanResponse || isInterrupted) && langGraphMessages.length > 0) {
-      // Convert LangGraph messages to display format
-      return langGraphMessages
-        .filter(msg => msg.type === 'human' || msg.type === 'ai')
-        .map((msg, index) => {
-          const isHuman = msg.type === 'human';
-          const content = typeof msg.content === 'string' ? msg.content : '';
-          const toolCalls = !isHuman && (msg as { tool_calls?: ToolCall[] }).tool_calls;
-          
-          return {
-            id: msg.id || `lg-${index}`,
-            role: isHuman ? 'user' as const : 'assistant' as const,
-            content,
-            toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined
-          };
-        });
-    }
-    return persistedMessages;
-  });
-
   // Debug logging for message count
   $effect(() => {
-    console.log('[ChatPanel] Display messages:', displayMessages.length, 'Streaming:', isStreaming, 'LG messages:', langGraphMessages.length);
+    console.log('[ChatPanel] Processed messages:', processedMessages.length, 'Streaming:', isStreaming, 'LG messages:', langGraphMessages.length);
   });
 
-  // Get user-friendly description for a tool
-  function getToolDescription(toolName: string, args?: Record<string, unknown>): string {
-    switch (toolName) {
-      case 'list_files':
-        return 'Listing project files...';
-      case 'get_file':
-        const fileId = args?.file_id as string | undefined;
-        return fileId ? `Reading file: ${fileId}` : 'Reading file...';
-      case 'search_files':
-        const query = args?.query as string | undefined;
-        return query ? `Searching: "${query}"` : 'Searching files...';
-      default:
-        return `Running ${toolName}...`;
-    }
-  }
+  // Auto-scroll to bottom when messages change
+  $effect(() => {
+    // Access dependencies to trigger effect
+    const _msgs = processedMessages.length;
+    const _streaming = streamingContent;
+    const _lgMsgs = langGraphMessages.length;
+    
+    // Scroll after DOM update
+    tick().then(() => {
+      if (messagesContainer) {
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      }
+    });
+  });
 
-  // Convert message tool calls to ToolCallWithStatus format for display
-  function toToolCallsWithStatus(toolCalls: ToolCall[] | undefined): ToolCallWithStatus[] {
-    if (!toolCalls) return [];
-    return toolCalls.map(tc => ({
-      ...tc,
-      status: 'completed' as const
-    }));
-  }
+  // =============================================================================
+  // HANDLERS
+  // =============================================================================
 
   async function handleSendMessage() {
     if (!messageInput.trim() || isStreaming || !isWalletReady) return;
@@ -199,22 +334,6 @@
       handleSendMessage();
     }
   }
-
-  // Auto-scroll to bottom when messages change
-  $effect(() => {
-    // Access dependencies
-    const _msgs = displayMessages.length;
-    const _streaming = streamingContent;
-    const _tools = pendingToolCalls.length;
-    const _lgMsgs = langGraphMessages.length;
-    
-    // Scroll after DOM update
-    tick().then(() => {
-      if (messagesContainer) {
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
-      }
-    });
-  });
 </script>
 
 <div class="flex h-full flex-col bg-zinc-900/30">
@@ -249,7 +368,7 @@
           <p class="text-sm">Loading conversation...</p>
         </div>
       </div>
-    {:else if displayMessages.length === 0 && !isStreaming}
+    {:else if processedMessages.length === 0 && !isStreaming}
       <div class="flex h-full items-center justify-center text-zinc-600">
         <div class="text-center">
           <Bot class="mx-auto h-12 w-12 mb-3 opacity-30" />
@@ -257,68 +376,49 @@
         </div>
       </div>
     {:else}
-      {#each displayMessages as message (message.id)}
-        <div
-          class="flex {message.role === 'user' ? 'justify-end' : 'justify-start'}"
-        >
+      <!-- Render processed messages with stable IDs -->
+      {#each processedMessages as message (message.id)}
+        {@const isUser = message.type === 'human'}
+        <div class="flex {isUser ? 'justify-end' : 'justify-start'}">
           <div
-            class="max-w-[85%] rounded-xl px-4 py-2 {message.role === 'user'
+            class="max-w-[85%] rounded-xl px-4 py-2 {isUser
               ? 'bg-amber-600 text-white'
               : 'bg-zinc-800 text-zinc-200'}"
           >
             {#if message.content}
               <p class="whitespace-pre-wrap text-sm">{message.content}</p>
-            {:else if message.role === 'assistant'}
+            {:else if !isUser}
               <!-- AI message with no content yet (tool calls only) -->
               <p class="text-sm text-zinc-400 italic">Processing...</p>
             {/if}
           </div>
         </div>
         
-        <!-- Show tool calls for assistant messages -->
-        {#if message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0}
+        <!-- Show tool calls for AI messages (unified display - Bug 4 fix) -->
+        {#if !isUser && message.toolCalls.length > 0}
           <div class="flex justify-start">
             <div class="max-w-[85%]">
-              <ToolCallDisplay toolCalls={toToolCallsWithStatus(message.toolCalls)} />
+              <ToolCallDisplay toolCalls={message.toolCalls} />
             </div>
           </div>
         {/if}
       {/each}
 
-      <!-- Show streaming content for the current AI response -->
-      {#if isStreaming && streamingContent}
-        {@const lastMessage = displayMessages[displayMessages.length - 1]}
-        {@const isLastAi = lastMessage?.role === 'assistant'}
-        {#if !isLastAi || !lastMessage?.content}
-          <!-- Only show separate streaming bubble if there's no AI message yet or it has no content -->
-          <div class="flex justify-start">
-            <div class="max-w-[85%] rounded-xl bg-zinc-800 px-4 py-2 text-zinc-200">
-              <p class="whitespace-pre-wrap text-sm">{streamingContent}</p>
-              <span class="animate-pulse text-amber-500">▊</span>
-            </div>
-          </div>
-        {/if}
-      {:else if isStreaming && !isInterrupted && displayMessages.length === 0}
+      <!-- Show streaming content bubble only when needed (Bug 3 fix) -->
+      {#if showStreamingBubble}
         <div class="flex justify-start">
-          <div class="max-w-[85%] rounded-xl bg-zinc-800 px-4 py-2 text-zinc-400">
-            <span class="animate-pulse text-sm">Thinking...</span>
+          <div class="max-w-[85%] rounded-xl bg-zinc-800 px-4 py-2 text-zinc-200">
+            <p class="whitespace-pre-wrap text-sm">{streamingContent}</p>
+            <span class="animate-pulse text-amber-500">▊</span>
           </div>
         </div>
       {/if}
       
-      <!-- Show pending/executing tool calls -->
-      {#if isStreaming && pendingToolCalls.length > 0}
+      <!-- Show thinking indicator when no content yet -->
+      {#if showThinkingIndicator}
         <div class="flex justify-start">
-          <div class="max-w-[85%]">
-            <div class="mb-2 flex items-center gap-2 text-xs text-amber-400">
-              <Loader2 class="h-3 w-3 animate-spin" />
-              <span>
-                {#each pendingToolCalls as tool, i}
-                  {getToolDescription(tool.name, tool.args)}{i < pendingToolCalls.length - 1 ? ', ' : ''}
-                {/each}
-              </span>
-            </div>
-            <ToolCallDisplay toolCalls={pendingToolCalls} />
+          <div class="max-w-[85%] rounded-xl bg-zinc-800 px-4 py-2 text-zinc-400">
+            <span class="animate-pulse text-sm">Thinking...</span>
           </div>
         </div>
       {/if}
