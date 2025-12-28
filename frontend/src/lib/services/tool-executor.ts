@@ -2,18 +2,22 @@
  * Tool Executor Service
  * 
  * Executes tool calls locally against IndexedDB.
- * This is the client-side counterpart to the stub tools defined in the agent.
+ * This is the client-side counterpart to the tools defined in ClientToolsMiddleware.
  * 
  * Flow:
- * 1. Agent requests tool call (e.g., get_file)
- * 2. LangGraph interrupts before the tools node
+ * 1. Agent calls a tool (list_files, read_file, write_file, etc.)
+ * 2. ClientToolsMiddleware interrupts with tool_calls
  * 3. Frontend receives interrupt with pending tool calls
  * 4. This service executes tools against local IndexedDB
  * 5. Frontend resumes the graph with tool results
+ * 
+ * Read operations (list_files, read_file, search_files) are auto-approved.
+ * Write operations (write_file, edit_file) require human approval first.
  */
 
 import { db } from './indexeddb.js';
-import type { ToolCall, ToolResult, ProjectFile } from '../stores/types.js';
+import type { ToolCall, ToolResult, ProjectFile, Artifact, ArtifactVersion } from '../stores/types.js';
+import { nanoid } from 'nanoid';
 
 /**
  * Execute a single tool call and return the result.
@@ -29,8 +33,14 @@ export async function executeToolCall(
       case 'list_files':
         return await executeListFiles(toolCallId, name, projectId);
 
+      case 'read_file':
+        // Support both file_id (new) and args.file_id (legacy)
+        const fileId = (args.file_id as string) || (args.fileId as string);
+        return await executeReadFile(toolCallId, name, fileId);
+
       case 'get_file':
-        return await executeGetFile(toolCallId, name, args.file_id as string);
+        // Legacy name, same as read_file
+        return await executeReadFile(toolCallId, name, args.file_id as string);
 
       case 'search_files':
         return await executeSearchFiles(
@@ -39,6 +49,25 @@ export async function executeToolCall(
           projectId,
           args.query as string,
           (args.top_k as number) || 5
+        );
+
+      case 'write_file':
+        return await executeWriteFile(
+          toolCallId,
+          name,
+          projectId,
+          args.title as string,
+          args.content as string,
+          (args.file_type as 'artifact' | 'document' | 'code') || 'artifact'
+        );
+
+      case 'edit_file':
+        return await executeEditFile(
+          toolCallId,
+          name,
+          args.file_id as string,
+          args.new_content as string,
+          args.description as string || ''
         );
 
       default:
@@ -97,9 +126,10 @@ async function executeListFiles(
 }
 
 /**
- * get_file(file_id) - Read full content of a file
+ * read_file(file_id) - Read full content of a file
+ * Also handles legacy get_file calls
  */
-async function executeGetFile(
+async function executeReadFile(
   toolCallId: string,
   toolName: string,
   fileId: string
@@ -148,6 +178,139 @@ async function executeGetFile(
     tool_call_id: toolCallId,
     name: toolName,
     content: JSON.stringify(result, null, 2)
+  };
+}
+
+/**
+ * write_file(title, content, file_type) - Create a new file
+ * 
+ * This should only be called after human approval.
+ */
+async function executeWriteFile(
+  toolCallId: string,
+  toolName: string,
+  projectId: string,
+  title: string,
+  content: string,
+  fileType: 'artifact' | 'document' | 'code'
+): Promise<ToolResult> {
+  if (!title) {
+    return {
+      tool_call_id: toolCallId,
+      name: toolName,
+      content: '',
+      error: 'title is required'
+    };
+  }
+
+  if (!projectId) {
+    return {
+      tool_call_id: toolCallId,
+      name: toolName,
+      content: '',
+      error: 'projectId is required for creating files'
+    };
+  }
+
+  const now = Date.now();
+  const fileId = nanoid();
+
+  // Create new artifact
+  const newArtifact: Artifact = {
+    id: fileId,
+    projectId: projectId,
+    currentVersionIndex: 0,
+    versions: [{
+      index: 0,
+      title: title,
+      content: content || '',
+      createdAt: now
+    }],
+    createdAt: now,
+    updatedAt: now
+  };
+
+  await db.artifacts.save(newArtifact);
+
+  console.log(`[ToolExecutor] Created new file: ${title} (${fileId})`);
+
+  return {
+    tool_call_id: toolCallId,
+    name: toolName,
+    content: JSON.stringify({
+      success: true,
+      message: `File "${title}" created successfully`,
+      file_id: fileId,
+      file_type: fileType
+    })
+  };
+}
+
+/**
+ * edit_file(file_id, new_content, description) - Edit an existing file
+ * 
+ * Creates a new version of the file. Should only be called after human approval.
+ */
+async function executeEditFile(
+  toolCallId: string,
+  toolName: string,
+  fileId: string,
+  newContent: string,
+  description: string
+): Promise<ToolResult> {
+  if (!fileId) {
+    return {
+      tool_call_id: toolCallId,
+      name: toolName,
+      content: '',
+      error: 'file_id is required'
+    };
+  }
+
+  const artifact = await db.artifacts.get(fileId);
+  
+  if (!artifact) {
+    return {
+      tool_call_id: toolCallId,
+      name: toolName,
+      content: '',
+      error: `File not found: ${fileId}`
+    };
+  }
+
+  const currentVersion = artifact.versions[artifact.currentVersionIndex];
+  const now = Date.now();
+
+  // Create new version
+  const newVersion: ArtifactVersion = {
+    index: artifact.versions.length,
+    title: currentVersion?.title || 'Untitled',
+    content: newContent,
+    createdAt: now
+  };
+
+  // Update artifact with new version
+  const updatedArtifact: Artifact = {
+    ...artifact,
+    versions: [...artifact.versions, newVersion],
+    currentVersionIndex: artifact.versions.length,
+    updatedAt: now
+  };
+
+  await db.artifacts.save(updatedArtifact);
+
+  console.log(`[ToolExecutor] Edited file: ${currentVersion?.title || fileId} (new version ${newVersion.index})`);
+
+  return {
+    tool_call_id: toolCallId,
+    name: toolName,
+    content: JSON.stringify({
+      success: true,
+      message: `File edited successfully${description ? `: ${description}` : ''}`,
+      file_id: fileId,
+      version: newVersion.index,
+      previous_version: artifact.currentVersionIndex
+    })
   };
 }
 

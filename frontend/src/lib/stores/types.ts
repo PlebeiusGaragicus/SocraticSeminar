@@ -158,7 +158,103 @@ export interface HITLResumeResponse {
 }
 
 // Read-only tools that should be auto-approved (client-side execution)
-export const AUTO_APPROVE_TOOLS = ['list_files', 'get_file', 'search_files'];
+export const AUTO_APPROVE_TOOLS = ['list_files', 'read_file', 'search_files'];
+
+// Write tools that require human approval
+export const WRITE_TOOLS = ['write_file', 'edit_file'];
+
+// =============================================================================
+// CASHU PAYMENT TYPES
+// =============================================================================
+
+/** Payment status values */
+export type PaymentStatus = 'pending' | 'active' | 'exhausted' | 'completed' | 'error' | 'refunded';
+
+/**
+ * Cashu payment state from the agent.
+ * Tracks streaming micropayment lifecycle.
+ */
+export interface CashuPaymentState {
+  /** Original token from client */
+  payment_token: string | null;
+  
+  /** Remaining balance in satoshis */
+  payment_balance_sats: number;
+  
+  /** Total spent this session */
+  payment_spent_sats: number;
+  
+  /** Refund token for unused balance (for session recovery) */
+  payment_refund_token: string | null;
+  
+  /** Current payment status */
+  payment_status: PaymentStatus;
+  
+  /** Whether refund has been claimed by client */
+  payment_refund_claimed: boolean;
+}
+
+/**
+ * Payment interrupt when funds are exhausted.
+ */
+export interface PaymentExhaustedInterrupt {
+  type: 'payment_exhausted';
+  spent_sats: number;
+  message: string;
+  action_requests: HITLActionRequest[];
+  review_configs: HITLReviewConfig[];
+}
+
+/**
+ * Client tool execution interrupt format from ClientToolsMiddleware.
+ */
+export interface ClientToolInterrupt {
+  type: 'client_tool_execution';
+  tool_calls: Array<{
+    id: string;
+    name: string;
+    args: Record<string, unknown>;
+  }>;
+  /** True if tools can be auto-executed without approval */
+  auto_approve: boolean;
+  /** True if human approval is required */
+  requires_approval: boolean;
+  /** HITL data for approval UI (only for write tools) */
+  action_requests?: HITLActionRequest[];
+  review_configs?: HITLReviewConfig[];
+}
+
+/**
+ * Stored refund record for session recovery.
+ * Tracked in IndexedDB to detect unswiped refunds on reload.
+ */
+export interface StoredRefund {
+  id: string;
+  threadId: string;
+  refundToken: string;
+  amountSats: number;
+  createdAt: number;
+  claimed: boolean;
+  claimedAt?: number;
+}
+
+/**
+ * Check if an interrupt is a payment exhausted interrupt.
+ */
+export function isPaymentExhaustedInterrupt(value: unknown): value is PaymentExhaustedInterrupt {
+  if (!value || typeof value !== 'object') return false;
+  const obj = value as Record<string, unknown>;
+  return obj.type === 'payment_exhausted';
+}
+
+/**
+ * Check if an interrupt is a client tool execution interrupt.
+ */
+export function isClientToolInterrupt(value: unknown): value is ClientToolInterrupt {
+  if (!value || typeof value !== 'object') return false;
+  const obj = value as Record<string, unknown>;
+  return obj.type === 'client_tool_execution' && Array.isArray(obj.tool_calls);
+}
 
 // =============================================================================
 // LEGACY HUMAN INTERRUPT TYPES (for reference/compatibility)

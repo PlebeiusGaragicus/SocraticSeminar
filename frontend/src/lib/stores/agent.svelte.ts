@@ -1,5 +1,6 @@
 // Agent store for LangGraph streaming with tool interrupt handling
 // Uses the langgraph service for communication and handles state reactively
+// Includes Cashu payment state tracking and refund detection
 
 import type { 
   ToolCall, 
@@ -9,7 +10,15 @@ import type {
   Message as LocalMessage,
   HITLInterrupt,
   HITLDecision,
-  HITLResumeResponse
+  HITLResumeResponse,
+  CashuPaymentState,
+  ClientToolInterrupt,
+  PaymentExhaustedInterrupt,
+  StoredRefund
+} from './types.js';
+import { 
+  isClientToolInterrupt,
+  isPaymentExhaustedInterrupt
 } from './types.js';
 import { threadStore } from './threads.svelte.js';
 import { artifactStore } from './artifacts.svelte.js';
@@ -17,12 +26,16 @@ import { assistantStore } from './assistants.svelte.js';
 import { 
   submitMessage as submitToLangGraph,
   resumeWithHITLDecisions,
+  resumeWithToolResults,
+  resumeWithPayment,
   setToolExecutor,
   checkHealth,
   getClient,
+  getPaymentState,
+  checkForUnclaimedRefund,
   type Message as LangGraphMessage
 } from '$lib/services/langgraph.js';
-import { executeToolCall } from '$lib/services/tool-executor.js';
+import { executeToolCall, executeToolCalls } from '$lib/services/tool-executor.js';
 
 // Initialize the tool executor in the langgraph service
 setToolExecutor(executeToolCall);
@@ -91,6 +104,15 @@ let awaitingHumanResponse = $state(false);
 
 // Store the local thread ID for resuming after HITL
 let currentLocalThreadId = $state<string | null>(null);
+
+// =============================================================================
+// CASHU PAYMENT STATE
+// =============================================================================
+
+let paymentState = $state<CashuPaymentState | null>(null);
+let pendingRefund = $state<StoredRefund | null>(null);
+let paymentInterrupt = $state<PaymentExhaustedInterrupt | null>(null);
+let clientToolInterrupt = $state<ClientToolInterrupt | null>(null);
 
 // =============================================================================
 // HELPERS
@@ -256,6 +278,18 @@ async function sendMessage(
           awaitingHumanResponse = true;
           isInterrupted = true;
           // Keep streaming false since we're waiting for human input
+          isStreaming = false;
+        },
+        
+        onClientToolInterrupt: (interrupt, interruptId) => {
+          console.log('[Agent] Client tool interrupt received:', interrupt.tool_calls.map(tc => tc.name));
+          console.log('[Agent] Requires approval:', interrupt.requires_approval);
+          
+          // Store the interrupt for the UI to handle
+          clientToolInterrupt = interrupt;
+          hitlInterruptId = interruptId;  // Reuse hitlInterruptId for the resume
+          awaitingHumanResponse = true;
+          isInterrupted = true;
           isStreaming = false;
         },
         
@@ -456,6 +490,381 @@ function dismissHITLInterrupt(): void {
 }
 
 // =============================================================================
+// CASHU PAYMENT FUNCTIONS
+// =============================================================================
+
+/**
+ * Check for unclaimed refunds when loading a thread.
+ * This is part of session recovery - if the user closed the browser
+ * while the agent was running, we detect the refund and offer to claim it.
+ */
+async function checkThreadForRefunds(langGraphThreadId: string): Promise<StoredRefund | null> {
+  try {
+    const refund = await checkForUnclaimedRefund(langGraphThreadId);
+    if (refund) {
+      console.log('[Agent] Found unclaimed refund:', refund.amountSats, 'sats');
+      pendingRefund = refund;
+      return refund;
+    }
+    return null;
+  } catch (error) {
+    console.error('[Agent] Error checking for refunds:', error);
+    return null;
+  }
+}
+
+/**
+ * Load payment state for a thread.
+ */
+async function loadPaymentState(langGraphThreadId: string): Promise<CashuPaymentState | null> {
+  try {
+    const state = await getPaymentState(langGraphThreadId);
+    if (state) {
+      paymentState = state;
+      console.log('[Agent] Payment state loaded:', state.payment_status, 
+        state.payment_balance_sats, 'sats remaining');
+    }
+    return state;
+  } catch (error) {
+    console.error('[Agent] Error loading payment state:', error);
+    return null;
+  }
+}
+
+/**
+ * Mark a refund as claimed.
+ * This should be called after the client wallet has received the refund.
+ */
+function markRefundClaimed(): void {
+  if (pendingRefund) {
+    pendingRefund = { ...pendingRefund, claimed: true, claimedAt: Date.now() };
+    console.log('[Agent] Refund marked as claimed');
+  }
+}
+
+/**
+ * Resume with additional payment after funds exhausted.
+ */
+async function resumeWithAdditionalPayment(paymentToken: string): Promise<void> {
+  if (!threadId || !hitlInterruptId) {
+    console.error('[Agent] Cannot resume with payment: no active interrupt');
+    return;
+  }
+  
+  const assistantId = assistantStore.selectedAssistantId || 'deeptutor';
+  const localThreadId = currentLocalThreadId;
+  const interruptId = hitlInterruptId;
+  
+  // Reset states
+  paymentInterrupt = null;
+  hitlInterrupt = null;
+  hitlInterruptId = null;
+  awaitingHumanResponse = false;
+  isStreaming = true;
+  isInterrupted = false;
+  setStreamingContent('');
+  
+  console.log('[Agent] Resuming with additional payment');
+  
+  try {
+    await resumeWithPayment(
+      threadId,
+      interruptId,
+      paymentToken,
+      assistantId,
+      {
+        onToken: (token) => {
+          streamingContent += token;
+        },
+        
+        onMessagesSync: (messages) => {
+          langGraphMessages = [...messages];
+        },
+        
+        onComplete: (finalMessages) => {
+          console.log('[Agent] Payment resume completed');
+          langGraphMessages = [...finalMessages];
+          
+          if (localThreadId) {
+            const convertedMessages = convertLangGraphMessages(finalMessages, localThreadId);
+            threadStore.syncMessages(localThreadId, convertedMessages);
+          }
+          
+          isStreaming = false;
+          isInterrupted = false;
+          setPendingToolCalls([]);
+          setStreamingContent('');
+          
+          // Reload payment state
+          if (threadId) {
+            loadPaymentState(threadId);
+          }
+        },
+        
+        onError: (err) => {
+          console.error('[Agent] Payment resume error:', err.message);
+          error = err.message;
+          isStreaming = false;
+          isInterrupted = false;
+          awaitingHumanResponse = false;
+          setPendingToolCalls([]);
+          setStreamingContent('');
+        }
+      }
+    );
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+    console.error('[Agent] Payment resume error:', errorMessage);
+    error = errorMessage;
+    isStreaming = false;
+    isInterrupted = false;
+    awaitingHumanResponse = false;
+    throw err;
+  }
+}
+
+/**
+ * Handle client tool execution interrupt.
+ * Executes read-only tools automatically, or waits for approval on write tools.
+ */
+async function handleClientToolInterrupt(
+  interrupt: ClientToolInterrupt,
+  interruptId: string
+): Promise<void> {
+  clientToolInterrupt = interrupt;
+  
+  // If auto-approve (read-only tools), execute immediately
+  if (interrupt.auto_approve) {
+    console.log('[Agent] Auto-executing read-only tools:', 
+      interrupt.tool_calls.map(tc => tc.name));
+    
+    const projectId = threadStore.currentThread?.projectId || '';
+    const toolCalls = interrupt.tool_calls.map(tc => ({
+      id: tc.id,
+      name: tc.name,
+      args: tc.args,
+    }));
+    
+    // Execute tools
+    const results = await executeToolCalls(toolCalls, projectId);
+    
+    // Resume with results
+    if (threadId) {
+      const assistantId = assistantStore.selectedAssistantId || 'deeptutor';
+      await resumeWithToolResults(
+        threadId,
+        interruptId,
+        results,
+        assistantId,
+        {
+          onToken: (token) => {
+            streamingContent += token;
+          },
+          onMessagesSync: (messages) => {
+            langGraphMessages = [...messages];
+          },
+          onComplete: (finalMessages) => {
+            langGraphMessages = [...finalMessages];
+            clientToolInterrupt = null;
+            isStreaming = false;
+            isInterrupted = false;
+          },
+          onHITLInterrupt: (newInterrupt, newInterruptId) => {
+            // Another interrupt - handle it
+            hitlInterrupt = newInterrupt;
+            hitlInterruptId = newInterruptId;
+            awaitingHumanResponse = true;
+            isInterrupted = true;
+            isStreaming = false;
+          },
+          onError: (err) => {
+            error = err.message;
+            isStreaming = false;
+            clientToolInterrupt = null;
+          }
+        }
+      );
+    }
+  } else {
+    // Requires approval - show UI
+    console.log('[Agent] Write tools require approval:', 
+      interrupt.tool_calls.map(tc => tc.name));
+    
+    // Convert to HITL format for the UI
+    if (interrupt.action_requests && interrupt.review_configs) {
+      hitlInterrupt = {
+        action_requests: interrupt.action_requests,
+        review_configs: interrupt.review_configs,
+      };
+      hitlInterruptId = interruptId;
+      awaitingHumanResponse = true;
+      isInterrupted = true;
+      isStreaming = false;
+    }
+  }
+}
+
+/**
+ * Execute approved write tools and resume.
+ */
+async function executeApprovedWriteTools(): Promise<void> {
+  if (!clientToolInterrupt || !threadId || !hitlInterruptId) {
+    console.error('[Agent] No pending write tools to execute');
+    return;
+  }
+  
+  const projectId = threadStore.currentThread?.projectId || '';
+  const toolCalls = clientToolInterrupt.tool_calls.map(tc => ({
+    id: tc.id,
+    name: tc.name,
+    args: tc.args,
+  }));
+  
+  console.log('[Agent] Executing approved write tools:', toolCalls.map(tc => tc.name));
+  
+  // Execute the tools
+  const results = await executeToolCalls(toolCalls, projectId);
+  
+  // Resume with results
+  const assistantId = assistantStore.selectedAssistantId || 'deeptutor';
+  const interruptId = hitlInterruptId;
+  
+  // Reset states
+  clientToolInterrupt = null;
+  hitlInterrupt = null;
+  hitlInterruptId = null;
+  awaitingHumanResponse = false;
+  isStreaming = true;
+  isInterrupted = false;
+  
+  await resumeWithToolResults(
+    threadId,
+    interruptId,
+    results,
+    assistantId,
+    {
+      onToken: (token) => {
+        streamingContent += token;
+      },
+      onMessagesSync: (messages) => {
+        langGraphMessages = [...messages];
+      },
+      onComplete: (finalMessages) => {
+        langGraphMessages = [...finalMessages];
+        
+        if (currentLocalThreadId) {
+          const convertedMessages = convertLangGraphMessages(finalMessages, currentLocalThreadId);
+          threadStore.syncMessages(currentLocalThreadId, convertedMessages);
+        }
+        
+        isStreaming = false;
+        isInterrupted = false;
+        setPendingToolCalls([]);
+        setStreamingContent('');
+      },
+      onHITLInterrupt: (newInterrupt, newInterruptId) => {
+        hitlInterrupt = newInterrupt;
+        hitlInterruptId = newInterruptId;
+        awaitingHumanResponse = true;
+        isInterrupted = true;
+        isStreaming = false;
+      },
+      onError: (err) => {
+        error = err.message;
+        isStreaming = false;
+        isInterrupted = false;
+      }
+    }
+  );
+}
+
+// =============================================================================
+// CLIENT TOOL REJECTION
+// =============================================================================
+
+/**
+ * Reject a client tool interrupt (user declined to execute the tool).
+ */
+async function rejectClientToolInterrupt(): Promise<void> {
+  if (!clientToolInterrupt || !threadId || !hitlInterruptId) {
+    console.error('[Agent] No pending client tool interrupt to reject');
+    return;
+  }
+  
+  console.log('[Agent] Rejecting client tool interrupt');
+  
+  const toolCalls = clientToolInterrupt.tool_calls;
+  const assistantId = assistantStore.selectedAssistantId || 'deeptutor';
+  const interruptId = hitlInterruptId;
+  
+  // Reset states
+  clientToolInterrupt = null;
+  hitlInterrupt = null;
+  hitlInterruptId = null;
+  awaitingHumanResponse = false;
+  isStreaming = true;
+  isInterrupted = false;
+  
+  // Create rejection results
+  const rejectionResults = toolCalls.map(tc => ({
+    tool_call_id: tc.id,
+    content: JSON.stringify({ 
+      status: 'rejected', 
+      message: 'User declined to execute this action' 
+    })
+  }));
+  
+  try {
+    await resumeWithToolResults(
+      threadId,
+      interruptId,
+      rejectionResults,
+      assistantId,
+      {
+        onToken: (token) => {
+          streamingContent += token;
+        },
+        onMessagesSync: (messages) => {
+          langGraphMessages = [...messages];
+        },
+        onComplete: (finalMessages) => {
+          langGraphMessages = [...finalMessages];
+          
+          if (currentLocalThreadId) {
+            const convertedMessages = convertLangGraphMessages(finalMessages, currentLocalThreadId);
+            threadStore.syncMessages(currentLocalThreadId, convertedMessages);
+          }
+          
+          isStreaming = false;
+          isInterrupted = false;
+          setPendingToolCalls([]);
+          setStreamingContent('');
+        },
+        onHITLInterrupt: (newInterrupt, newInterruptId) => {
+          hitlInterrupt = newInterrupt;
+          hitlInterruptId = newInterruptId;
+          awaitingHumanResponse = true;
+          isInterrupted = true;
+          isStreaming = false;
+        },
+        onError: (err) => {
+          error = err.message;
+          isStreaming = false;
+          isInterrupted = false;
+        }
+      }
+    );
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+    console.error('[Agent] Reject error:', errorMessage);
+    error = errorMessage;
+    isStreaming = false;
+    isInterrupted = false;
+    awaitingHumanResponse = false;
+  }
+}
+
+// =============================================================================
 // UTILITY FUNCTIONS
 // =============================================================================
 
@@ -472,6 +881,10 @@ function resetStream(): void {
   hitlInterruptId = null;
   awaitingHumanResponse = false;
   currentLocalThreadId = null;
+  paymentState = null;
+  pendingRefund = null;
+  paymentInterrupt = null;
+  clientToolInterrupt = null;
   setPendingToolCalls([]);
   setStreamingContent('');
   langGraphMessages = [];
@@ -495,6 +908,12 @@ export const agentStore = {
   get hitlInterrupt() { return hitlInterrupt; },
   get awaitingHumanResponse() { return awaitingHumanResponse; },
   
+  // Payment getters
+  get paymentState() { return paymentState; },
+  get pendingRefund() { return pendingRefund; },
+  get paymentInterrupt() { return paymentInterrupt; },
+  get clientToolInterrupt() { return clientToolInterrupt; },
+  
   // Actions
   sendMessage,
   clearError,
@@ -506,5 +925,16 @@ export const agentStore = {
   resumeWithDecisions,
   approveAllActions,
   rejectAllActions,
-  dismissHITLInterrupt
+  dismissHITLInterrupt,
+  
+  // Payment actions
+  checkThreadForRefunds,
+  loadPaymentState,
+  markRefundClaimed,
+  resumeWithAdditionalPayment,
+  
+  // Client tool actions
+  handleClientToolInterrupt,
+  executeApprovedWriteTools,
+  rejectClientToolInterrupt,
 };

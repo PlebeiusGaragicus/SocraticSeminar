@@ -20,14 +20,19 @@ import type {
 	HITLInterrupt, 
 	HITLDecision,
 	HITLResumeResponse,
-	AUTO_APPROVE_TOOLS 
+	CashuPaymentState,
+	ClientToolInterrupt,
+	PaymentExhaustedInterrupt,
+	StoredRefund
+} from '../stores/types.js';
+import { 
+	AUTO_APPROVE_TOOLS as autoApproveTools,
+	isClientToolInterrupt,
+	isPaymentExhaustedInterrupt
 } from '../stores/types.js';
 
 // Re-export Message type for use in other modules
 export type { Message, Thread };
-
-// Import the auto-approve list
-import { AUTO_APPROVE_TOOLS as autoApproveTools } from '../stores/types.js';
 
 // Configuration
 const LANGGRAPH_URL = import.meta.env.PUBLIC_LANGGRAPH_URL ?? 'http://localhost:2024';
@@ -62,6 +67,8 @@ export interface StreamCallbacks {
 	onToolComplete?: (results: ToolResult[]) => void;
 	// Human-in-the-loop callbacks (new format with action_requests/review_configs)
 	onHITLInterrupt?: (interrupt: HITLInterrupt, interruptId: string) => void;
+	// Client tool execution interrupt (write operations needing approval + execution)
+	onClientToolInterrupt?: (interrupt: ClientToolInterrupt, interruptId: string) => void;
 }
 
 export interface SubmitOptions {
@@ -285,6 +292,102 @@ export async function submitMessage(
 						const interruptId = (interruptData as { id?: string }).id || task.id || '';
 						console.log('[LangGraph] Interrupt value:', JSON.stringify(interruptValue, null, 2));
 						console.log('[LangGraph] Interrupt ID:', interruptId);
+						
+						// Check for ClientToolsMiddleware interrupt FIRST (has type: "client_tool_execution")
+						// These require tool execution on the client side before resuming
+						const isClientTool = isClientToolInterrupt(interruptValue);
+						console.log('[LangGraph] Is client tool interrupt?', isClientTool);
+						
+						if (isClientTool) {
+							console.log('[LangGraph] Client tool interrupt detected:', 
+								interruptValue.tool_calls.map(tc => tc.name));
+							
+							// Client tool interrupts: execute tools locally then resume
+							if (interruptValue.auto_approve) {
+								// Read-only tools - execute immediately
+								console.log('[LangGraph] Auto-executing read-only client tools');
+								
+								if (!toolExecutor) {
+									throw new Error('Tool executor not set. Call setToolExecutor first.');
+								}
+								
+								const toolResults = await Promise.all(
+									interruptValue.tool_calls.map(async (tc) => {
+										const result = await toolExecutor(
+											{ id: tc.id, name: tc.name, args: tc.args },
+											projectId || ''
+										);
+										return result;
+									})
+								);
+								
+								console.log('[LangGraph] Tool results:', toolResults);
+								
+								// Resume with tool results
+								const resumePayload = { 
+									[interruptId]: { 
+										tool_results: toolResults.map(r => ({
+											tool_call_id: r.tool_call_id,
+											content: r.error || r.content,
+											status: r.error ? 'error' : 'success',
+										}))
+									} 
+								};
+								
+								const resumeStream = client.runs.stream(threadId, assistantId, {
+									input: null,
+									command: { resume: resumePayload },
+									streamMode: options.streamMode || ['messages', 'values'],
+								});
+								
+								for await (const resumeEvent of resumeStream) {
+									if (resumeEvent.event === 'messages/partial') {
+										const chunks = resumeEvent.data as Array<{ type: string; content?: string; tool_calls?: unknown[] }>;
+										if (chunks && chunks.length > 0) {
+											const lastChunk = chunks[chunks.length - 1];
+											if (lastChunk?.type === 'ai' && lastChunk.content) {
+												const newContent = lastChunk.content;
+												if (newContent.length > currentContent.length) {
+													const newTokens = newContent.slice(currentContent.length);
+													callbacks.onToken?.(newTokens);
+													currentContent = newContent;
+												}
+											}
+										}
+									}
+									
+									if (resumeEvent.event === 'values') {
+										const data = resumeEvent.data as { messages?: Message[] };
+										if (data.messages) {
+											messages.length = 0;
+											messages.push(...data.messages);
+											callbacks.onMessagesSync?.(messages);
+										}
+									}
+								}
+								
+								// Check for more tool calls
+								const lastMsg = messages[messages.length - 1];
+								if (lastMsg?.type === 'ai' && (lastMsg as { tool_calls?: unknown[] }).tool_calls?.length) {
+									pendingToolCalls = ((lastMsg as { tool_calls: Array<{ id: string; name: string; args?: Record<string, unknown> }> }).tool_calls).map((tc) => ({
+										id: tc.id,
+										name: tc.name,
+										args: tc.args || {},
+									}));
+									interrupted = true;
+									callbacks.onToolCall?.(pendingToolCalls);
+									continue;
+								} else {
+									interrupted = false;
+									break;
+								}
+							} else {
+								// Write tools - need approval first, notify UI with client tool interrupt
+								console.log('[LangGraph] Client tool requires approval - notifying UI');
+								callbacks.onClientToolInterrupt?.(interruptValue, interruptId);
+								return { threadId, messages };
+							}
+						}
 						
 						// Check if this is a HITL interrupt (has action_requests and review_configs)
 						const isHITL = isHITLInterrupt(interruptValue);
@@ -678,6 +781,227 @@ export async function checkHealth(): Promise<boolean> {
 	} catch (error) {
 		console.warn('LangGraph health check failed:', error);
 		return false;
+	}
+}
+
+// =============================================================================
+// CASHU PAYMENT HELPERS
+// =============================================================================
+
+/**
+ * Extract payment state from thread state.
+ */
+export async function getPaymentState(threadId: string): Promise<CashuPaymentState | null> {
+	try {
+		const client = getClient();
+		const state = await client.threads.getState(threadId);
+		const values = state.values as Record<string, unknown>;
+		
+		if (!values) return null;
+		
+		// Check if payment state fields exist
+		if (!('payment_status' in values)) return null;
+		
+		return {
+			payment_token: (values.payment_token as string) || null,
+			payment_balance_sats: (values.payment_balance_sats as number) || 0,
+			payment_spent_sats: (values.payment_spent_sats as number) || 0,
+			payment_refund_token: (values.payment_refund_token as string) || null,
+			payment_status: (values.payment_status as CashuPaymentState['payment_status']) || 'pending',
+			payment_refund_claimed: (values.payment_refund_claimed as boolean) || false,
+		};
+	} catch (error) {
+		console.warn('[LangGraph] Could not get payment state:', error);
+		return null;
+	}
+}
+
+/**
+ * Check if a thread has an unclaimed refund.
+ * Used for session recovery - detects refunds that weren't claimed due to session interruption.
+ */
+export async function checkForUnclaimedRefund(threadId: string): Promise<StoredRefund | null> {
+	try {
+		const paymentState = await getPaymentState(threadId);
+		
+		if (!paymentState) return null;
+		
+		// Check if there's a refund token that hasn't been claimed
+		if (
+			paymentState.payment_refund_token &&
+			!paymentState.payment_refund_claimed &&
+			paymentState.payment_balance_sats > 0
+		) {
+			return {
+				id: `refund-${threadId}-${Date.now()}`,
+				threadId,
+				refundToken: paymentState.payment_refund_token,
+				amountSats: paymentState.payment_balance_sats,
+				createdAt: Date.now(),
+				claimed: false,
+			};
+		}
+		
+		return null;
+	} catch (error) {
+		console.warn('[LangGraph] Could not check for unclaimed refund:', error);
+		return null;
+	}
+}
+
+/**
+ * Resume a thread with additional payment after funds exhausted.
+ */
+export async function resumeWithPayment(
+	threadId: string,
+	interruptId: string,
+	paymentToken: string,
+	assistantId: string,
+	callbacks: StreamCallbacks
+): Promise<{ threadId: string; messages: Message[] }> {
+	// The resume payload includes the new payment token
+	const resumePayload = {
+		[interruptId]: {
+			payment_token: paymentToken,
+		}
+	};
+	
+	console.log('[LangGraph] Resuming with additional payment');
+	
+	const client = getClient();
+	const messages: Message[] = [];
+	let currentContent = '';
+	
+	try {
+		const stream = client.runs.stream(threadId, assistantId, {
+			input: null,
+			command: { resume: resumePayload },
+			streamMode: ['messages', 'values'],
+		});
+		
+		for await (const event of stream) {
+			if (event.event === 'messages/partial') {
+				const chunks = event.data as Array<{ type: string; content?: string }>;
+				if (chunks && chunks.length > 0) {
+					const lastChunk = chunks[chunks.length - 1];
+					if (lastChunk?.type === 'ai' && lastChunk.content) {
+						const newContent = lastChunk.content;
+						if (newContent.length > currentContent.length) {
+							callbacks.onToken?.(newContent.slice(currentContent.length));
+							currentContent = newContent;
+						}
+					}
+				}
+			}
+			
+			if (event.event === 'values') {
+				const data = event.data as { messages?: Message[] };
+				if (data.messages) {
+					messages.length = 0;
+					messages.push(...data.messages);
+					callbacks.onMessagesSync?.(messages);
+				}
+			}
+		}
+		
+		callbacks.onComplete?.(messages);
+		return { threadId, messages };
+		
+	} catch (error) {
+		callbacks.onError?.(error as Error);
+		throw error;
+	}
+}
+
+/**
+ * Resume a thread with client tool execution results.
+ * Used after ClientToolsMiddleware interrupts for file operations.
+ */
+export async function resumeWithToolResults(
+	threadId: string,
+	interruptId: string,
+	toolResults: ToolResult[],
+	assistantId: string,
+	callbacks: StreamCallbacks
+): Promise<{ threadId: string; messages: Message[] }> {
+	const resumePayload = {
+		[interruptId]: {
+			tool_results: toolResults.map(r => ({
+				tool_call_id: r.tool_call_id,
+				content: r.error ? JSON.stringify({ error: r.error }) : r.content,
+			})),
+		}
+	};
+	
+	console.log('[LangGraph] Resuming with tool results:', toolResults.map(r => r.tool_call_id));
+	
+	const client = getClient();
+	const messages: Message[] = [];
+	let currentContent = '';
+	
+	try {
+		const stream = client.runs.stream(threadId, assistantId, {
+			input: null,
+			command: { resume: resumePayload },
+			streamMode: ['messages', 'values'],
+		});
+		
+		for await (const event of stream) {
+			if (event.event === 'messages/partial') {
+				const chunks = event.data as Array<{ type: string; content?: string }>;
+				if (chunks && chunks.length > 0) {
+					const lastChunk = chunks[chunks.length - 1];
+					if (lastChunk?.type === 'ai' && lastChunk.content) {
+						const newContent = lastChunk.content;
+						if (newContent.length > currentContent.length) {
+							callbacks.onToken?.(newContent.slice(currentContent.length));
+							currentContent = newContent;
+						}
+					}
+				}
+			}
+			
+			if (event.event === 'values') {
+				const data = event.data as { messages?: Message[] };
+				if (data.messages) {
+					messages.length = 0;
+					messages.push(...data.messages);
+					callbacks.onMessagesSync?.(messages);
+				}
+			}
+		}
+		
+		// Check for another interrupt after resume
+		try {
+			const threadState = await client.threads.getState(threadId);
+			const tasks = (threadState as { tasks?: Array<{ id?: string; interrupts?: Array<{ value?: unknown; id?: string }> }> }).tasks;
+			
+			if (tasks && tasks.length > 0) {
+				const task = tasks[0];
+				const interrupts = task.interrupts;
+				
+				if (interrupts && interrupts.length > 0) {
+					const interruptData = interrupts[0];
+					const interruptValue = interruptData.value;
+					const newInterruptId = (interruptData as { id?: string }).id || task.id || '';
+					
+					// Check for HITL or client tool interrupt
+					if (isHITLInterrupt(interruptValue)) {
+						callbacks.onHITLInterrupt?.(interruptValue, newInterruptId);
+						return { threadId, messages };
+					}
+				}
+			}
+		} catch (stateError) {
+			console.warn('[LangGraph] Could not check thread state after tool resume:', stateError);
+		}
+		
+		callbacks.onComplete?.(messages);
+		return { threadId, messages };
+		
+	} catch (error) {
+		callbacks.onError?.(error as Error);
+		throw error;
 	}
 }
 

@@ -51,11 +51,15 @@
   // LangGraph messages during streaming (live from server)
   const langGraphMessages = $derived.by(() => agentStore.langGraphMessages);
 
-  // Display messages: during streaming show langGraphMessages, otherwise show persisted
+  // Client tool interrupt (for write operations needing approval)
+  const clientToolInterrupt = $derived.by(() => agentStore.clientToolInterrupt);
+  
+  // Display messages: show LangGraph messages during streaming OR when waiting for approval
   // This prevents flickering by showing the stable server state during execution
   const displayMessages = $derived.by(() => {
-    if (isStreaming && langGraphMessages.length > 0) {
-      // Convert LangGraph messages to display format during streaming
+    // Show LangGraph messages if streaming, interrupted, or waiting for human response
+    if ((isStreaming || awaitingHumanResponse || isInterrupted) && langGraphMessages.length > 0) {
+      // Convert LangGraph messages to display format
       return langGraphMessages
         .filter(msg => msg.type === 'human' || msg.type === 'ai')
         .map((msg, index) => {

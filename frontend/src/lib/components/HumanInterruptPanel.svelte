@@ -10,11 +10,36 @@
   import FilePlus from '@lucide/svelte/icons/file-plus';
   import { Button } from './ui/index.js';
   import { agentStore } from '$lib/stores/index.js';
-  import type { HITLInterrupt, HITLActionRequest, HITLReviewConfig } from '$lib/stores/types.js';
+  import type { HITLInterrupt, HITLActionRequest, HITLReviewConfig, ClientToolInterrupt } from '$lib/stores/types.js';
 
-  // The current HITL interrupt from the agent store
-  const interrupt = $derived(agentStore.hitlInterrupt);
+  // The current interrupts from the agent store
+  // Prioritize clientToolInterrupt as it's the newer pattern for file operations
+  const hitlInterrupt = $derived(agentStore.hitlInterrupt);
+  const clientToolInterrupt = $derived(agentStore.clientToolInterrupt);
   const awaitingResponse = $derived(agentStore.awaitingHumanResponse);
+  
+  // Use clientToolInterrupt if available, otherwise fall back to hitlInterrupt
+  // clientToolInterrupt is used for file operations that execute on the client
+  const interrupt = $derived.by(() => {
+    if (clientToolInterrupt) {
+      // Convert clientToolInterrupt to HITLInterrupt-like structure for display
+      return {
+        action_requests: clientToolInterrupt.action_requests || clientToolInterrupt.tool_calls.map(tc => ({
+          name: tc.name,
+          args: tc.args,
+          description: `Execute ${tc.name}`
+        })),
+        review_configs: clientToolInterrupt.review_configs || [{
+          action_name: clientToolInterrupt.tool_calls[0]?.name || '',
+          allowed_decisions: ['approve', 'reject']
+        }]
+      } as HITLInterrupt;
+    }
+    return hitlInterrupt;
+  });
+  
+  // Track if this is a client tool interrupt (requires local execution)
+  const isClientToolInterrupt = $derived(!!clientToolInterrupt);
 
   // Local state
   let isSubmitting = $state(false);
@@ -76,7 +101,13 @@
     isSubmitting = true;
     
     try {
-      await agentStore.approveAllActions();
+      if (isClientToolInterrupt) {
+        // For client tool interrupts, execute tools locally then resume
+        await agentStore.executeApprovedWriteTools();
+      } else {
+        // For regular HITL, just send approval
+        await agentStore.approveAllActions();
+      }
     } finally {
       isSubmitting = false;
     }
@@ -88,7 +119,12 @@
     isSubmitting = true;
     
     try {
-      await agentStore.rejectAllActions();
+      if (isClientToolInterrupt) {
+        // For client tool interrupts, reject means don't execute
+        await agentStore.rejectClientToolInterrupt();
+      } else {
+        await agentStore.rejectAllActions();
+      }
     } finally {
       isSubmitting = false;
     }
