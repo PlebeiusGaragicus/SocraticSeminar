@@ -4,3 +4,5 @@ __pycache__/
 .pnpm-store/
 
 .env
+*.json
+# traces/
