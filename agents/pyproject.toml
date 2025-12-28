@@ -10,6 +10,9 @@ dependencies = [
     "langchain-anthropic>=1.2.0",
     "httpx>=0.27.0",
     "pydantic>=2.0.0",
+    # Research agent dependencies
+    "tavily-python>=0.5.0",
+    "markdownify>=0.12.0",
     # Note: deepagents/ is a reference submodule, not a direct dependency.
     # Install separately if needed: pip install -e ../deepagents/libs/deepagents
 ]

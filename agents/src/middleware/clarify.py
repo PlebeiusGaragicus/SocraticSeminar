@@ -14,7 +14,7 @@ Key Patterns:
 """
 
 from collections.abc import Awaitable, Callable
-from typing import Any, Literal
+from typing import Any
 
 from langchain.agents.middleware.types import AgentMiddleware, AgentState, ModelRequest, ModelResponse
 from langchain.tools import ToolRuntime
@@ -22,7 +22,7 @@ from langchain.tools.tool_node import ToolCallRequest
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import StructuredTool
 from langgraph.types import Command, interrupt
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import TypedDict
 
 
 # =============================================================================

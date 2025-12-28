@@ -20,7 +20,7 @@ from langchain.tools.tool_node import ToolCallRequest
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import StructuredTool
 from langgraph.types import Command, interrupt
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import NotRequired
 
 
 # =============================================================================

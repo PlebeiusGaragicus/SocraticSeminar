@@ -30,7 +30,7 @@ from langgraph.types import Checkpointer
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.backends import StateBackend
 
-from .middleware import CashuPaymentMiddleware, ClientToolsMiddleware, ClarifyWithHumanMiddleware
+from src.middleware import CashuPaymentMiddleware, ClientToolsMiddleware, ClarifyWithHumanMiddleware
 from .state import DeeptutorState, COST_PER_ITERATION_SATS
 
 

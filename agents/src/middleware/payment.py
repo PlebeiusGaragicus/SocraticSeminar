@@ -503,3 +503,4 @@ class CashuPaymentMiddleware(AgentMiddleware[CashuPaymentState, None]):
     ) -> dict[str, Any] | None:
         """Async version of after_agent."""
         return self.after_agent(state, runtime)
+
