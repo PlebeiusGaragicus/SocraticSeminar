@@ -3,8 +3,6 @@
   "python_version": "3.11",
   "dependencies": ["."],
   "graphs": {
-    "seminar_agent": "./src/agent/__init__.py:graph",
-    "simple_agent": "./src/simple_agent/__init__.py:graph",
     "deeptutor": "./src/deeptutor/__init__.py:graph"
   },
   "env": ".env"

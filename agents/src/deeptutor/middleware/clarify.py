@@ -69,7 +69,7 @@ Do NOT use clarification tools for:
 
 - Be concise with questions
 - For ask_choices, provide 2-5 clear options when possible
-- Set allow_freeform=True if user might have an answer outside your options
+- Set allow_freeform=True if user might have an answer outside your options (this is usually a good idea)
 - Ask one question at a time, not multiple in sequence"""
 
 
