@@ -7,6 +7,7 @@
   import FolderOpen from '@lucide/svelte/icons/folder-open';
   import Wrench from '@lucide/svelte/icons/wrench';
   import Edit from '@lucide/svelte/icons/edit';
+  import FilePlus from '@lucide/svelte/icons/file-plus';
   import { Button } from './ui/index.js';
   import { agentStore } from '$lib/stores/index.js';
   import type { HITLInterrupt, HITLActionRequest, HITLReviewConfig } from '$lib/stores/types.js';
@@ -29,6 +30,8 @@
         return Search;
       case 'edit_file':
         return Edit;
+      case 'create_file':
+        return FilePlus;
       default:
         return Wrench;
     }
@@ -54,6 +57,8 @@
         return `Search files for: "${args.query || 'unknown'}"`;
       case 'edit_file':
         return `Edit file: "${args.file_id || 'unknown'}"`;
+      case 'create_file':
+        return `Create new file: "${args.title || 'unknown'}"`;
       default:
         return action.description || `Execute: ${action.name}`;
     }

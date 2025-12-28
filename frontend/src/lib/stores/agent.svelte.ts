@@ -96,14 +96,18 @@ let currentLocalThreadId = $state<string | null>(null);
 // HELPERS
 // =============================================================================
 
-// Build project files metadata for agent context
+// Build project files with content for agent context
 function buildProjectFiles(): ProjectFile[] {
   const artifacts = artifactStore.artifacts;
-  return artifacts.map(artifact => ({
-    id: artifact.id,
-    title: artifact.versions[artifact.currentVersionIndex]?.title || 'Untitled',
-    file_type: 'artifact' as const
-  }));
+  return artifacts.map(artifact => {
+    const currentVersion = artifact.versions[artifact.currentVersionIndex];
+    return {
+      id: artifact.id,
+      title: currentVersion?.title || 'Untitled',
+      file_type: 'artifact' as const,
+      content: currentVersion?.content || ''
+    };
+  });
 }
 
 // Update streaming content (triggers reactivity)
@@ -191,11 +195,15 @@ async function sendMessage(
         },
         
         onMessagesSync: (messages) => {
+          console.log('[Agent] Messages synced:', messages.length, 'messages');
+          console.log('[Agent] Message types:', messages.map(m => m.type));
           // Sync with server state
           langGraphMessages = [...messages];
           
           // Find the latest AI message
           const lastAi = messages.findLast(m => m.type === 'ai');
+          console.log('[Agent] Last AI message:', lastAi ? 'found' : 'not found', 
+            lastAi ? { id: lastAi.id, hasContent: !!(lastAi as { content?: unknown }).content } : null);
           if (lastAi && lastAi.id) {
             if (!knownAiMessageIds.has(lastAi.id)) {
               currentAiMessageId = lastAi.id;
@@ -203,6 +211,7 @@ async function sendMessage(
               if (!streamingContent) {
                 const serverContent = typeof lastAi.content === 'string' ? lastAi.content : '';
                 streamingContent = serverContent;
+                console.log('[Agent] Set streaming content from server:', serverContent.substring(0, 100) + '...');
               }
             }
           }
@@ -252,12 +261,22 @@ async function sendMessage(
         
         onComplete: (finalMessages) => {
           console.log('[Agent] Stream completed. Messages:', finalMessages.length);
+          console.log('[Agent] Final message types:', finalMessages.map(m => ({
+            type: m.type,
+            hasContent: !!((m as { content?: unknown }).content),
+            contentPreview: typeof (m as { content?: unknown }).content === 'string' 
+              ? (m as { content: string }).content.substring(0, 100) 
+              : typeof (m as { content?: unknown }).content,
+            toolCalls: ((m as { tool_calls?: unknown[] }).tool_calls || []).length
+          })));
+          
           langGraphMessages = [...finalMessages];
           
           // Convert and sync ALL messages from LangGraph to local store
           // This ensures we have the complete conversation history including
           // multiple AI messages from tool call iterations
           const convertedMessages = convertLangGraphMessages(finalMessages, localThreadId);
+          console.log('[Agent] Converted to local messages:', convertedMessages.length);
           threadStore.syncMessages(localThreadId, convertedMessages);
           
           isStreaming = false;

@@ -189,13 +189,43 @@ def edit_file(file_id: str, new_content: str, edit_description: str = "") -> str
         Edits are NOT applied immediately. The user sees a diff
         and must explicitly accept or reject the changes.
     """
-    # This is still a stub - edit requires client-side execution
-    # since the actual file storage is in IndexedDB
+    # Tool execution is handled by HITL middleware
+    # The frontend will receive the proposed edit and apply it upon approval
     return json.dumps({
         "status": "pending",
         "message": "Edit proposal created. Waiting for user approval.",
         "file_id": file_id,
+        "new_content": new_content,
         "edit_description": edit_description
+    })
+
+
+def create_file(title: str, content: str, file_type: str = "artifact") -> str:
+    """Create a new file in the project.
+    
+    This creates a pending file creation that the user must approve.
+    
+    Args:
+        title: The title/name for the new file.
+        content: The initial content for the file.
+        file_type: Type of file to create ('artifact', 'document', 'code').
+                   Defaults to 'artifact'.
+    
+    Returns:
+        Success message if creation was queued for approval.
+        
+    Note:
+        Files are NOT created immediately. The user must
+        explicitly accept or reject the creation.
+    """
+    # Tool execution is handled by HITL middleware
+    # The frontend will receive the proposed file and create it upon approval
+    return json.dumps({
+        "status": "pending",
+        "message": "File creation proposal created. Waiting for user approval.",
+        "title": title,
+        "content": content,
+        "file_type": file_type
     })
 
 
@@ -248,9 +278,26 @@ Args:
     edit_description: Optional description of what was changed."""
 )
 
+create_file_tool = StructuredTool.from_function(
+    func=create_file,
+    name="create_file",
+    description="""Create a new file in the project. User must approve creation.
 
-# All tools that can read from state
-# Note: edit_file is commented out for now - focusing on read-only operations
-CLIENT_TOOLS = [list_files_tool, get_file_tool, search_files_tool]
-# CLIENT_TOOLS = [list_files_tool, get_file_tool, search_files_tool, edit_file_tool]  # Uncomment to enable editing
+Args:
+    title: The title/name for the new file.
+    content: The initial content for the file.
+    file_type: Type of file ('artifact', 'document', 'code'). Defaults to 'artifact'."""
+)
+
+
+# All available tools for the agent
+# Read-only tools (list_files, get_file, search_files) are auto-approved
+# Write tools (edit_file, create_file) require human approval via HITL middleware
+CLIENT_TOOLS = [
+    list_files_tool,
+    get_file_tool,
+    search_files_tool,
+    edit_file_tool,
+    create_file_tool,
+]
 

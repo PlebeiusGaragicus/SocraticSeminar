@@ -1,7 +1,7 @@
 """State definition for the Deeptutor Agent."""
 
 from typing import Annotated, Optional, Sequence
-from typing_extensions import TypedDict
+from typing_extensions import TypedDict, NotRequired
 
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
@@ -14,15 +14,16 @@ class PaymentInfo(TypedDict, total=False):
 
 
 class ProjectFile(TypedDict):
-    """Metadata about a project file for tool context.
+    """Metadata and content for a project file.
     
     This is injected into state on each invocation so the agent
-    knows what files exist in the project. Actual content is fetched
-    via tool calls that execute on the client.
+    knows what files exist in the project and can read their content.
+    Content is included by the frontend for server-side file reading.
     """
     id: str
     title: str
     file_type: str  # 'artifact' | 'document' | 'code'
+    content: NotRequired[str]  # Optional: file content for reading
 
 
 class DeeptutorState(TypedDict, total=False):
@@ -41,7 +42,7 @@ class DeeptutorState(TypedDict, total=False):
     payment_token: Optional[str]  # Token to redeem on success
     
     # Project files context - injected each invocation
-    # Contains file metadata only; content fetched via client-executed tools
+    # Contains file metadata and content for server-side reading
     project_files: Optional[list[ProjectFile]]
     current_project_id: Optional[str]
     

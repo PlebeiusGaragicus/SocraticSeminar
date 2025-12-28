@@ -59,11 +59,12 @@ export interface ToolCallWithStatus extends ToolCall {
 }
 
 // Project file metadata - sent to agent so it knows what files exist
-// Actual content is fetched via tool calls
+// Content is included so the agent can read files server-side
 export interface ProjectFile {
   id: string;
   title: string;
   file_type: 'artifact' | 'document' | 'code';
+  content?: string;  // Optional: included for file reading via get_file tool
 }
 
 export interface ArtifactVersion {

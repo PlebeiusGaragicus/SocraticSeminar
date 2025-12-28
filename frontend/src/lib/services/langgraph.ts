@@ -177,6 +177,12 @@ export async function submitMessage(
 			});
 			
 			for await (const event of stream) {
+				// Log all events for debugging
+				console.log('[LangGraph] Stream event:', event.event, 
+					event.event === 'values' ? '(state snapshot)' : 
+					event.event === 'messages/partial' ? '(streaming chunk)' :
+					event.event === 'messages/complete' ? '(message complete)' : '');
+				
 				// Handle streaming message chunks (incremental AI content)
 				if (event.event === 'messages/partial') {
 					const chunks = event.data as Array<{ type: string; content?: string; tool_calls?: unknown[] }>;
@@ -216,6 +222,10 @@ export async function submitMessage(
 				// Handle values events (full state snapshots)
 				if (event.event === 'values') {
 					const data = event.data as { messages?: Message[] };
+					console.log('[LangGraph] Values event data:', 
+						data.messages ? `${data.messages.length} messages` : 'no messages',
+						data.messages?.map(m => ({ type: m.type, hasContent: !!(m as { content?: string }).content, hasToolCalls: !!((m as { tool_calls?: unknown[] }).tool_calls?.length) }))
+					);
 					
 					if (data.messages) {
 						messages.length = 0;
@@ -223,9 +233,13 @@ export async function submitMessage(
 						
 						// Sync full message state to UI
 						callbacks.onMessagesSync?.(messages);
+						console.log('[LangGraph] Messages synced to UI:', messages.length);
 						
 						// Get the latest message
 						const lastMessage = messages[messages.length - 1];
+						console.log('[LangGraph] Last message:', lastMessage?.type, 
+							'content:', typeof (lastMessage as { content?: unknown }).content,
+							'tool_calls:', (lastMessage as { tool_calls?: unknown[] }).tool_calls?.length || 0);
 						
 						// Check for tool calls (indicates interrupt)
 						if (lastMessage?.type === 'ai' && (lastMessage as { tool_calls?: unknown[] }).tool_calls?.length) {
@@ -248,35 +262,43 @@ export async function submitMessage(
 			}
 			
 			console.log(`[LangGraph] Stream ended. Interrupted: ${interrupted}, Pending tools: ${pendingToolCalls.length}`);
+			console.log(`[LangGraph] Pending tool calls:`, pendingToolCalls.map(tc => ({ name: tc.name, args: tc.args })));
 			
-			// If no interrupt, we're done
-			if (!interrupted) {
-				console.log('[LangGraph] No more tool calls, completing');
-				break;
-			}
-			
-			// Check for Human-in-the-Loop interrupt by examining thread state
-			// HITL interrupts have action_requests and review_configs
+			// ALWAYS check for Human-in-the-Loop interrupt by examining thread state
+			// This is necessary because HITL interrupts may not show tool_calls in the
+			// streamed messages (the inner agent throws GraphInterrupt before returning)
+			console.log('[LangGraph] Checking thread state for HITL interrupt...');
 			try {
 				const threadState = await client.threads.getState(threadId);
+				console.log('[LangGraph] Thread state:', JSON.stringify(threadState, null, 2));
 				const tasks = (threadState as { tasks?: Array<{ id?: string; interrupts?: Array<{ value?: unknown }> }> }).tasks;
+				console.log('[LangGraph] Tasks:', tasks?.length ?? 0);
 				
 				if (tasks && tasks.length > 0) {
 					const task = tasks[0];
 					const interrupts = task.interrupts;
+					console.log('[LangGraph] Task interrupts:', interrupts?.length ?? 0);
 					
 					if (interrupts && interrupts.length > 0) {
 						const interruptData = interrupts[0];
 						const interruptValue = interruptData.value;
 						const interruptId = (interruptData as { id?: string }).id || task.id || '';
+						console.log('[LangGraph] Interrupt value:', JSON.stringify(interruptValue, null, 2));
+						console.log('[LangGraph] Interrupt ID:', interruptId);
 						
 						// Check if this is a HITL interrupt (has action_requests and review_configs)
-						if (isHITLInterrupt(interruptValue)) {
+						const isHITL = isHITLInterrupt(interruptValue);
+						console.log('[LangGraph] Is HITL interrupt?', isHITL);
+						
+						if (isHITL) {
 							console.log('[LangGraph] HITL interrupt detected:', 
 								interruptValue.action_requests.map(a => a.name));
 							
 							// Check if all actions should be auto-approved (read-only tools)
-							if (shouldAutoApprove(interruptValue)) {
+							const autoApprove = shouldAutoApprove(interruptValue);
+							console.log('[LangGraph] Should auto-approve?', autoApprove);
+							
+							if (autoApprove) {
 								console.log('[LangGraph] Auto-approving read-only tools:', 
 									interruptValue.action_requests.map(a => a.name));
 								const autoResponse = createAutoApproveResponse(interruptValue);
@@ -338,22 +360,37 @@ export async function submitMessage(
 							}
 							
 							// Not auto-approvable - notify UI and return
+							console.log('[LangGraph] HITL interrupt requires human approval - notifying UI');
 							callbacks.onHITLInterrupt?.(interruptValue, interruptId);
 							return { threadId, messages };
+						} else {
+							console.log('[LangGraph] Interrupt value is not a HITL format');
 						}
+					} else {
+						console.log('[LangGraph] No interrupts found in task');
 					}
+				} else {
+					console.log('[LangGraph] No tasks found in thread state');
 				}
 			} catch (stateError) {
 				console.warn('[LangGraph] Could not check thread state for HITL:', stateError);
 			}
 			
+			// If no tool calls detected in messages, we're done
+			// (HITL interrupt would have been handled above if present)
+			if (!interrupted && pendingToolCalls.length === 0) {
+				console.log('[LangGraph] No tool calls and no HITL interrupt - completing');
+				break;
+			}
+			
 			// Not a HITL interrupt - execute tools locally (automatic tool execution)
+			console.log('[LangGraph] No HITL interrupt detected, falling through to local tool execution');
 			if (!projectId) {
 				console.warn('[LangGraph] Tool calls require projectId but none provided');
 			}
 			
 			callbacks.onToolExecuting?.(pendingToolCalls);
-			console.log('[LangGraph] Executing tools locally...');
+			console.log('[LangGraph] Executing tools locally:', pendingToolCalls.map(tc => tc.name));
 			
 			const toolResults = await Promise.all(
 				pendingToolCalls.map(tc => globalToolExecutor(tc, projectId))
@@ -401,6 +438,13 @@ export async function submitMessage(
 			console.warn(`[LangGraph] Reached max tool iterations (${maxIterations})`);
 		}
 		
+		console.log('[LangGraph] Calling onComplete with', messages.length, 'messages');
+		console.log('[LangGraph] Final messages:', messages.map(m => ({ 
+			type: m.type, 
+			content: typeof (m as { content?: unknown }).content === 'string' 
+				? (m as { content: string }).content.substring(0, 100) + '...' 
+				: typeof (m as { content?: unknown }).content 
+		})));
 		callbacks.onComplete?.(messages);
 		
 		return { threadId, messages };
@@ -536,6 +580,34 @@ export async function resumeWithHITLDecisions(
 					}
 				}
 			}
+		}
+		
+		// After stream ends, check thread state for HITL interrupts
+		// The backend may have triggered another interrupt during the resume
+		console.log('[LangGraph] Resume stream ended, checking for HITL interrupts...');
+		try {
+			const threadState = await client.threads.getState(threadId);
+			const tasks = (threadState as { tasks?: Array<{ id?: string; interrupts?: Array<{ value?: unknown; id?: string }> }> }).tasks;
+			
+			if (tasks && tasks.length > 0) {
+				const task = tasks[0];
+				const interrupts = task.interrupts;
+				
+				if (interrupts && interrupts.length > 0) {
+					const interruptData = interrupts[0];
+					const interruptValue = interruptData.value;
+					const newInterruptId = (interruptData as { id?: string }).id || task.id || '';
+					
+					if (isHITLInterrupt(interruptValue)) {
+						console.log('[LangGraph] Another HITL interrupt detected after resume:', 
+							interruptValue.action_requests.map(a => a.name));
+						callbacks.onHITLInterrupt?.(interruptValue, newInterruptId);
+						return { threadId, messages };
+					}
+				}
+			}
+		} catch (stateError) {
+			console.warn('[LangGraph] Could not check thread state after resume:', stateError);
 		}
 		
 		callbacks.onComplete?.(messages);
