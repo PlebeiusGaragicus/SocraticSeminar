@@ -223,7 +223,7 @@
     <div class="flex items-center gap-2">
       <MessageCircle class="h-4 w-4 text-blue-400" />
       <span class="text-sm font-medium text-zinc-300 truncate max-w-[200px]">
-        {currentThread?.title ?? 'Select a thread'}
+        {currentThread?.title ?? ''}
       </span>
     </div>
     <AgentPicker />
@@ -349,7 +349,7 @@
     
     <div class="flex gap-2">
       <Textarea
-        placeholder={awaitingHumanResponse ? "Respond to the agent above..." : currentThread ? "Type your message..." : "Select a thread first..."}
+        placeholder={awaitingHumanResponse ? "Respond to the agent above..." : currentThread ? "Type your message..." : "Create a new thread to start chatting..."}
         bind:value={messageInput}
         onkeydown={handleKeydown}
         disabled={isStreaming || awaitingHumanResponse || !currentThread || !isWalletReady || backendAvailable === false}

@@ -311,13 +311,13 @@ export async function submitMessage(
 								// Read-only tools - execute immediately
 								console.log('[LangGraph] Auto-executing read-only client tools');
 								
-								if (!toolExecutor) {
+								if (!globalToolExecutor || globalToolExecutor === defaultToolExecutor) {
 									throw new Error('Tool executor not set. Call setToolExecutor first.');
 								}
 								
 								const toolResults = await Promise.all(
 									interruptValue.tool_calls.map(async (tc) => {
-										const result = await toolExecutor(
+										const result = await globalToolExecutor(
 											{ id: tc.id, name: tc.name, args: tc.args },
 											projectId || ''
 										);
@@ -370,21 +370,14 @@ export async function submitMessage(
 									}
 								}
 								
-								// Check for more tool calls
-								const lastMsg = messages[messages.length - 1];
-								if (lastMsg?.type === 'ai' && (lastMsg as { tool_calls?: unknown[] }).tool_calls?.length) {
-									pendingToolCalls = ((lastMsg as { tool_calls: Array<{ id: string; name: string; args?: Record<string, unknown> }> }).tool_calls).map((tc) => ({
-										id: tc.id,
-										name: tc.name,
-										args: tc.args || {},
-									}));
-									interrupted = true;
-									callbacks.onToolCall?.(pendingToolCalls);
-									continue;
-								} else {
-									interrupted = false;
-									break;
-								}
+								// After resume, continue loop to check for more interrupts
+								// Set currentInput to null so next iteration doesn't re-send original message
+								currentInput = null;
+								
+								// Continue to the next iteration which will check thread state
+								// for any pending interrupts (including subsequent tool calls like search_files)
+								console.log('[LangGraph] Client tool auto-approve complete, continuing to check for more interrupts');
+								continue;
 							} else {
 								// Write tools - need approval first, notify UI with client tool interrupt
 								console.log('[LangGraph] Client tool requires approval - notifying UI');
@@ -447,23 +440,14 @@ export async function submitMessage(
 									}
 								}
 								
-								// After resume stream - check if we're done or need another iteration
-								const lastMsg = messages[messages.length - 1];
-								if (lastMsg?.type === 'ai' && (lastMsg as { tool_calls?: unknown[] }).tool_calls?.length) {
-									// More tool calls - continue the loop
-									pendingToolCalls = ((lastMsg as { tool_calls: Array<{ id: string; name: string; args?: Record<string, unknown> }> }).tool_calls).map((tc) => ({
-										id: tc.id,
-										name: tc.name,
-										args: tc.args || {},
-									}));
-									interrupted = true;
-									callbacks.onToolCall?.(pendingToolCalls);
-									continue;
-								} else {
-									// No more tool calls - we're done
-									interrupted = false;
-									break;
-								}
+								// After resume, continue loop to check for more interrupts
+								// Set currentInput to null so next iteration doesn't re-send original message
+								currentInput = null;
+								
+								// Continue to the next iteration which will check thread state
+								// for any pending interrupts
+								console.log('[LangGraph] HITL auto-approve complete, continuing to check for more interrupts');
+								continue;
 							}
 							
 							// Not auto-approvable - notify UI and return
