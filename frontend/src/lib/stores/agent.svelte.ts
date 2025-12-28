@@ -1061,6 +1061,14 @@ function resetStream(): void {
   langGraphMessages = [];
 }
 
+/**
+ * Clear all state when switching projects.
+ * This prevents stale thread references and clears any in-progress operations.
+ */
+function clearProjectState(): void {
+  resetStream();
+}
+
 // =============================================================================
 // EXPORTS
 // =============================================================================
@@ -1114,4 +1122,7 @@ export const agentStore = {
   
   // Clarification actions
   resumeWithClarificationResponse,
+  
+  // Project state
+  clearProjectState,
 };

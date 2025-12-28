@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Navbar, ProjectDashboard, WorkspaceLayout } from '$lib/components/index.js';
-  import { projectStore, artifactStore } from '$lib/stores/index.js';
+  import { projectStore, artifactStore, threadStore, agentStore } from '$lib/stores/index.js';
   import { cyphertap } from 'cyphertap';
   import type { Project } from '$lib/stores/types.js';
   import { onMount } from 'svelte';
@@ -32,11 +32,21 @@
   });
 
   function handleProjectSelect(project: Project) {
+    // Clear previous project's state before switching
+    threadStore.clearProjectState();
+    artifactStore.clearProjectState();
+    agentStore.clearProjectState();
+    
     projectStore.selectProject(project.id);
     currentView = 'workspace';
   }
 
   function handleBackToProjects() {
+    // Clear project-scoped state when going back to dashboard
+    threadStore.clearProjectState();
+    artifactStore.clearProjectState();
+    agentStore.clearProjectState();
+    
     projectStore.selectProject(null);
     currentView = 'dashboard';
   }

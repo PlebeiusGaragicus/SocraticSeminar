@@ -3,7 +3,7 @@
   import FileText from '@lucide/svelte/icons/file-text';
   import MessageSquare from '@lucide/svelte/icons/message-square';
   import { Button } from './ui/index.js';
-  import { projectStore, threadStore, artifactStore } from '$lib/stores/index.js';
+  import { projectStore, threadStore, artifactStore, agentStore } from '$lib/stores/index.js';
 
   interface Props {
     userNpub?: string | null;
@@ -23,9 +23,11 @@
 
   function handleSelectProject(id: string) {
     projectStore.selectProject(id);
-    // Clear thread selection when switching projects
-    threadStore.selectThread(null);
-    artifactStore.selectArtifact(null);
+    // Clear all project-scoped state when switching projects
+    // This ensures open tabs, threads, and agent state don't persist across projects
+    threadStore.clearProjectState();
+    artifactStore.clearProjectState();
+    agentStore.clearProjectState();
   }
 
   // Get threads and artifacts for current project

@@ -238,6 +238,16 @@ function reset(): void {
   pendingChanges = null;
 }
 
+/**
+ * Clear project-specific state when switching projects.
+ * Keeps global state but resets selections and open tabs.
+ */
+function clearProjectState(): void {
+  currentArtifactId = null;
+  openArtifactIds = [];
+  pendingChanges = null;
+}
+
 // Export reactive getters and actions
 export const artifactStore = {
   get artifacts() { return artifacts; },
@@ -260,5 +270,6 @@ export const artifactStore = {
   setPendingChanges,
   acceptPendingChanges,
   rejectPendingChanges,
-  reset
+  reset,
+  clearProjectState
 };

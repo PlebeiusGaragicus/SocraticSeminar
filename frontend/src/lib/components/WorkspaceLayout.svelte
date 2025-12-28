@@ -2,7 +2,7 @@
   import Sidebar from './Sidebar.svelte';
   import ChatPanel from './ChatPanel.svelte';
   import TabbedEditor from './TabbedEditor.svelte';
-  import { artifactStore, threadStore, projectStore } from '$lib/stores/index.js';
+  import { artifactStore, threadStore, projectStore, agentStore } from '$lib/stores/index.js';
   import type { Artifact, Thread } from '$lib/stores/types.js';
   import { onMount } from 'svelte';
 
@@ -95,18 +95,30 @@
     document.removeEventListener('mouseup', handleChatMouseUp);
   }
 
+  // Track previous project ID to detect project changes
+  let previousProjectId: string | null = null;
+
   // Load artifacts and threads when project changes
   onMount(() => {
     if (currentProjectId) {
       artifactStore.loadProjectArtifacts(currentProjectId);
       threadStore.loadProjectThreads(currentProjectId);
+      previousProjectId = currentProjectId;
     }
   });
 
   $effect(() => {
     if (currentProjectId) {
+      // If project changed, clear project-scoped state first
+      if (previousProjectId && previousProjectId !== currentProjectId) {
+        artifactStore.clearProjectState();
+        threadStore.clearProjectState();
+        agentStore.clearProjectState();
+      }
+      
       artifactStore.loadProjectArtifacts(currentProjectId);
       threadStore.loadProjectThreads(currentProjectId);
+      previousProjectId = currentProjectId;
     }
   });
 </script>

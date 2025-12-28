@@ -283,11 +283,14 @@ async function loadProjectThreads(projectId: string): Promise<void> {
   }
   
   // Ensure the currentThreadId is valid for this project
+  // If the current thread doesn't belong to this project, clear the selection
   const projectThreads = getProjectThreads(projectId);
   if (currentThreadId) {
     const isCurrentValid = projectThreads.some(t => t.id === currentThreadId);
     if (!isCurrentValid) {
-      currentThreadId = projectThreads[0]?.id ?? null;
+      // Don't auto-select - just clear the invalid selection
+      // User should explicitly select a thread for the new project
+      currentThreadId = null;
     }
   }
 }
@@ -298,6 +301,14 @@ function reset(): void {
   messagesVersion++;
   currentThreadId = null;
   isLoaded = false;
+}
+
+/**
+ * Clear project-specific state when switching projects.
+ * Clears the current thread selection.
+ */
+function clearProjectState(): void {
+  currentThreadId = null;
 }
 
 // Export reactive getters and actions
@@ -322,5 +333,6 @@ export const threadStore = {
   clearMessages,
   syncMessages,
   loadThreads,
-  reset
+  reset,
+  clearProjectState
 };
