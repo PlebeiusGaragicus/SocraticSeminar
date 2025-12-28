@@ -782,6 +782,101 @@ export async function getThreadMessages(threadId: string): Promise<Message[]> {
 }
 
 /**
+ * Thread state with interrupt information for resumption.
+ */
+export interface ThreadStateInfo {
+	messages: Message[];
+	hasInterrupt: boolean;
+	interruptType: 'clarification' | 'client_tool' | 'hitl' | 'payment' | null;
+	interruptId: string | null;
+	interruptData: ClarificationInterrupt | ClientToolInterrupt | HITLInterrupt | PaymentExhaustedInterrupt | null;
+}
+
+/**
+ * Get full thread state including any pending interrupts.
+ * Used for resuming threads after page refresh.
+ */
+export async function getThreadStateWithInterrupts(threadId: string): Promise<ThreadStateInfo> {
+	const client = getClient();
+	
+	try {
+		const threadState = await client.threads.getState(threadId);
+		const messages = (threadState.values as { messages?: Message[] })?.messages || [];
+		
+		// Check for pending interrupts
+		const tasks = (threadState as { tasks?: Array<{ id?: string; interrupts?: Array<{ value?: unknown; id?: string }> }> }).tasks;
+		
+		if (tasks && tasks.length > 0) {
+			const task = tasks[0];
+			const interrupts = task.interrupts;
+			
+			if (interrupts && interrupts.length > 0) {
+				const interruptData = interrupts[0];
+				const interruptValue = interruptData.value;
+				const interruptId = (interruptData as { id?: string }).id || task.id || '';
+				
+				// Check for clarification interrupt
+				if (isClarificationInterrupt(interruptValue)) {
+					return {
+						messages,
+						hasInterrupt: true,
+						interruptType: 'clarification',
+						interruptId,
+						interruptData: interruptValue,
+					};
+				}
+				
+				// Check for client tool interrupt
+				if (isClientToolInterrupt(interruptValue)) {
+					return {
+						messages,
+						hasInterrupt: true,
+						interruptType: 'client_tool',
+						interruptId,
+						interruptData: interruptValue,
+					};
+				}
+				
+				// Check for HITL interrupt
+				if (isHITLInterrupt(interruptValue)) {
+					return {
+						messages,
+						hasInterrupt: true,
+						interruptType: 'hitl',
+						interruptId,
+						interruptData: interruptValue,
+					};
+				}
+				
+				// Check for payment exhausted interrupt
+				if (isPaymentExhaustedInterrupt(interruptValue)) {
+					return {
+						messages,
+						hasInterrupt: true,
+						interruptType: 'payment',
+						interruptId,
+						interruptData: interruptValue,
+					};
+				}
+			}
+		}
+		
+		// No interrupt pending
+		return {
+			messages,
+			hasInterrupt: false,
+			interruptType: null,
+			interruptId: null,
+			interruptData: null,
+		};
+		
+	} catch (error) {
+		console.error('[LangGraph] Error getting thread state:', error);
+		throw error;
+	}
+}
+
+/**
  * Delete a thread.
  */
 export async function deleteThread(threadId: string): Promise<void> {

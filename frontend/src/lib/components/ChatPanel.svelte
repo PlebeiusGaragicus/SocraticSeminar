@@ -23,6 +23,10 @@
   let messagesContainer: HTMLDivElement | undefined = $state();
   let backendAvailable = $state<boolean | null>(null);
 
+  // Track if we've loaded state for the current thread
+  let loadedLangGraphThreadId = $state<string | null>(null);
+  let isLoadingThreadState = $state(false);
+
   // Check backend health on mount and load threads
   onMount(() => {
     checkHealth().then(available => {
@@ -31,6 +35,47 @@
     
     // Load threads from IndexedDB
     threadStore.loadFromStorage();
+  });
+
+  // Load LangGraph thread state when selecting a thread with langGraphThreadId
+  // This restores chat history and any pending interrupts (like clarification questions)
+  $effect(() => {
+    const thread = currentThread;
+    const langGraphThreadId = thread?.langGraphThreadId;
+    const localThreadId = thread?.id;
+    
+    // Only load if:
+    // 1. We have a thread with a langGraphThreadId
+    // 2. We haven't already loaded this thread's state
+    // 3. We're not currently streaming (don't interrupt active conversations)
+    // 4. Backend is available
+    if (
+      langGraphThreadId &&
+      localThreadId &&
+      langGraphThreadId !== loadedLangGraphThreadId &&
+      !isStreaming &&
+      !isLoadingThreadState &&
+      backendAvailable
+    ) {
+      console.log('[ChatPanel] Loading LangGraph state for thread:', langGraphThreadId);
+      isLoadingThreadState = true;
+      
+      agentStore.loadThreadState(langGraphThreadId, localThreadId)
+        .then((success) => {
+          if (success) {
+            loadedLangGraphThreadId = langGraphThreadId;
+            console.log('[ChatPanel] Thread state loaded successfully');
+          }
+        })
+        .finally(() => {
+          isLoadingThreadState = false;
+        });
+    }
+    
+    // Reset loaded thread ID when switching to a different thread
+    if (!langGraphThreadId && loadedLangGraphThreadId) {
+      loadedLangGraphThreadId = null;
+    }
   });
 
   // Reactive derivations from stores
@@ -195,6 +240,13 @@
           <Bot class="mx-auto h-12 w-12 mb-3 opacity-30" />
           <p class="text-sm">Select or create a thread to start chatting</p>
           <p class="text-xs text-zinc-700 mt-1">Use the sidebar on the left</p>
+        </div>
+      </div>
+    {:else if isLoadingThreadState}
+      <div class="flex h-full items-center justify-center text-zinc-600">
+        <div class="text-center">
+          <Loader2 class="mx-auto h-8 w-8 mb-3 animate-spin text-amber-500" />
+          <p class="text-sm">Loading conversation...</p>
         </div>
       </div>
     {:else if displayMessages.length === 0 && !isStreaming}

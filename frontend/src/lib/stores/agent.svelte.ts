@@ -36,7 +36,9 @@ import {
   getClient,
   getPaymentState,
   checkForUnclaimedRefund,
-  type Message as LangGraphMessage
+  getThreadStateWithInterrupts,
+  type Message as LangGraphMessage,
+  type ThreadStateInfo
 } from '$lib/services/langgraph.js';
 import { executeToolCall, executeToolCalls } from '$lib/services/tool-executor.js';
 
@@ -1070,6 +1072,90 @@ function clearProjectState(): void {
 }
 
 // =============================================================================
+// THREAD STATE RESTORATION
+// =============================================================================
+
+/**
+ * Load and restore thread state from the LangGraph server.
+ * This is called when selecting a thread that has a langGraphThreadId,
+ * especially after page refresh to restore pending interrupts.
+ * 
+ * @param langGraphThreadId - The LangGraph thread ID to load
+ * @param localThreadId - The local thread ID for message syncing
+ * @returns True if state was loaded successfully
+ */
+async function loadThreadState(
+  langGraphThreadId: string,
+  localThreadId: string
+): Promise<boolean> {
+  console.log('[Agent] Loading thread state for:', langGraphThreadId);
+  
+  try {
+    const stateInfo = await getThreadStateWithInterrupts(langGraphThreadId);
+    
+    // Update the langGraphMessages for display
+    langGraphMessages = [...stateInfo.messages];
+    threadId = langGraphThreadId;
+    currentLocalThreadId = localThreadId;
+    
+    // Sync messages to local store
+    if (stateInfo.messages.length > 0) {
+      const convertedMessages = convertLangGraphMessages(stateInfo.messages, localThreadId);
+      threadStore.syncMessages(localThreadId, convertedMessages);
+      console.log('[Agent] Synced', convertedMessages.length, 'messages from LangGraph');
+    }
+    
+    // Restore interrupt state if there's a pending interrupt
+    if (stateInfo.hasInterrupt && stateInfo.interruptData && stateInfo.interruptId) {
+      console.log('[Agent] Restoring interrupt:', stateInfo.interruptType);
+      
+      hitlInterruptId = stateInfo.interruptId;
+      awaitingHumanResponse = true;
+      isInterrupted = true;
+      isStreaming = false;
+      
+      switch (stateInfo.interruptType) {
+        case 'clarification':
+          clarificationInterrupt = stateInfo.interruptData as ClarificationInterrupt;
+          console.log('[Agent] Restored clarification interrupt:', clarificationInterrupt.tool);
+          break;
+          
+        case 'client_tool':
+          clientToolInterrupt = stateInfo.interruptData as ClientToolInterrupt;
+          console.log('[Agent] Restored client tool interrupt');
+          break;
+          
+        case 'hitl':
+          hitlInterrupt = stateInfo.interruptData as HITLInterrupt;
+          console.log('[Agent] Restored HITL interrupt');
+          break;
+          
+        case 'payment':
+          paymentInterrupt = stateInfo.interruptData as PaymentExhaustedInterrupt;
+          console.log('[Agent] Restored payment interrupt');
+          break;
+      }
+    } else {
+      // No interrupt - ensure interrupt state is clear
+      hitlInterrupt = null;
+      hitlInterruptId = null;
+      clarificationInterrupt = null;
+      clientToolInterrupt = null;
+      paymentInterrupt = null;
+      awaitingHumanResponse = false;
+      isInterrupted = false;
+    }
+    
+    return true;
+    
+  } catch (err) {
+    console.error('[Agent] Failed to load thread state:', err);
+    error = err instanceof Error ? err.message : 'Failed to load thread state';
+    return false;
+  }
+}
+
+// =============================================================================
 // EXPORTS
 // =============================================================================
 
@@ -1125,4 +1211,7 @@ export const agentStore = {
   
   // Project state
   clearProjectState,
+  
+  // Thread state restoration
+  loadThreadState,
 };
