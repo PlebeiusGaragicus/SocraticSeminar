@@ -8,6 +8,7 @@
   import PanelLeft from '@lucide/svelte/icons/panel-left';
   import { artifactStore, threadStore, projectStore, agentStore } from '$lib/stores/index.js';
   import type { Artifact, Thread } from '$lib/stores/types.js';
+  import ScratchFilesPanel from './ScratchFilesPanel.svelte';
 
   interface Props {
     onSelectFile: (artifact: Artifact) => void;
@@ -47,7 +48,9 @@
     currentProjectId ? artifactStore.getProjectArtifacts(currentProjectId) : []
   );
   const threads = $derived(
-    currentProjectId ? threadStore.getProjectThreads(currentProjectId) : []
+    currentProjectId 
+      ? threadStore.getProjectThreads(currentProjectId).sort((a, b) => b.updatedAt - a.updatedAt) 
+      : []
   );
 
   // Check if there's already an empty thread (no messages)
@@ -317,6 +320,9 @@
           {/each}
         {/if}
       </div>
+
+      <!-- Scratch Files Panel - Agent's working memory (read-only) -->
+      <ScratchFilesPanel />
 
       <!-- Footer -->
       <div class="border-t border-zinc-800 px-3 py-2 text-xs text-zinc-600">

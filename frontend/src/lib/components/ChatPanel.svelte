@@ -19,6 +19,7 @@
   import { Button, Textarea } from './ui/index.js';
   import AgentPicker from './AgentPicker.svelte';
   import ToolCallDisplay from './ToolCallDisplay.svelte';
+  import TodoStatusPopover from './TodoStatusPopover.svelte';
   import { threadStore, agentStore, projectStore } from '$lib/stores/index.js';
   import { cyphertap } from 'cyphertap';
   import type { ToolCallWithStatus, ToolCall, ClarificationResponse, HITLActionRequest, HITLReviewConfig } from '$lib/stores/types.js';
@@ -502,15 +503,12 @@
 </script>
 
 <div class="flex h-full flex-col bg-zinc-900/30">
-  <!-- Header with Agent Picker -->
-  <div class="flex items-center justify-between border-b border-zinc-800 px-4 py-2">
+  <!-- Header with Agent Picker and Todo Status -->
+  <div class="flex items-center justify-end border-b border-zinc-800 px-4 py-2">
     <div class="flex items-center gap-2">
-      <MessageCircle class="h-4 w-4 text-blue-400" />
-      <span class="text-sm font-medium text-zinc-300 truncate max-w-[200px]">
-        {currentThread?.title ?? ''}
-      </span>
+      <AgentPicker />
+      <TodoStatusPopover />
     </div>
-    <AgentPicker />
   </div>
 
   <!-- Messages -->

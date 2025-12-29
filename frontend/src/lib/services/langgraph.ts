@@ -55,6 +55,21 @@ export function getClient(apiUrl?: string): Client {
 // TYPES
 // =============================================================================
 
+// Scratch file from agent state
+export interface ScratchFile {
+	path: string;
+	content: string[];
+	created_at?: string;
+	modified_at?: string;
+}
+
+// Todo item from agent state
+export interface TodoItem {
+	id: string;
+	content: string;
+	status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
+}
+
 export interface StreamCallbacks {
 	onToken?: (token: string) => void;
 	onMessage?: (message: Message) => void;
@@ -73,6 +88,11 @@ export interface StreamCallbacks {
 	onClientToolInterrupt?: (interrupt: ClientToolInterrupt, interruptId: string) => void;
 	// Clarification interrupt (ask_user / ask_choices)
 	onClarificationInterrupt?: (interrupt: ClarificationInterrupt, interruptId: string) => void;
+	// Agent state sync (scratch files, todos)
+	onScratchFilesSync?: (files: Record<string, ScratchFile>) => void;
+	onTodosSync?: (todos: TodoItem[]) => void;
+	// Real-time node updates (requires 'updates' stream mode)
+	onNodeUpdate?: (nodeName: string, update: Record<string, unknown>) => void;
 }
 
 export interface SubmitOptions {
@@ -184,15 +204,23 @@ export async function submitMessage(
 			// Stream the response
 			const stream = client.runs.stream(threadId, assistantId, {
 				input: currentInput,
-				streamMode: options.streamMode || ['messages', 'values'],
+				streamMode: options.streamMode || ['messages', 'values', 'updates'],
 			});
 			
 			for await (const event of stream) {
 				// Log all events for debugging
-				console.log('[LangGraph] Stream event:', event.event, 
-					event.event === 'values' ? '(state snapshot)' : 
-					event.event === 'messages/partial' ? '(streaming chunk)' :
-					event.event === 'messages/complete' ? '(message complete)' : '');
+				const eventType = event.event;
+				console.log('[LangGraph] Stream event:', eventType, 
+					eventType === 'values' ? '(state snapshot)' : 
+					eventType === 'messages/partial' ? '(streaming chunk)' :
+					eventType === 'messages/complete' ? '(message complete)' :
+					eventType === 'updates' ? '(node updates)' : 
+					`(${typeof event.data})`);
+				
+				// Extra logging for updates events to debug todos
+				if (eventType === 'updates') {
+					console.log('[LangGraph] UPDATES event data:', JSON.stringify(event.data, null, 2).substring(0, 500));
+				}
 				
 				// Handle streaming message chunks (incremental AI content)
 				if (event.event === 'messages/partial') {
@@ -232,10 +260,18 @@ export async function submitMessage(
 				
 				// Handle values events (full state snapshots)
 				if (event.event === 'values') {
-					const data = event.data as { messages?: Message[] };
+					const data = event.data as { 
+						messages?: Message[]; 
+						scratch_files?: Record<string, ScratchFile>;
+						todos?: TodoItem[];
+						[key: string]: unknown;
+					};
+					// Log all top-level keys to see what's in the state
+					const stateKeys = Object.keys(data).filter(k => k !== 'messages');
+					console.log('[LangGraph] Values event - state keys (excluding messages):', stateKeys);
 					console.log('[LangGraph] Values event data:', 
 						data.messages ? `${data.messages.length} messages` : 'no messages',
-						data.messages?.map(m => ({ type: m.type, hasContent: !!(m as { content?: string }).content, hasToolCalls: !!((m as { tool_calls?: unknown[] }).tool_calls?.length) }))
+						'todos:', data.todos ? data.todos.length : 'none'
 					);
 					
 					if (data.messages) {
@@ -245,6 +281,7 @@ export async function submitMessage(
 						// Sync full message state to UI
 						callbacks.onMessagesSync?.(messages);
 						console.log('[LangGraph] Messages synced to UI:', messages.length);
+						console.log('[LangGraph] Messages data:', JSON.stringify(data, null, 2));
 						
 						// Get the latest message
 						const lastMessage = messages[messages.length - 1];
@@ -267,6 +304,55 @@ export async function submitMessage(
 						// Reset content tracker for next iteration
 						if (lastMessage?.type === 'ai') {
 							currentContent = typeof lastMessage.content === 'string' ? lastMessage.content : '';
+						}
+					}
+					
+					// Sync scratch files to UI (agent's working memory - visible to user)
+					if (data.scratch_files && Object.keys(data.scratch_files).length > 0) {
+						console.log('[LangGraph] Scratch files updated:', Object.keys(data.scratch_files).length, 'files');
+						callbacks.onScratchFilesSync?.(data.scratch_files);
+					}
+					
+					// Sync todos to UI - check multiple possible field names
+					// TodoListMiddleware might use 'todos' or 'todo_list'
+					const todosData = data.todos || (data as Record<string, unknown>).todo_list as TodoItem[] | undefined;
+					if (todosData && Array.isArray(todosData) && todosData.length > 0) {
+						console.log('[LangGraph] Todos updated from values:', todosData.length, 'items');
+						console.log('[LangGraph] Todo statuses:', todosData.map(t => t.status));
+						callbacks.onTodosSync?.(todosData);
+					}
+				}
+				
+				// Handle updates events (real-time node-by-node updates)
+				// This fires when each node in the graph completes, showing intermediate state
+				// Note: Todos come from the "tools" node after write_todos executes
+				if (event.event === 'updates') {
+					const updateData = event.data as Record<string, unknown>;
+					console.log('[LangGraph] Updates event - nodes:', Object.keys(updateData));
+					console.log('[LangGraph] Updates event data:', JSON.stringify(updateData, null, 2));
+					
+					// Each key is a node name, value is the update from that node
+					for (const [nodeName, nodeUpdate] of Object.entries(updateData)) {
+						if (nodeUpdate && typeof nodeUpdate === 'object') {
+							const update = nodeUpdate as Record<string, unknown>;
+							console.log(`[LangGraph] Update from node "${nodeName}":`, Object.keys(update));
+							
+							callbacks.onNodeUpdate?.(nodeName, update);
+							
+							// Extract scratch_files from any node
+							if (update.scratch_files && typeof update.scratch_files === 'object') {
+								console.log('[LangGraph] Scratch files found in update');
+								callbacks.onScratchFilesSync?.(update.scratch_files as Record<string, ScratchFile>);
+							}
+							
+							// Extract todos from any node (typically comes from "tools" node)
+							// Check both 'todos' and 'todo_list' field names
+							const nodeTodos = update.todos || update.todo_list;
+							if (Array.isArray(nodeTodos)) {
+								console.log('[LangGraph] Todos found in update from node:', nodeName, 'count:', nodeTodos.length);
+								console.log('[LangGraph] Todo items:', nodeTodos.map(t => ({ content: (t as TodoItem).content?.substring(0, 30), status: (t as TodoItem).status })));
+								callbacks.onTodosSync?.(nodeTodos as TodoItem[]);
+							}
 						}
 					}
 				}
@@ -341,7 +427,7 @@ export async function submitMessage(
 								const resumeStream = client.runs.stream(threadId, assistantId, {
 									input: null,
 									command: { resume: resumePayload },
-									streamMode: options.streamMode || ['messages', 'values'],
+									streamMode: options.streamMode || ['messages', 'values', 'updates'],
 								});
 								
 								for await (const resumeEvent of resumeStream) {
@@ -361,11 +447,36 @@ export async function submitMessage(
 									}
 									
 									if (resumeEvent.event === 'values') {
-										const data = resumeEvent.data as { messages?: Message[] };
+										const data = resumeEvent.data as { messages?: Message[]; todos?: TodoItem[]; scratch_files?: Record<string, ScratchFile> };
+										console.log('[LangGraph] resumeEvent.event === "values" - Values event data:', JSON.stringify(data, null, 2));
 										if (data.messages) {
 											messages.length = 0;
 											messages.push(...data.messages);
 											callbacks.onMessagesSync?.(messages);
+										}
+										// Sync todos from inner resume stream
+										if (data.todos && Array.isArray(data.todos) && data.todos.length > 0) {
+											console.log('[LangGraph] Todos from client tool resume:', data.todos.length);
+											callbacks.onTodosSync?.(data.todos);
+										}
+										// Sync scratch files from inner resume stream
+										if (data.scratch_files && Object.keys(data.scratch_files).length > 0) {
+											callbacks.onScratchFilesSync?.(data.scratch_files);
+										}
+									}
+									
+									if (resumeEvent.event === 'updates') {
+										console.log('[LangGraph] resumeEvent.event === "updates" - Updates event data:', JSON.stringify(resumeEvent.data, null, 2));
+										const updateData = resumeEvent.data as Record<string, unknown>;
+										for (const [nodeName, nodeUpdate] of Object.entries(updateData)) {
+											if (nodeUpdate && typeof nodeUpdate === 'object') {
+												const update = nodeUpdate as Record<string, unknown>;
+												callbacks.onNodeUpdate?.(nodeName, update);
+												if (Array.isArray(update.todos)) {
+													console.log('[LangGraph] Todos from client tool resume update:', update.todos.length);
+													callbacks.onTodosSync?.(update.todos as TodoItem[]);
+												}
+											}
 										}
 									}
 								}
@@ -410,7 +521,7 @@ export async function submitMessage(
 								const resumeStream = client.runs.stream(threadId, assistantId, {
 									input: null,
 									command: { resume: resumePayload },
-									streamMode: options.streamMode || ['messages', 'values'],
+									streamMode: options.streamMode || ['messages', 'values', 'updates'],
 								});
 								
 								// Process the resume stream
@@ -431,11 +542,34 @@ export async function submitMessage(
 									}
 									
 									if (resumeEvent.event === 'values') {
-										const data = resumeEvent.data as { messages?: Message[] };
+										const data = resumeEvent.data as { messages?: Message[]; todos?: TodoItem[]; scratch_files?: Record<string, ScratchFile> };
 										if (data.messages) {
 											messages.length = 0;
 											messages.push(...data.messages);
 											callbacks.onMessagesSync?.(messages);
+										}
+										// Sync todos from inner resume stream
+										if (data.todos && Array.isArray(data.todos) && data.todos.length > 0) {
+											console.log('[LangGraph] Todos from HITL resume:', data.todos.length);
+											callbacks.onTodosSync?.(data.todos);
+										}
+										// Sync scratch files from inner resume stream
+										if (data.scratch_files && Object.keys(data.scratch_files).length > 0) {
+											callbacks.onScratchFilesSync?.(data.scratch_files);
+										}
+									}
+									
+									if (resumeEvent.event === 'updates') {
+										const updateData = resumeEvent.data as Record<string, unknown>;
+										for (const [nodeName, nodeUpdate] of Object.entries(updateData)) {
+											if (nodeUpdate && typeof nodeUpdate === 'object') {
+												const update = nodeUpdate as Record<string, unknown>;
+												callbacks.onNodeUpdate?.(nodeName, update);
+												if (Array.isArray(update.todos)) {
+													console.log('[LangGraph] Todos from HITL resume update:', update.todos.length);
+													callbacks.onTodosSync?.(update.todos as TodoItem[]);
+												}
+											}
 										}
 									}
 								}
@@ -539,6 +673,19 @@ export async function submitMessage(
 			console.warn(`[LangGraph] Reached max tool iterations (${maxIterations})`);
 		}
 		
+		// Fetch final todos from thread state before completing
+		try {
+			const finalState = await client.threads.getState(threadId);
+			const values = finalState.values as Record<string, unknown>;
+			const finalTodos = values.todos || values.todo_list;
+			if (Array.isArray(finalTodos) && finalTodos.length > 0) {
+				console.log('[LangGraph] Final todos from thread state (submitMessage):', finalTodos.length);
+				callbacks.onTodosSync?.(finalTodos as TodoItem[]);
+			}
+		} catch (fetchError) {
+			console.warn('[LangGraph] Could not fetch final todos:', fetchError);
+		}
+		
 		console.log('[LangGraph] Calling onComplete with', messages.length, 'messages');
 		console.log('[LangGraph] Final messages:', messages.map(m => ({ 
 			type: m.type, 
@@ -631,7 +778,7 @@ export async function resumeWithHITLDecisions(
 			command: {
 				resume: resumePayload,
 			},
-			streamMode: ['messages', 'values'],
+			streamMode: ['messages', 'values', 'updates'],
 		});
 		
 		for await (const event of stream) {
@@ -662,7 +809,7 @@ export async function resumeWithHITLDecisions(
 			
 			// Handle values events (full state snapshots)
 			if (event.event === 'values') {
-				const data = event.data as { messages?: Message[] };
+				const data = event.data as { messages?: Message[]; todos?: TodoItem[]; scratch_files?: Record<string, ScratchFile> };
 				
 				if (data.messages) {
 					messages.length = 0;
@@ -678,6 +825,30 @@ export async function resumeWithHITLDecisions(
 							args: tc.args || {},
 						}));
 						callbacks.onToolCall?.(toolCalls);
+					}
+				}
+				// Extract todos from values
+				if (data.todos && Array.isArray(data.todos)) {
+					console.log('[LangGraph] Todos from HITL resume values:', data.todos.length);
+					callbacks.onTodosSync?.(data.todos);
+				}
+				// Extract scratch files from values
+				if (data.scratch_files && Object.keys(data.scratch_files).length > 0) {
+					callbacks.onScratchFilesSync?.(data.scratch_files);
+				}
+			}
+			
+			// Handle updates events for real-time todo updates
+			if (event.event === 'updates') {
+				const updateData = event.data as Record<string, unknown>;
+				for (const [nodeName, nodeUpdate] of Object.entries(updateData)) {
+					if (nodeUpdate && typeof nodeUpdate === 'object') {
+						const update = nodeUpdate as Record<string, unknown>;
+						callbacks.onNodeUpdate?.(nodeName, update);
+						if (Array.isArray(update.todos)) {
+							console.log('[LangGraph] Todos from HITL resume update:', update.todos.length);
+							callbacks.onTodosSync?.(update.todos as TodoItem[]);
+						}
 					}
 				}
 			}
@@ -726,6 +897,19 @@ export async function resumeWithHITLDecisions(
 			console.warn('[LangGraph] Could not check thread state after resume:', stateError);
 		}
 		
+		// Fetch final todos from thread state before completing
+		try {
+			const finalState = await client.threads.getState(threadId);
+			const values = finalState.values as Record<string, unknown>;
+			const finalTodos = values.todos || values.todo_list;
+			if (Array.isArray(finalTodos) && finalTodos.length > 0) {
+				console.log('[LangGraph] Final todos from thread state (HITL resume):', finalTodos.length);
+				callbacks.onTodosSync?.(finalTodos as TodoItem[]);
+			}
+		} catch (fetchError) {
+			console.warn('[LangGraph] Could not fetch final todos:', fetchError);
+		}
+		
 		callbacks.onComplete?.(messages);
 		return { threadId, messages };
 		
@@ -763,6 +947,51 @@ export async function getThreadMessages(threadId: string): Promise<Message[]> {
 	const client = getClient();
 	const state = await client.threads.getState(threadId);
 	return (state.values as { messages?: Message[] })?.messages || [];
+}
+
+/**
+ * Debug function to get full thread state and log all fields.
+ * Used to understand what's in the state after a run.
+ */
+export async function debugGetThreadState(threadId: string): Promise<Record<string, unknown>> {
+	const client = getClient();
+	const state = await client.threads.getState(threadId);
+	const values = state.values as Record<string, unknown>;
+	
+	// Log all keys in the state
+	console.log('[LangGraph DEBUG] Thread state keys:', Object.keys(values));
+	
+	// Log non-message fields
+	for (const [key, value] of Object.entries(values)) {
+		if (key !== 'messages') {
+			console.log(`[LangGraph DEBUG] State field "${key}":`, 
+				Array.isArray(value) ? `Array(${value.length})` : typeof value,
+				Array.isArray(value) && value.length > 0 ? value.slice(0, 2) : value
+			);
+		}
+	}
+	
+	return values;
+}
+
+/**
+ * Get todos from thread state.
+ */
+export async function getThreadTodos(threadId: string): Promise<TodoItem[]> {
+	const client = getClient();
+	const state = await client.threads.getState(threadId);
+	const values = state.values as Record<string, unknown>;
+	
+	// Try different possible field names
+	const todos = values.todos || values.todo_list || values.todoList || values.tasks;
+	
+	if (Array.isArray(todos)) {
+		console.log('[LangGraph] Got todos from thread state:', todos.length);
+		return todos as TodoItem[];
+	}
+	
+	console.log('[LangGraph] No todos found in thread state. Available keys:', Object.keys(values));
+	return [];
 }
 
 /**
@@ -984,7 +1213,7 @@ export async function resumeWithPayment(
 		const stream = client.runs.stream(threadId, assistantId, {
 			input: null,
 			command: { resume: resumePayload },
-			streamMode: ['messages', 'values'],
+			streamMode: ['messages', 'values', 'updates'],
 		});
 		
 		for await (const event of stream) {
@@ -1003,11 +1232,34 @@ export async function resumeWithPayment(
 			}
 			
 			if (event.event === 'values') {
-				const data = event.data as { messages?: Message[] };
+				const data = event.data as { messages?: Message[]; todos?: TodoItem[]; scratch_files?: Record<string, ScratchFile> };
 				if (data.messages) {
 					messages.length = 0;
 					messages.push(...data.messages);
 					callbacks.onMessagesSync?.(messages);
+				}
+				// Extract todos from values
+				if (data.todos && Array.isArray(data.todos)) {
+					console.log('[LangGraph] Todos from payment resume values:', data.todos.length);
+					callbacks.onTodosSync?.(data.todos);
+				}
+				// Extract scratch files from values
+				if (data.scratch_files && Object.keys(data.scratch_files).length > 0) {
+					callbacks.onScratchFilesSync?.(data.scratch_files);
+				}
+			}
+			
+			if (event.event === 'updates') {
+				const updateData = event.data as Record<string, unknown>;
+				for (const [nodeName, nodeUpdate] of Object.entries(updateData)) {
+					if (nodeUpdate && typeof nodeUpdate === 'object') {
+						const update = nodeUpdate as Record<string, unknown>;
+						callbacks.onNodeUpdate?.(nodeName, update);
+						if (Array.isArray(update.todos)) {
+							console.log('[LangGraph] Todos from payment resume update:', update.todos.length);
+							callbacks.onTodosSync?.(update.todos as TodoItem[]);
+						}
+					}
 				}
 			}
 		}
@@ -1044,6 +1296,19 @@ export async function resumeWithPayment(
 			}
 		} catch (stateError) {
 			console.warn('[LangGraph] Could not check thread state after payment resume:', stateError);
+		}
+		
+		// Fetch final todos from thread state before completing
+		try {
+			const finalState = await client.threads.getState(threadId);
+			const values = finalState.values as Record<string, unknown>;
+			const finalTodos = values.todos || values.todo_list;
+			if (Array.isArray(finalTodos) && finalTodos.length > 0) {
+				console.log('[LangGraph] Final todos from thread state (payment resume):', finalTodos.length);
+				callbacks.onTodosSync?.(finalTodos as TodoItem[]);
+			}
+		} catch (fetchError) {
+			console.warn('[LangGraph] Could not fetch final todos:', fetchError);
 		}
 		
 		callbacks.onComplete?.(messages);
@@ -1085,7 +1350,7 @@ export async function resumeWithToolResults(
 		const stream = client.runs.stream(threadId, assistantId, {
 			input: null,
 			command: { resume: resumePayload },
-			streamMode: ['messages', 'values'],
+			streamMode: ['messages', 'values', 'updates'],
 		});
 		
 		for await (const event of stream) {
@@ -1104,11 +1369,34 @@ export async function resumeWithToolResults(
 			}
 			
 			if (event.event === 'values') {
-				const data = event.data as { messages?: Message[] };
+				const data = event.data as { messages?: Message[]; todos?: TodoItem[]; scratch_files?: Record<string, ScratchFile> };
 				if (data.messages) {
 					messages.length = 0;
 					messages.push(...data.messages);
 					callbacks.onMessagesSync?.(messages);
+				}
+				// Extract todos from values
+				if (data.todos && Array.isArray(data.todos)) {
+					console.log('[LangGraph] Todos from tool results resume values:', data.todos.length);
+					callbacks.onTodosSync?.(data.todos);
+				}
+				// Extract scratch files from values
+				if (data.scratch_files && Object.keys(data.scratch_files).length > 0) {
+					callbacks.onScratchFilesSync?.(data.scratch_files);
+				}
+			}
+			
+			if (event.event === 'updates') {
+				const updateData = event.data as Record<string, unknown>;
+				for (const [nodeName, nodeUpdate] of Object.entries(updateData)) {
+					if (nodeUpdate && typeof nodeUpdate === 'object') {
+						const update = nodeUpdate as Record<string, unknown>;
+						callbacks.onNodeUpdate?.(nodeName, update);
+						if (Array.isArray(update.todos)) {
+							console.log('[LangGraph] Todos from tool results resume update:', update.todos.length);
+							callbacks.onTodosSync?.(update.todos as TodoItem[]);
+						}
+					}
 				}
 			}
 		}
@@ -1150,6 +1438,19 @@ export async function resumeWithToolResults(
 			}
 		} catch (stateError) {
 			console.warn('[LangGraph] Could not check thread state after tool resume:', stateError);
+		}
+		
+		// Fetch final todos from thread state before completing
+		try {
+			const finalState = await client.threads.getState(threadId);
+			const values = finalState.values as Record<string, unknown>;
+			const finalTodos = values.todos || values.todo_list;
+			if (Array.isArray(finalTodos) && finalTodos.length > 0) {
+				console.log('[LangGraph] Final todos from thread state (tool results resume):', finalTodos.length);
+				callbacks.onTodosSync?.(finalTodos as TodoItem[]);
+			}
+		} catch (fetchError) {
+			console.warn('[LangGraph] Could not fetch final todos:', fetchError);
 		}
 		
 		callbacks.onComplete?.(messages);

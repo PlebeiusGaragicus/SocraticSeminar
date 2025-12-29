@@ -1,33 +1,42 @@
-"""DeepResearch Agent using deepagent middleware and shared payment middleware.
+"""DeepResearch Agent using proper middleware composition.
 
 Architecture:
-- Uses create_deep_agent() for built-in filesystem, todo, and subagent support
-- Adds CashuPaymentMiddleware for streaming micropayments
-- Adds ClarifyWithHumanMiddleware for user clarification
-- Research tools: tavily_search, fetch_webpage, think_tool
+- Uses create_agent() with explicit middleware stack (like DeepTutor)
+- CashuPaymentMiddleware: Streaming micropayments with per-iteration deduction
+- TodoListMiddleware: Task tracking for complex multi-step research
+- ClarifyWithHumanMiddleware: Ask user for intent clarification
+- ScratchFilesMiddleware: Agent working memory (visible to user, read-only)
+- ClientToolsMiddleware: Client-side file operations via HITL interrupts
+- HumanInTheLoopMiddleware: Approval for funding requests
 
-The agent conducts thorough web research:
-1. Plans research with todo list
-2. Searches the web using Tavily
-3. Fetches full webpage content
-4. Saves findings to files
-5. Generates comprehensive research reports
+The agent operates with:
+1. Two file systems: User's project files (client) and agent scratch files (visible)
+2. Streaming Cashu payments (deducted per LLM iteration)
+3. HITL approval for write operations to user files
+4. Clarification tools when user intent is unclear
+5. Research tools: tavily_search, fetch_webpage, think_tool
+6. Sub-agent delegation for parallel research
 """
 
 import os
 from datetime import datetime
 from typing import Any
 
-from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware, TodoListMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_openai import ChatOpenAI
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Checkpointer
 
-from deepagents import create_deep_agent
-from deepagents.backends import StateBackend
+from deepagents.middleware.subagents import SubAgentMiddleware
 
-from src.middleware import CashuPaymentMiddleware, ClarifyWithHumanMiddleware
+from src.middleware import (
+    CashuPaymentMiddleware, 
+    ClarifyWithHumanMiddleware, 
+    ClientToolsMiddleware,
+    ScratchFilesMiddleware,
+)
 
 from .tools import RESEARCH_TOOLS, tavily_search, fetch_webpage, think_tool
 from .prompts import get_research_system_prompt, RESEARCHER_INSTRUCTIONS
@@ -38,16 +47,10 @@ from .state import DeepResearchState, COST_PER_ITERATION_SATS
 # CONFIGURATION
 # =============================================================================
 
-# LLM Configuration (OpenAI-compatible only, matching deeptutor)
+# LLM Configuration (OpenAI-compatible only)
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL")  # Optional: for OpenAI-compatible endpoints
 LLM_API_KEY = os.getenv("LLM_API_KEY", os.getenv("OPENAI_API_KEY", ""))
-
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai")  # "openai" or "anthropic"
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
-LLM_BASE_URL = os.getenv("LLM_BASE_URL")  # Optional: for OpenAI-compatible endpoints
-LLM_API_KEY = os.getenv("LLM_API_KEY", os.getenv("OPENAI_API_KEY", ""))
-
 
 # Research Configuration
 MAX_CONCURRENT_RESEARCH_UNITS = int(os.getenv("MAX_CONCURRENT_RESEARCH_UNITS", "3"))
@@ -113,18 +116,30 @@ def create_deepresearch_agent(
     include_subagents: bool = True,
     debug: bool = False,
 ) -> CompiledStateGraph:
-    """Create the DeepResearch agent with all middleware.
+    """Create the DeepResearch agent with proper middleware composition.
     
-    This agent uses create_deep_agent() from the deepagents package which provides:
-    - FilesystemMiddleware: Server-side file storage for research notes/reports
-    - TodoListMiddleware: Task planning and tracking
-    - SubAgentMiddleware: Parallel research delegation
-    - SummarizationMiddleware: Context management for long research sessions
+    Middleware Stack (in order):
+    1. CashuPaymentMiddleware - Payment validation and per-iteration deduction
+    2. TodoListMiddleware - Task tracking for complex research operations
+    3. ClarifyWithHumanMiddleware - Ask user for intent clarification
+    4. ScratchFilesMiddleware - Agent scratch files (visible to user, read-only)
+    5. ClientToolsMiddleware - Client-side file operations via HITL interrupts
+    6. SubAgentMiddleware - Parallel research delegation
+    7. HumanInTheLoopMiddleware - Approval for funding requests
     
-    Additional middleware:
-    - CashuPaymentMiddleware: Streaming micropayments (optional)
-    - ClarifyWithHumanMiddleware: Ask user for clarification
-    - HumanInTheLoopMiddleware: Approval for sensitive operations
+    The agent operates with TWO file systems:
+    
+    1. Scratch Files (via ScratchFilesMiddleware):
+       - Paths: /scratch/notes.md, /scratch/analysis/, etc.
+       - Agent can write freely without user approval
+       - Stored in agent state (visible to frontend for transparency)
+       - READ-ONLY from user's perspective
+       - Used for intermediate analysis, drafts, working memory
+    
+    2. User Files (via ClientToolsMiddleware):
+       - User's project files stored in browser
+       - Write operations require HITL approval
+       - Used for: final reports, user documents
     
     Args:
         checkpointer: Optional checkpointer for persistence
@@ -163,17 +178,54 @@ def create_deepresearch_agent(
         max_researcher_iterations=MAX_RESEARCHER_ITERATIONS,
     )
     
-    # Build additional middleware stack
+    # Build middleware stack
+    #
+    # NOTE: ClientToolsMiddleware handles ALL client file tool interrupts including approval.
+    # Write operations (write_file, edit_file) have requires_approval=True which the
+    # frontend uses to show approval UI before executing locally.
+    # 
+    # ScratchFilesMiddleware allows the agent to write freely to /scratch/ space.
+    # These files are stored in state and visible to the frontend for transparency.
+    #
     middleware: list[AgentMiddleware] = []
     
-    # Payment middleware (optional)
+    # 1. Payment middleware (optional) - validates token, tracks balance, deducts per iteration
     if include_payment:
         middleware.append(CashuPaymentMiddleware(cost_per_iteration=cost_per_iteration))
     
-    # Clarification tools
+    # 2. Todo list - task tracking for complex multi-step research
+    middleware.append(TodoListMiddleware())
+    
+    # 3. Clarification tools - ask user for intent clarification
     middleware.append(ClarifyWithHumanMiddleware())
     
-    # Human-in-the-loop for funding requests
+    # 4. Scratch files - agent working memory stored in state (visible to user, read-only)
+    #    Agent can write to /scratch/ freely without approval
+    #    Frontend can display these files for transparency
+    middleware.append(ScratchFilesMiddleware())
+    
+    # 5. Client tools - ALL client file operations interrupt for client-side execution
+    #    Write tools include requires_approval=True for frontend approval UI
+    middleware.append(ClientToolsMiddleware())
+    
+    # 6. Sub-agent middleware (optional) - for parallel research delegation
+    if include_subagents:
+        subagent_config = create_research_subagent_config()
+        middleware.append(
+            SubAgentMiddleware(
+                default_model=model,
+                default_tools=RESEARCH_TOOLS,
+                subagents=[subagent_config],
+                default_middleware=[
+                    TodoListMiddleware(),
+                    ScratchFilesMiddleware(),  # Sub-agents also use scratch files
+                ],
+                general_purpose_agent=False,  # Research-specific sub-agent
+            )
+        )
+    
+    # 7. Human-in-the-loop - ONLY for payment funding requests
+    #    Client file operations are handled by ClientToolsMiddleware above
     if include_payment:
         middleware.append(
             HumanInTheLoopMiddleware(
@@ -187,21 +239,14 @@ def create_deepresearch_agent(
     if additional_middleware:
         middleware.extend(additional_middleware)
     
-    # Create sub-agents for parallel research
-    subagents = []
-    if include_subagents:
-        subagents.append(create_research_subagent_config())
-    
-    # Create the deep agent using deepagents package
-    # This provides: FilesystemMiddleware, TodoListMiddleware, SubAgentMiddleware
-    agent = create_deep_agent(
-        model=model,
-        tools=RESEARCH_TOOLS,
+    # Create the agent using create_agent (not create_deep_agent)
+    # This gives us full control over the middleware stack
+    agent = create_agent(
+        model,
         system_prompt=system_prompt,
+        tools=RESEARCH_TOOLS,  # Research tools: tavily_search, fetch_webpage, think_tool
         middleware=middleware,
-        subagents=subagents if subagents else None,
         checkpointer=checkpointer,
-        backend=StateBackend,  # Use state-based file storage
         debug=debug,
     )
     
@@ -215,4 +260,3 @@ def create_deepresearch_agent(
 # Default graph for LangGraph deployment
 # Uses in-memory checkpointing; production should use persistent checkpointer
 graph = create_deepresearch_agent()
-

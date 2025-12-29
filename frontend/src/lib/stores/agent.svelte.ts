@@ -37,6 +37,8 @@ import {
   getPaymentState,
   checkForUnclaimedRefund,
   getThreadStateWithInterrupts,
+  getThreadTodos,
+  debugGetThreadState,
   type Message as LangGraphMessage,
   type ThreadStateInfo
 } from '$lib/services/langgraph.js';
@@ -121,6 +123,18 @@ let clientToolInterrupt = $state<ClientToolInterrupt | null>(null);
 let clarificationInterrupt = $state<ClarificationInterrupt | null>(null);
 
 // =============================================================================
+// AGENT SCRATCH FILES & TODOS (visible to user, read-only)
+// =============================================================================
+
+import type { ScratchFile, TodoItem } from './types.js';
+
+// Scratch files from agent's working memory (stored in agent state)
+let scratchFiles = $state<Record<string, ScratchFile>>({});
+
+// Todos from TodoListMiddleware
+let todos = $state<TodoItem[]>([]);
+
+// =============================================================================
 // HELPERS
 // =============================================================================
 
@@ -199,6 +213,7 @@ async function sendMessage(
     console.log('[Agent] Starting stream for thread:', langGraphThreadId || 'new');
     
     // Submit to LangGraph with callbacks
+    // Include 'updates' stream mode for real-time visibility of node execution
     const result = await submitToLangGraph(
       message,
       {
@@ -206,6 +221,7 @@ async function sendMessage(
         assistantId,
         projectId,
         projectFiles: buildProjectFiles(),
+        streamMode: ['messages', 'values', 'updates'],  // Real-time updates for tool visibility
       },
       {
         onToken: (token) => {
@@ -311,7 +327,52 @@ async function sendMessage(
           isStreaming = false;
         },
         
-        onComplete: (finalMessages) => {
+        onScratchFilesSync: (files) => {
+          console.log('[Agent] Scratch files synced:', Object.keys(files).length, 'files');
+          scratchFiles = { ...files };
+        },
+        
+        onTodosSync: (todoList) => {
+          console.log('[Agent] Todos synced:', todoList.length, 'items');
+          console.log('[Agent] Todo details:', todoList.map(t => ({ 
+            id: t.id, 
+            content: t.content?.substring(0, 40), 
+            status: t.status 
+          })));
+          // Force reactivity by creating a new array
+          todos = [...todoList];
+          console.log('[Agent] Todos state updated, new length:', todos.length);
+        },
+        
+        onNodeUpdate: (nodeName, update) => {
+          // Real-time node execution update
+          // This shows what's happening inside the graph as it runs
+          const keys = Object.keys(update);
+          console.log('[Agent] Node executed:', nodeName, 'keys:', keys);
+          
+          // Log if we see todos-related data
+          if (keys.includes('todos') || keys.includes('todo_list')) {
+            console.log('[Agent] Todos in node update!', nodeName, update.todos || update.todo_list);
+          }
+          
+          // If the update contains messages with tool calls, show them immediately
+          const messages = update.messages as Array<{ type: string; tool_calls?: unknown[] }> | undefined;
+          if (messages && Array.isArray(messages)) {
+            const lastMsg = messages[messages.length - 1];
+            if (lastMsg?.type === 'ai' && lastMsg.tool_calls?.length) {
+              const toolCalls = (lastMsg.tool_calls as Array<{ id: string; name: string; args?: Record<string, unknown> }>).map(tc => ({
+                id: tc.id,
+                name: tc.name,
+                args: tc.args || {},
+                status: 'pending' as const,
+              }));
+              console.log('[Agent] Tool calls from node update:', toolCalls.map(tc => tc.name));
+              setPendingToolCalls(toolCalls);
+            }
+          }
+        },
+        
+        onComplete: async (finalMessages) => {
           console.log('[Agent] Stream completed. Messages:', finalMessages.length);
           console.log('[Agent] Final message types:', finalMessages.map(m => ({
             type: m.type,
@@ -330,6 +391,22 @@ async function sendMessage(
           const convertedMessages = convertLangGraphMessages(finalMessages, localThreadId);
           console.log('[Agent] Converted to local messages:', convertedMessages.length);
           threadStore.syncMessages(localThreadId, convertedMessages);
+          
+          // Fetch todos from thread state after stream completes
+          // This ensures we have the final state of todos
+          if (threadId) {
+            try {
+              console.log('[Agent] Fetching todos from thread state after completion...');
+              await debugGetThreadState(threadId);
+              const stateTodos = await getThreadTodos(threadId);
+              if (stateTodos.length > 0) {
+                console.log('[Agent] Got todos from thread state:', stateTodos);
+                todos = stateTodos;
+              }
+            } catch (err) {
+              console.error('[Agent] Failed to fetch todos from thread state:', err);
+            }
+          }
           
           isStreaming = false;
           isInterrupted = false;
@@ -1058,6 +1135,8 @@ function resetStream(): void {
   paymentInterrupt = null;
   clientToolInterrupt = null;
   clarificationInterrupt = null;
+  scratchFiles = {};
+  todos = [];
   setPendingToolCalls([]);
   setStreamingContent('');
   langGraphMessages = [];
@@ -1146,6 +1225,17 @@ async function loadThreadState(
       isInterrupted = false;
     }
     
+    // Load todos from thread state
+    try {
+      const stateTodos = await getThreadTodos(langGraphThreadId);
+      if (stateTodos.length > 0) {
+        console.log('[Agent] Loaded todos from thread state:', stateTodos.length);
+        todos = [...stateTodos];
+      }
+    } catch (todoErr) {
+      console.warn('[Agent] Could not load todos from thread state:', todoErr);
+    }
+    
     return true;
     
   } catch (err) {
@@ -1181,6 +1271,10 @@ export const agentStore = {
   
   // Clarification getter
   get clarificationInterrupt() { return clarificationInterrupt; },
+  
+  // Scratch files & todos (visible to user, read-only)
+  get scratchFiles() { return scratchFiles; },
+  get todos() { return todos; },
   
   // Actions
   sendMessage,

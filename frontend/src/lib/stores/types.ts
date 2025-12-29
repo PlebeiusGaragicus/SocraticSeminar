@@ -5,6 +5,30 @@ export interface User {
   pubkeyHex: string;
 }
 
+// =============================================================================
+// AGENT SCRATCH FILES & TODOS (visible to user, read-only)
+// =============================================================================
+
+/**
+ * Scratch file data from agent state.
+ * These are agent's working memory files - visible to user for transparency.
+ */
+export interface ScratchFile {
+  path: string;
+  content: string[];  // Lines of the file
+  created_at?: string;
+  modified_at?: string;
+}
+
+/**
+ * Todo item from TodoListMiddleware.
+ */
+export interface TodoItem {
+  id?: string;  // Optional - may not be sent by backend
+  content: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
+}
+
 export interface Project {
   id: string;
   npub: string;
