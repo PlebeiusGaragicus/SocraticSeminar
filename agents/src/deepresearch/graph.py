@@ -38,6 +38,7 @@ from src.middleware import (
     # ScratchFilesMiddleware,
     WebsearchMiddleware,
     ThinkingMiddleware,
+    ToolValidationMiddleware,
 )
 
 from .tools import RESEARCH_TOOLS, tavily_search, fetch_webpage, think_tool
@@ -195,7 +196,10 @@ def create_deepresearch_agent(
     if include_payment:
         middleware.append(CashuPaymentMiddleware(cost_per_iteration=cost_per_iteration))
     
-    # 2. Todo list - task tracking for complex multi-step research
+    # 2. Tool Validation - catch and correct malformed tool calls immediately
+    middleware.append(ToolValidationMiddleware())
+    
+    # 3. Todo list - task tracking for complex multi-step research
     middleware.append(TodoListMiddleware())
     
     # 3. Clarification tools - ask user for intent clarification
@@ -225,6 +229,7 @@ def create_deepresearch_agent(
                 default_tools=RESEARCH_TOOLS,
                 subagents=[subagent_config],
                 default_middleware=[
+                    ToolValidationMiddleware(),
                     TodoListMiddleware(),
                     # ScratchFilesMiddleware(),  # Sub-agents also use scratch files
                     ThinkingMiddleware(),      # Sub-agents also think
@@ -232,7 +237,7 @@ def create_deepresearch_agent(
                 general_purpose_agent=False,  # Research-specific sub-agent
             )
         )
-    
+
     # 9. Human-in-the-loop - ONLY for payment funding requests
     #    Client file operations are handled by ClientToolsMiddleware above
     if include_payment:
@@ -256,7 +261,7 @@ def create_deepresearch_agent(
         tools=[],  # Tools provided by middleware (WebsearchMiddleware, ThinkingMiddleware, etc.)
         middleware=middleware,
         checkpointer=checkpointer,
-        debug=debug,
+        debug=debug
     )
     
     return agent

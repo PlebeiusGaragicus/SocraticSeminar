@@ -13,6 +13,7 @@ from .client_tools import ClientToolsMiddleware, ClientToolsState
 from .scratch_files import ScratchFilesMiddleware, ScratchFilesState
 from .websearch import WebsearchMiddleware
 from .thinking import ThinkingMiddleware
+from .validation import ToolValidationMiddleware
 
 __all__ = [
     "CashuPaymentMiddleware",
@@ -25,4 +26,5 @@ __all__ = [
     "ScratchFilesState",
     "WebsearchMiddleware",
     "ThinkingMiddleware",
+    "ToolValidationMiddleware",
 ]

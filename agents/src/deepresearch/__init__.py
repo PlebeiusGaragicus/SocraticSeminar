@@ -15,8 +15,8 @@ Usage:
 from .graph import graph, create_deepresearch_agent
 from src.middleware.websearch import tavily_search, fetch_webpage
 from src.middleware.thinking import think_tool
-from .tools import RESEARCH_TOOLS
-from .state import DeepResearchState
+from src.deepresearch.tools import RESEARCH_TOOLS
+from src.deepresearch.state import DeepResearchState
 
 __all__ = [
     "graph",

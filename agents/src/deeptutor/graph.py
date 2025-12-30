@@ -35,6 +35,7 @@ from src.middleware import (
     ClientToolsMiddleware, 
     ClarifyWithHumanMiddleware,
     ThinkingMiddleware,
+    ToolValidationMiddleware,
 )
 from .state import DeeptutorState, COST_PER_ITERATION_SATS
 
@@ -233,9 +234,12 @@ def create_deeptutor_agent(
         # 1. Payment middleware - validates token, tracks balance, deducts per iteration
         CashuPaymentMiddleware(cost_per_iteration=cost_per_iteration),
         
-        # 2. Todo list - task tracking for complex multi-step operations
-        TodoListMiddleware(),
+        # 2. Tool Validation - catch and correct malformed tool calls immediately
+        ToolValidationMiddleware(),
         
+        # 3. Todo list - task tracking for complex multi-step operations
+        TodoListMiddleware(),
+
         # 3. Clarification tools - ask user for intent clarification
         ClarifyWithHumanMiddleware(),
         

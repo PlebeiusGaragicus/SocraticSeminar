@@ -261,6 +261,7 @@
         {#if toolCall.result}
           {@const resultContent = toolCall.result.error || toolCall.result.content}
           {@const isError = !!toolCall.result.error}
+          <!-- {@const isError = !!toolCall.result.error || (typeof resultContent === 'string' && resultContent.startsWith('Error:'))} -->
           {@const preview = truncateContent(resultContent)}
           
           <div class="px-3 py-2 {isError ? 'bg-red-900/10' : 'bg-zinc-900/20'}">

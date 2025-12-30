@@ -356,18 +356,6 @@ async function sendMessage(
         onClarificationInterrupt: (interrupt, interruptId) => {
           console.log('[Agent] Clarification interrupt received:', interrupt.tool, interrupt.question);
           
-          // Sanitize options if they've come back as a string (happens with some models)
-          if (typeof interrupt.options === 'string') {
-            try {
-              // Try to fix common JSON typos like ), instead of }, which can happen with model hallucination
-              let sanitized = (interrupt.options as string).replace(/\)\s*,\s*\{/g, '}, {');
-              interrupt.options = JSON.parse(sanitized);
-            } catch (e) {
-              console.error('[Agent] Failed to parse clarification options:', e);
-              interrupt.options = [];
-            }
-          }
-          
           // Store the interrupt for the UI to handle
           clarificationInterrupt = interrupt;
           hitlInterruptId = interruptId;  // Reuse hitlInterruptId for the resume
@@ -1224,18 +1212,7 @@ async function loadThreadState(
       
       switch (stateInfo.interruptType) {
         case 'clarification':
-          const interrupt = stateInfo.interruptData as ClarificationInterrupt;
-          // Sanitize options if they've come back as a string
-          if (typeof interrupt.options === 'string') {
-            try {
-              let sanitized = (interrupt.options as string).replace(/\)\s*,\s*\{/g, '}, {');
-              interrupt.options = JSON.parse(sanitized);
-            } catch (e) {
-              console.error('[Agent] Failed to parse restored clarification options:', e);
-              interrupt.options = [];
-            }
-          }
-          clarificationInterrupt = interrupt;
+          clarificationInterrupt = stateInfo.interruptData as ClarificationInterrupt;
           console.log('[Agent] Restored clarification interrupt:', clarificationInterrupt.tool);
           break;
           
