@@ -36,6 +36,8 @@ from src.middleware import (
     ClarifyWithHumanMiddleware, 
     ClientToolsMiddleware,
     ScratchFilesMiddleware,
+    WebsearchMiddleware,
+    ThinkingMiddleware,
 )
 
 from .tools import RESEARCH_TOOLS, tavily_search, fetch_webpage, think_tool
@@ -207,8 +209,14 @@ def create_deepresearch_agent(
     # 5. Client tools - ALL client file operations interrupt for client-side execution
     #    Write tools include requires_approval=True for frontend approval UI
     middleware.append(ClientToolsMiddleware())
+
+    # 6. Web Search - URL discovery and content fetching
+    middleware.append(WebsearchMiddleware())
+
+    # 7. Thinking - Strategic reflection
+    middleware.append(ThinkingMiddleware())
     
-    # 6. Sub-agent middleware (optional) - for parallel research delegation
+    # 8. Sub-agent middleware (optional) - for parallel research delegation
     if include_subagents:
         subagent_config = create_research_subagent_config()
         middleware.append(
@@ -219,12 +227,13 @@ def create_deepresearch_agent(
                 default_middleware=[
                     TodoListMiddleware(),
                     ScratchFilesMiddleware(),  # Sub-agents also use scratch files
+                    ThinkingMiddleware(),      # Sub-agents also think
                 ],
                 general_purpose_agent=False,  # Research-specific sub-agent
             )
         )
     
-    # 7. Human-in-the-loop - ONLY for payment funding requests
+    # 9. Human-in-the-loop - ONLY for payment funding requests
     #    Client file operations are handled by ClientToolsMiddleware above
     if include_payment:
         middleware.append(
@@ -244,7 +253,7 @@ def create_deepresearch_agent(
     agent = create_agent(
         model,
         system_prompt=system_prompt,
-        tools=RESEARCH_TOOLS,  # Research tools: tavily_search, fetch_webpage, think_tool
+        tools=[],  # Tools provided by middleware (WebsearchMiddleware, ThinkingMiddleware, etc.)
         middleware=middleware,
         checkpointer=checkpointer,
         debug=debug,

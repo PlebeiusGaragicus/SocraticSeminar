@@ -11,6 +11,8 @@ from .payment import CashuPaymentMiddleware, CashuPaymentState
 from .clarify import ClarifyWithHumanMiddleware, ClarifyState
 from .client_tools import ClientToolsMiddleware, ClientToolsState
 from .scratch_files import ScratchFilesMiddleware, ScratchFilesState
+from .websearch import WebsearchMiddleware
+from .thinking import ThinkingMiddleware
 
 __all__ = [
     "CashuPaymentMiddleware",
@@ -21,4 +23,6 @@ __all__ = [
     "ClientToolsState",
     "ScratchFilesMiddleware",
     "ScratchFilesState",
+    "WebsearchMiddleware",
+    "ThinkingMiddleware",
 ]

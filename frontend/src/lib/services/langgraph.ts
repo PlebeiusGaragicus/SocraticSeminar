@@ -12,7 +12,19 @@
  */
 
 import { Client } from '@langchain/langgraph-sdk';
-import type { Message, Thread } from '@langchain/langgraph-sdk';
+import type { Thread } from '@langchain/langgraph-sdk';
+
+// Define Message type locally since it's not exported from the SDK
+export interface Message {
+	type: 'human' | 'ai' | 'tool' | 'system';
+	content: string | any[];
+	id?: string;
+	name?: string;
+	tool_call_id?: string;
+	tool_calls?: any[];
+	additional_kwargs?: Record<string, any>;
+	response_metadata?: Record<string, any>;
+}
 import type { 
 	ToolCall, 
 	ToolResult, 
@@ -34,7 +46,7 @@ import {
 } from '../stores/types.js';
 
 // Re-export Message type for use in other modules
-export type { Message, Thread };
+export type { Thread };
 
 // Configuration
 const LANGGRAPH_URL = import.meta.env.PUBLIC_LANGGRAPH_URL ?? 'http://localhost:2024';
@@ -220,6 +232,12 @@ async function processStreamEvents(
 					}));
 					interrupted = true;
 					callbacks.onToolCall?.(pendingToolCalls);
+				} else {
+					// Reset if the latest message is no longer an AI tool call
+					if (interrupted) {
+						interrupted = false;
+						pendingToolCalls = [];
+					}
 				}
 				
 				// Reset content tracker for next iteration
@@ -229,13 +247,13 @@ async function processStreamEvents(
 			}
 			
 			// Sync scratch files to UI
-			if (data.scratch_files && Object.keys(data.scratch_files).length > 0) {
+			if (data.scratch_files !== undefined && Object.keys(data.scratch_files).length >= 0) {
 				callbacks.onScratchFilesSync?.(data.scratch_files);
 			}
 			
 			// Sync todos to UI
 			// TodoListMiddleware uses 'todos' field with structure: {content, status}
-			if (data.todos && Array.isArray(data.todos) && data.todos.length > 0) {
+			if (data.todos !== undefined && Array.isArray(data.todos)) {
 				console.log('[LangGraph/helper] Todos from values:', data.todos.length, 'items');
 				callbacks.onTodosSync?.(data.todos);
 			}
@@ -460,6 +478,14 @@ export async function submitMessage(
 							interrupted = true;
 							console.log('[LangGraph] Tool calls detected:', pendingToolCalls.map(tc => tc.name));
 							callbacks.onToolCall?.(pendingToolCalls);
+						} else {
+							// Reset if the latest message is no longer an AI tool call
+							// This happens when server-side tools are executed and the graph continues
+							if (interrupted) {
+								console.log('[LangGraph] Run continued beyond tool calls (server-side execution)');
+								interrupted = false;
+								pendingToolCalls = [];
+							}
 						}
 						
 						// Reset content tracker for next iteration
@@ -469,14 +495,14 @@ export async function submitMessage(
 					}
 					
 					// Sync scratch files to UI (agent's working memory - visible to user)
-					if (data.scratch_files && Object.keys(data.scratch_files).length > 0) {
+					if (data.scratch_files !== undefined) {
 						console.log('[LangGraph] Scratch files updated:', Object.keys(data.scratch_files).length, 'files');
 						callbacks.onScratchFilesSync?.(data.scratch_files);
 					}
 					
 					// Sync todos to UI
 					// TodoListMiddleware uses 'todos' field with structure: {content, status}
-					if (data.todos && Array.isArray(data.todos) && data.todos.length > 0) {
+					if (data.todos !== undefined && Array.isArray(data.todos)) {
 						console.log('[LangGraph] Todos updated from values:', data.todos.length, 'items');
 						callbacks.onTodosSync?.(data.todos);
 					}
@@ -612,12 +638,12 @@ export async function submitMessage(
 											callbacks.onMessagesSync?.(messages);
 										}
 										// Sync todos from inner resume stream
-										if (data.todos && Array.isArray(data.todos) && data.todos.length > 0) {
+										if (data.todos !== undefined && Array.isArray(data.todos)) {
 											console.log('[LangGraph] Todos from client tool resume:', data.todos.length);
 											callbacks.onTodosSync?.(data.todos);
 										}
 										// Sync scratch files from inner resume stream
-										if (data.scratch_files && Object.keys(data.scratch_files).length > 0) {
+										if (data.scratch_files !== undefined) {
 											callbacks.onScratchFilesSync?.(data.scratch_files);
 										}
 									}
@@ -628,7 +654,7 @@ export async function submitMessage(
 								try {
 									const postResumeState = await client.threads.getState(threadId);
 									const postValues = postResumeState.values as Record<string, unknown>;
-									if (Array.isArray(postValues.todos) && postValues.todos.length > 0) {
+									if (Array.isArray(postValues.todos)) {
 										console.log('[LangGraph] Todos after client tool resume:', postValues.todos.length);
 										callbacks.onTodosSync?.(postValues.todos as TodoItem[]);
 									}
@@ -704,12 +730,12 @@ export async function submitMessage(
 											callbacks.onMessagesSync?.(messages);
 										}
 										// Sync todos from inner resume stream
-										if (data.todos && Array.isArray(data.todos) && data.todos.length > 0) {
+										if (data.todos !== undefined && Array.isArray(data.todos)) {
 											console.log('[LangGraph] Todos from HITL resume:', data.todos.length);
 											callbacks.onTodosSync?.(data.todos);
 										}
 										// Sync scratch files from inner resume stream
-										if (data.scratch_files && Object.keys(data.scratch_files).length > 0) {
+										if (data.scratch_files !== undefined) {
 											callbacks.onScratchFilesSync?.(data.scratch_files);
 										}
 									}
@@ -719,7 +745,7 @@ export async function submitMessage(
 								try {
 									const postResumeState = await client.threads.getState(threadId);
 									const postValues = postResumeState.values as Record<string, unknown>;
-									if (Array.isArray(postValues.todos) && postValues.todos.length > 0) {
+									if (Array.isArray(postValues.todos)) {
 										console.log('[LangGraph] Todos after HITL resume:', postValues.todos.length);
 										callbacks.onTodosSync?.(postValues.todos as TodoItem[]);
 									}

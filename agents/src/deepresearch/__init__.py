@@ -13,8 +13,10 @@ Usage:
 """
 
 from .graph import graph, create_deepresearch_agent
-from .tools import tavily_search, fetch_webpage, think_tool, RESEARCH_TOOLS
-from src.deepresearch.state import DeepResearchState
+from src.middleware.websearch import tavily_search, fetch_webpage
+from src.middleware.thinking import think_tool
+from .tools import RESEARCH_TOOLS
+from .state import DeepResearchState
 
 __all__ = [
     "graph",
@@ -25,4 +27,3 @@ __all__ = [
     "RESEARCH_TOOLS",
     "DeepResearchState",
 ]
-

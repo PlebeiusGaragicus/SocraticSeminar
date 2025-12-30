@@ -637,7 +637,7 @@
             {#each activeHitlInterrupt.action_requests as action}
               {@const ActionIcon = getToolIcon(action.name)}
               <div class="flex items-center gap-2">
-                <svelte:component this={ActionIcon} class="h-4 w-4 text-zinc-400 shrink-0" />
+            <ActionIcon class="h-4 w-4 text-zinc-400 shrink-0" />
                 <span class="text-sm font-medium text-zinc-200">{action.name}</span>
                 <span class="text-xs text-zinc-400 truncate">{getActionDescription(action)}</span>
               </div>
@@ -650,7 +650,7 @@
               {@const ActionIcon = getToolIcon(action.name)}
               <div class="rounded bg-zinc-800/50 p-3">
                 <div class="flex items-center gap-2 mb-2">
-                  <svelte:component this={ActionIcon} class="h-4 w-4 text-zinc-400 shrink-0" />
+              <ActionIcon class="h-4 w-4 text-zinc-400 shrink-0" />
                   <span class="text-sm font-medium text-zinc-200">{action.name}</span>
                 </div>
                 <p class="text-xs text-zinc-400 mb-2">{getActionDescription(action)}</p>
@@ -802,7 +802,7 @@
           {@const ActionIcon = getToolIcon(action.name)}
           <div class="rounded-lg border border-zinc-700 bg-zinc-800/50 overflow-hidden">
             <div class="flex items-center gap-3 border-b border-zinc-700 bg-zinc-800 px-4 py-3">
-              <svelte:component this={ActionIcon} class="h-5 w-5 text-amber-400 shrink-0" />
+              <ActionIcon class="h-5 w-5 text-amber-400 shrink-0" />
               <div>
                 <p class="font-medium text-zinc-100">{action.name}</p>
                 <p class="text-sm text-zinc-400">{getActionDescription(action)}</p>

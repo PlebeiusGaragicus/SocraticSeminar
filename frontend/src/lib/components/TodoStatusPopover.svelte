@@ -120,8 +120,7 @@
           {#each todos as todo, index (todo.id ?? `todo-${index}`)}
             {@const StatusIcon = getStatusIcon(todo.status)}
             <div class="flex items-start gap-2 px-2 py-2 rounded-lg hover:bg-zinc-800/50 transition-colors">
-              <svelte:component 
-                this={StatusIcon} 
+              <StatusIcon 
                 class="h-4 w-4 mt-0.5 flex-shrink-0 {getStatusColor(todo.status)}" 
               />
               <span class="text-xs text-zinc-300 leading-relaxed {todo.status === 'completed' || todo.status === 'cancelled' ? 'line-through opacity-60' : ''}">

@@ -312,13 +312,15 @@ async function sendMessage(
         
         onTodosSync: (todoList) => {
           console.log('[Agent] Todos synced:', todoList.length, 'items');
-          console.log('[Agent] Todo details:', todoList.map(t => ({ 
-            id: t.id, 
-            content: t.content?.substring(0, 40), 
-            status: t.status 
-          })));
+          
+          // Add synthetic IDs for stable Svelte keys if not provided by backend
+          const listWithIds = todoList.map((t, i) => ({
+            ...t,
+            id: t.id || `todo-${i}-${t.content.slice(0, 20)}`
+          }));
+          
           // Force reactivity by creating a new array
-          todos = [...todoList];
+          todos = listWithIds;
           console.log('[Agent] Todos state updated, new length:', todos.length);
         },
         
@@ -1184,10 +1186,8 @@ async function loadThreadState(
     // Load todos from thread state
     try {
       const stateTodos = await getThreadTodos(langGraphThreadId);
-      if (stateTodos.length > 0) {
-        console.log('[Agent] Loaded todos from thread state:', stateTodos.length);
-        todos = [...stateTodos];
-      }
+      console.log('[Agent] Loaded todos from thread state:', stateTodos.length);
+      todos = [...stateTodos];
     } catch (todoErr) {
       console.warn('[Agent] Could not load todos from thread state:', todoErr);
     }

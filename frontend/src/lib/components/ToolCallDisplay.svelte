@@ -16,6 +16,9 @@
   import Check from '@lucide/svelte/icons/check';
   import X from '@lucide/svelte/icons/x';
   import Wrench from '@lucide/svelte/icons/wrench';
+  import ListTodo from '@lucide/svelte/icons/list-todo';
+  import Brain from '@lucide/svelte/icons/brain';
+  import Search from '@lucide/svelte/icons/search';
   import type { ToolCallWithStatus } from '$lib/stores/types.js';
 
   interface Props {
@@ -75,102 +78,148 @@
 
 <div class="flex flex-col gap-2">
   {#each toolCalls as toolCall (toolCall.id)}
-    {@const status = getStatusIcon(toolCall.status)}
-    {@const isExpanded = expandedIds.has(toolCall.id)}
-    {@const hasArgs = Object.keys(toolCall.args || {}).length > 0}
-    {@const hasResult = toolCall.result?.content}
-    
-    <div class="overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800/50">
-      <!-- Header -->
-      <div class="flex items-center justify-between border-b border-zinc-700 bg-zinc-800 px-3 py-2">
-        <div class="flex items-center gap-2">
-          <Wrench class="h-4 w-4 text-zinc-400" />
-          <span class="font-medium text-zinc-200">{toolCall.name}</span>
-          {#if toolCall.id}
-            <code class="rounded bg-zinc-700 px-1.5 py-0.5 text-xs text-zinc-400">
-              {toolCall.id.slice(0, 8)}
-            </code>
+    {#if toolCall.name === 'write_todos'}
+      <div class="flex items-center gap-2 px-1 py-1.5 text-sm text-zinc-400 font-medium">
+        <ListTodo class="h-4 w-4 text-amber-500/50" />
+        <span>Updated agent tasks</span>
+        {#if toolCall.status === 'executing'}
+          <Loader2 class="h-3.5 w-3.5 animate-spin text-amber-500/50" />
+        {/if}
+      </div>
+    {:else if toolCall.name === 'think_tool'}
+      {@const isExpanded = expandedIds.has(toolCall.id)}
+      {@const reflection = toolCall.args.reflection}
+      <div class="flex flex-col gap-1">
+        <button 
+          onclick={() => toggleExpand(toolCall.id)}
+          class="flex items-center gap-2 px-1 py-1.5 text-sm text-zinc-400 font-medium hover:text-zinc-300 transition-colors group"
+        >
+          <Brain class="h-4 w-4 text-purple-500/50 group-hover:text-purple-400/70" />
+          <span>Reflected on progress</span>
+          {#if toolCall.status === 'executing'}
+            <Loader2 class="h-3.5 w-3.5 animate-spin text-purple-500/50" />
           {/if}
-        </div>
-        <div class="flex items-center gap-2">
-          <svelte:component 
-            this={status.icon} 
+          <div class="flex-1"></div>
+          {#if reflection}
+            {#if isExpanded}
+              <ChevronUp class="h-3.5 w-3.5 opacity-50" />
+            {:else}
+              <ChevronDown class="h-3.5 w-3.5 opacity-50" />
+            {/if}
+          {/if}
+        </button>
+        
+        {#if isExpanded && reflection}
+          <div class="ml-6 p-3 rounded-xl bg-purple-500/5 border border-purple-500/10 text-sm text-zinc-400 leading-relaxed italic">
+            {reflection}
+          </div>
+        {/if}
+      </div>
+    {:else if toolCall.name === 'tavily_search'}
+      <div class="flex items-center gap-2 px-1 py-1.5 text-sm text-zinc-400 font-medium">
+        <Search class="h-4 w-4 text-blue-500/50" />
+        <span>Searched for: <span class="text-zinc-300 font-semibold italic">"{toolCall.args.query}"</span></span>
+        {#if toolCall.status === 'executing'}
+          <Loader2 class="h-3.5 w-3.5 animate-spin text-blue-500/50" />
+        {/if}
+      </div>
+    {:else}
+      {@const status = getStatusIcon(toolCall.status)}
+      {@const isExpanded = expandedIds.has(toolCall.id)}
+      {@const hasArgs = Object.keys(toolCall.args || {}).length > 0}
+      {@const hasResult = toolCall.result?.content}
+      
+      <div class="overflow-hidden rounded-lg border border-zinc-700 bg-zinc-800/50">
+        <!-- Header -->
+        <div class="flex items-center justify-between border-b border-zinc-700 bg-zinc-800 px-3 py-2">
+          <div class="flex items-center gap-2">
+            <Wrench class="h-4 w-4 text-zinc-400" />
+            <span class="font-medium text-zinc-200">{toolCall.name}</span>
+            {#if toolCall.id}
+              <code class="rounded bg-zinc-700 px-1.5 py-0.5 text-xs text-zinc-400">
+                {toolCall.id.slice(0, 8)}
+              </code>
+            {/if}
+          </div>
+          <div class="flex items-center gap-2">
+          <status.icon 
             class="h-4 w-4 {status.class} {status.animate ? 'animate-spin' : ''}" 
           />
-          {#if hasResult || hasArgs}
-            <button 
-              onclick={() => toggleExpand(toolCall.id)}
-              class="p-1 hover:bg-zinc-700 rounded transition-colors"
-            >
-              {#if isExpanded}
-                <ChevronUp class="h-4 w-4 text-zinc-400" />
-              {:else}
-                <ChevronDown class="h-4 w-4 text-zinc-400" />
-              {/if}
-            </button>
-          {/if}
-        </div>
-      </div>
-
-      <!-- Arguments (collapsed by default, show preview) -->
-      {#if hasArgs}
-        <div class="border-b border-zinc-700/50 bg-zinc-900/30 px-3 py-2">
-          <div class="text-xs text-zinc-500 mb-1">Arguments</div>
-          {#if isExpanded}
-            <table class="w-full">
-              <tbody>
-                {#each Object.entries(toolCall.args) as [key, value]}
-                  <tr class="border-t border-zinc-700/30 first:border-0">
-                    <td class="py-1 pr-3 text-sm font-medium text-zinc-300 whitespace-nowrap align-top">
-                      {key}
-                    </td>
-                    <td class="py-1 text-sm text-zinc-400">
-                      {#if isComplexValue(value)}
-                        <pre class="whitespace-pre-wrap break-all text-xs bg-zinc-800 rounded p-1">{formatValue(value)}</pre>
-                      {:else}
-                        <span class="break-all">{formatValue(value)}</span>
-                      {/if}
-                    </td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          {:else}
-            <div class="text-sm text-zinc-400 truncate">
-              {Object.entries(toolCall.args).map(([k, v]) => `${k}: ${formatValue(v)}`).join(', ')}
-            </div>
-          {/if}
-        </div>
-      {/if}
-
-      <!-- Result -->
-      {#if toolCall.result}
-        {@const resultContent = toolCall.result.error || toolCall.result.content}
-        {@const isError = !!toolCall.result.error}
-        {@const preview = truncateContent(resultContent)}
-        
-        <div class="px-3 py-2 {isError ? 'bg-red-900/10' : 'bg-zinc-900/20'}">
-          <div class="text-xs {isError ? 'text-red-400' : 'text-zinc-500'} mb-1">
-            {isError ? 'Error' : 'Result'}
+            {#if hasResult || hasArgs}
+              <button 
+                onclick={() => toggleExpand(toolCall.id)}
+                class="p-1 hover:bg-zinc-700 rounded transition-colors"
+              >
+                {#if isExpanded}
+                  <ChevronUp class="h-4 w-4 text-zinc-400" />
+                {:else}
+                  <ChevronDown class="h-4 w-4 text-zinc-400" />
+                {/if}
+              </button>
+            {/if}
           </div>
+        </div>
+
+        <!-- Arguments (collapsed by default, show preview) -->
+        {#if hasArgs}
+          <div class="border-b border-zinc-700/50 bg-zinc-900/30 px-3 py-2">
+            <div class="text-xs text-zinc-500 mb-1">Arguments</div>
+            {#if isExpanded}
+              <table class="w-full">
+                <tbody>
+                  {#each Object.entries(toolCall.args) as [key, value]}
+                    <tr class="border-t border-zinc-700/30 first:border-0">
+                      <td class="py-1 pr-3 text-sm font-medium text-zinc-300 whitespace-nowrap align-top">
+                        {key}
+                      </td>
+                      <td class="py-1 text-sm text-zinc-400">
+                        {#if isComplexValue(value)}
+                          <pre class="whitespace-pre-wrap break-all text-xs bg-zinc-800 rounded p-1">{formatValue(value)}</pre>
+                        {:else}
+                          <span class="break-all">{formatValue(value)}</span>
+                        {/if}
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            {:else}
+              <div class="text-sm text-zinc-400 truncate">
+                {Object.entries(toolCall.args).map(([k, v]) => `${k}: ${formatValue(v)}`).join(', ')}
+              </div>
+            {/if}
+          </div>
+        {/if}
+
+        <!-- Result -->
+        {#if toolCall.result}
+          {@const resultContent = toolCall.result.error || toolCall.result.content}
+          {@const isError = !!toolCall.result.error}
+          {@const preview = truncateContent(resultContent)}
           
-          {#if isExpanded}
-            <pre class="whitespace-pre-wrap break-all text-sm {isError ? 'text-red-300' : 'text-zinc-300'} max-h-64 overflow-y-auto">{resultContent}</pre>
-          {:else}
-            <div class="text-sm {isError ? 'text-red-300' : 'text-zinc-400'} truncate">
-              {preview.text}
+          <div class="px-3 py-2 {isError ? 'bg-red-900/10' : 'bg-zinc-900/20'}">
+            <div class="text-xs {isError ? 'text-red-400' : 'text-zinc-500'} mb-1">
+              {isError ? 'Error' : 'Result'}
             </div>
-          {/if}
-        </div>
-      {:else if toolCall.status === 'executing'}
-        <div class="px-3 py-2 bg-zinc-900/20">
-          <div class="flex items-center gap-2 text-sm text-zinc-500">
-            <Loader2 class="h-3 w-3 animate-spin" />
-            <span>Executing...</span>
+            
+            {#if isExpanded}
+              <pre class="whitespace-pre-wrap break-all text-sm {isError ? 'text-red-300' : 'text-zinc-300'} max-h-64 overflow-y-auto">{resultContent}</pre>
+            {:else}
+              <div class="text-sm {isError ? 'text-red-300' : 'text-zinc-400'} truncate">
+                {preview.text}
+              </div>
+            {/if}
           </div>
-        </div>
-      {/if}
-    </div>
+        {:else if toolCall.status === 'executing'}
+          <div class="px-3 py-2 bg-zinc-900/20">
+            <div class="flex items-center gap-2 text-sm text-zinc-500">
+              <Loader2 class="h-3 w-3 animate-spin" />
+              <span>Executing...</span>
+            </div>
+          </div>
+        {/if}
+      </div>
+    {/if}
   {/each}
 </div>
 

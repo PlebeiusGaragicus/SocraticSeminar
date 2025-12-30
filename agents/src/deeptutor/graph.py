@@ -30,7 +30,12 @@ from langgraph.types import Checkpointer
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.backends import StateBackend
 
-from src.middleware import CashuPaymentMiddleware, ClientToolsMiddleware, ClarifyWithHumanMiddleware
+from src.middleware import (
+    CashuPaymentMiddleware, 
+    ClientToolsMiddleware, 
+    ClarifyWithHumanMiddleware,
+    ThinkingMiddleware,
+)
 from .state import DeeptutorState, COST_PER_ITERATION_SATS
 
 
@@ -241,8 +246,11 @@ def create_deeptutor_agent(
         # 5. Client tools - ALL file operations interrupt for client-side execution
         #    Write tools include requires_approval=True for frontend approval UI
         ClientToolsMiddleware(),
+
+        # 6. Thinking - Strategic reflection
+        ThinkingMiddleware(),
         
-        # 6. Human-in-the-loop - ONLY for payment funding requests
+        # 7. Human-in-the-loop - ONLY for payment funding requests
         #    File operations are handled by ClientToolsMiddleware above
         HumanInTheLoopMiddleware(
             interrupt_on={
