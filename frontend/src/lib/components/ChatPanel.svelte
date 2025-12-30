@@ -225,8 +225,16 @@
           };
         });
         
-        const stableId = message.id || `ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        messageMap.set(stableId, { message, toolCalls: toolCallsWithStatus });
+        // Only include AI messages if they have content OR tool calls
+        // This prevents empty intermediate messages from appearing as "Processing..."
+        const messageContent = extractStringFromMessageContent(message);
+        const hasContent = messageContent && messageContent.trim() !== '';
+        const hasToolCalls = toolCallsWithStatus.length > 0;
+        
+        if (hasContent || hasToolCalls) {
+          const stableId = message.id || `ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+          messageMap.set(stableId, { message, toolCalls: toolCallsWithStatus });
+        }
         
       } else if (message.type === 'tool') {
         const toolMsg = message as { tool_call_id?: string };
@@ -541,21 +549,24 @@
     {:else}
       {#each processedMessages as message (message.id)}
         {@const isUser = message.type === 'human'}
-        <div class="flex {isUser ? 'justify-end' : 'justify-start'}">
-          <div
-            class="max-w-[85%] rounded-xl px-4 py-2 {isUser
-              ? 'bg-amber-600 text-white'
-              : 'bg-zinc-800 text-zinc-200'}"
-          >
-            {#if message.content}
-              <p class="whitespace-pre-wrap text-sm">{message.content}</p>
-            {:else if !isUser}
-              <p class="text-sm text-zinc-400 italic">Processing...</p>
-            {/if}
-          </div>
-        </div>
+        {@const hasContent = message.content && message.content.trim() !== ''}
+        {@const hasToolCalls = !isUser && message.toolCalls.length > 0}
         
-        {#if !isUser && message.toolCalls.length > 0}
+        <!-- Only render message bubble if there's content -->
+        {#if hasContent}
+          <div class="flex {isUser ? 'justify-end' : 'justify-start'}">
+            <div
+              class="max-w-[85%] rounded-xl px-4 py-2 {isUser
+                ? 'bg-amber-600 text-white'
+                : 'bg-zinc-800 text-zinc-200'}"
+            >
+              <p class="whitespace-pre-wrap text-sm">{message.content}</p>
+            </div>
+          </div>
+        {/if}
+        
+        <!-- Tool calls render separately - no "Processing..." fallback needed -->
+        {#if hasToolCalls}
           <div class="flex justify-start">
             <div class="max-w-[85%]">
               <ToolCallDisplay toolCalls={message.toolCalls} />

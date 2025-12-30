@@ -63,9 +63,11 @@ export interface ScratchFile {
 	modified_at?: string;
 }
 
-// Todo item from agent state
+// Todo item from TodoListMiddleware
+// Note: TodoListMiddleware provides {content, status} without id
+// We generate synthetic IDs on the frontend for React keys
 export interface TodoItem {
-	id: string;
+	id?: string;  // Optional - not provided by backend, generated on frontend
 	content: string;
 	status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
 }
@@ -74,7 +76,6 @@ export interface StreamCallbacks {
 	onToken?: (token: string) => void;
 	onMessage?: (message: Message) => void;
 	onMessagesSync?: (messages: Message[]) => void;
-	onIterationStart?: (iteration: number) => void;
 	onComplete?: (messages: Message[]) => void;
 	onError?: (error: Error) => void;
 	onThreadId?: (threadId: string) => void;
@@ -120,6 +121,170 @@ let globalToolExecutor: ToolExecutor = defaultToolExecutor;
 
 export function setToolExecutor(executor: ToolExecutor): void {
 	globalToolExecutor = executor;
+}
+
+// =============================================================================
+// SHARED STREAM PROCESSING HELPER
+// =============================================================================
+
+/**
+ * Stream processing context - tracks state during stream processing
+ */
+interface StreamContext {
+	messages: Message[];
+	currentContent: string;
+}
+
+/**
+ * Result from processing a stream
+ */
+interface StreamResult {
+	messages: Message[];
+	interrupted: boolean;
+	pendingToolCalls: ToolCall[];
+}
+
+/**
+ * Process stream events from LangGraph.
+ * This is the shared helper used by submitMessage and all resume functions.
+ * Handles: messages/partial, messages/complete, values, updates events.
+ */
+async function processStreamEvents(
+	stream: AsyncIterable<{ event: string; data: unknown }>,
+	callbacks: StreamCallbacks,
+	ctx: StreamContext
+): Promise<StreamResult> {
+	let interrupted = false;
+	let pendingToolCalls: ToolCall[] = [];
+	
+	for await (const event of stream) {
+		const eventType = event.event;
+		
+		// Handle streaming message chunks (incremental AI content)
+		if (eventType === 'messages/partial') {
+			const chunks = event.data as Array<{ type: string; content?: string; tool_calls?: unknown[] }>;
+			if (chunks && chunks.length > 0) {
+				const lastChunk = chunks[chunks.length - 1];
+				if (lastChunk?.type === 'ai' && lastChunk.content) {
+					const newContent = lastChunk.content;
+					if (newContent.length > ctx.currentContent.length) {
+						const newTokens = newContent.slice(ctx.currentContent.length);
+						callbacks.onToken?.(newTokens);
+						ctx.currentContent = newContent;
+					}
+				}
+				// Detect tool calls early from streaming
+				if (lastChunk?.type === 'ai' && lastChunk.tool_calls && lastChunk.tool_calls.length > 0) {
+					const toolCalls = (lastChunk.tool_calls as Array<{ id: string; name: string; args?: Record<string, unknown> }>).map((tc) => ({
+						id: tc.id,
+						name: tc.name,
+						args: tc.args || {},
+					}));
+					callbacks.onToolCall?.(toolCalls);
+				}
+			}
+		}
+		
+		// Handle complete message events
+		if (eventType === 'messages/complete') {
+			const completeMessages = event.data as Message[];
+			if (completeMessages && completeMessages.length > 0) {
+				const lastMsg = completeMessages[completeMessages.length - 1];
+				if (lastMsg) {
+					callbacks.onMessage?.(lastMsg);
+				}
+			}
+		}
+		
+		// Handle values events (full state snapshots)
+		if (eventType === 'values') {
+			const data = event.data as { 
+				messages?: Message[]; 
+				scratch_files?: Record<string, ScratchFile>;
+				todos?: TodoItem[];
+				[key: string]: unknown;
+			};
+			
+			if (data.messages) {
+				ctx.messages.length = 0;
+				ctx.messages.push(...data.messages);
+				callbacks.onMessagesSync?.(ctx.messages);
+				
+				// Check for tool calls (indicates interrupt)
+				const lastMessage = ctx.messages[ctx.messages.length - 1];
+				if (lastMessage?.type === 'ai' && (lastMessage as { tool_calls?: unknown[] }).tool_calls?.length) {
+					pendingToolCalls = ((lastMessage as { tool_calls: Array<{ id: string; name: string; args?: Record<string, unknown> }> }).tool_calls).map((tc) => ({
+						id: tc.id,
+						name: tc.name,
+						args: tc.args || {},
+					}));
+					interrupted = true;
+					callbacks.onToolCall?.(pendingToolCalls);
+				}
+				
+				// Reset content tracker for next iteration
+				if (lastMessage?.type === 'ai') {
+					ctx.currentContent = typeof lastMessage.content === 'string' ? lastMessage.content : '';
+				}
+			}
+			
+			// Sync scratch files to UI
+			if (data.scratch_files && Object.keys(data.scratch_files).length > 0) {
+				callbacks.onScratchFilesSync?.(data.scratch_files);
+			}
+			
+			// Sync todos to UI
+			// TodoListMiddleware uses 'todos' field with structure: {content, status}
+			if (data.todos && Array.isArray(data.todos) && data.todos.length > 0) {
+				console.log('[LangGraph/helper] Todos from values:', data.todos.length, 'items');
+				callbacks.onTodosSync?.(data.todos);
+			}
+		}
+	}
+	
+	return { messages: ctx.messages, interrupted, pendingToolCalls };
+}
+
+/**
+ * Check thread state for interrupts after stream ends.
+ * Returns interrupt info if found, null otherwise.
+ */
+async function checkForInterrupts(
+	client: Client,
+	threadId: string
+): Promise<{ type: 'hitl' | 'client_tool' | 'clarification' | 'payment' | null; value: unknown; id: string } | null> {
+	try {
+		const threadState = await client.threads.getState(threadId);
+		const tasks = (threadState as { tasks?: Array<{ id?: string; interrupts?: Array<{ value?: unknown; id?: string }> }> }).tasks;
+		
+		if (!tasks || tasks.length === 0) return null;
+		
+		const task = tasks[0];
+		const interrupts = task.interrupts;
+		if (!interrupts || interrupts.length === 0) return null;
+		
+		const interruptData = interrupts[0];
+		const interruptValue = interruptData.value;
+		const interruptId = (interruptData as { id?: string }).id || task.id || '';
+		
+		if (isClientToolInterrupt(interruptValue)) {
+			return { type: 'client_tool', value: interruptValue, id: interruptId };
+		}
+		if (isHITLInterrupt(interruptValue)) {
+			return { type: 'hitl', value: interruptValue, id: interruptId };
+		}
+		if (isClarificationInterrupt(interruptValue)) {
+			return { type: 'clarification', value: interruptValue, id: interruptId };
+		}
+		if (isPaymentExhaustedInterrupt(interruptValue)) {
+			return { type: 'payment', value: interruptValue, id: interruptId };
+		}
+		
+		return null;
+	} catch (error) {
+		console.warn('[LangGraph] Could not check thread state for interrupts:', error);
+		return null;
+	}
 }
 
 // =============================================================================
@@ -187,13 +352,9 @@ export async function submitMessage(
 		// Loop to handle multiple tool call iterations
 		while (iteration < maxIterations) {
 			iteration++;
-			console.log(`[LangGraph] ================================================`);
-			console.log(`[LangGraph] Iteration ${iteration}/${maxIterations}`);
-			console.log(`[LangGraph] Thread ID: ${threadId}`);
-			console.log(`[LangGraph] ================================================`);
+			console.log(`[LangGraph] Iteration ${iteration}/${maxIterations}, thread: ${threadId}`);
 			
-			// Signal iteration start - allows UI to reset streaming state
-			callbacks.onIterationStart?.(iteration);
+			// Reset content tracker for new iteration
 			currentContent = '';
 			
 			let interrupted = false;
@@ -313,13 +474,11 @@ export async function submitMessage(
 						callbacks.onScratchFilesSync?.(data.scratch_files);
 					}
 					
-					// Sync todos to UI - check multiple possible field names
-					// TodoListMiddleware might use 'todos' or 'todo_list'
-					const todosData = data.todos || (data as Record<string, unknown>).todo_list as TodoItem[] | undefined;
-					if (todosData && Array.isArray(todosData) && todosData.length > 0) {
-						console.log('[LangGraph] Todos updated from values:', todosData.length, 'items');
-						console.log('[LangGraph] Todo statuses:', todosData.map(t => t.status));
-						callbacks.onTodosSync?.(todosData);
+					// Sync todos to UI
+					// TodoListMiddleware uses 'todos' field with structure: {content, status}
+					if (data.todos && Array.isArray(data.todos) && data.todos.length > 0) {
+						console.log('[LangGraph] Todos updated from values:', data.todos.length, 'items');
+						callbacks.onTodosSync?.(data.todos);
 					}
 				}
 				
@@ -345,13 +504,11 @@ export async function submitMessage(
 								callbacks.onScratchFilesSync?.(update.scratch_files as Record<string, ScratchFile>);
 							}
 							
-							// Extract todos from any node (typically comes from "tools" node)
-							// Check both 'todos' and 'todo_list' field names
-							const nodeTodos = update.todos || update.todo_list;
-							if (Array.isArray(nodeTodos)) {
-								console.log('[LangGraph] Todos found in update from node:', nodeName, 'count:', nodeTodos.length);
-								console.log('[LangGraph] Todo items:', nodeTodos.map(t => ({ content: (t as TodoItem).content?.substring(0, 30), status: (t as TodoItem).status })));
-								callbacks.onTodosSync?.(nodeTodos as TodoItem[]);
+							// Extract todos from "tools" node when write_todos executes
+							// TodoListMiddleware uses 'todos' field with structure: {content, status}
+							if (Array.isArray(update.todos)) {
+								console.log('[LangGraph] Todos from node:', nodeName, 'count:', update.todos.length);
+								callbacks.onTodosSync?.(update.todos as TodoItem[]);
 							}
 						}
 					}
@@ -427,7 +584,7 @@ export async function submitMessage(
 								const resumeStream = client.runs.stream(threadId, assistantId, {
 									input: null,
 									command: { resume: resumePayload },
-									streamMode: options.streamMode || ['messages', 'values', 'updates'],
+									streamMode: options.streamMode || ['messages', 'values'],
 								});
 								
 								for await (const resumeEvent of resumeStream) {
@@ -464,21 +621,19 @@ export async function submitMessage(
 											callbacks.onScratchFilesSync?.(data.scratch_files);
 										}
 									}
-									
-									if (resumeEvent.event === 'updates') {
-										console.log('[LangGraph] resumeEvent.event === "updates" - Updates event data:', JSON.stringify(resumeEvent.data, null, 2));
-										const updateData = resumeEvent.data as Record<string, unknown>;
-										for (const [nodeName, nodeUpdate] of Object.entries(updateData)) {
-											if (nodeUpdate && typeof nodeUpdate === 'object') {
-												const update = nodeUpdate as Record<string, unknown>;
-												callbacks.onNodeUpdate?.(nodeName, update);
-												if (Array.isArray(update.todos)) {
-													console.log('[LangGraph] Todos from client tool resume update:', update.todos.length);
-													callbacks.onTodosSync?.(update.todos as TodoItem[]);
-												}
-											}
-										}
+								}
+								
+								// Sync final state after client tool execution
+								// This catches any todos that were updated during tool execution
+								try {
+									const postResumeState = await client.threads.getState(threadId);
+									const postValues = postResumeState.values as Record<string, unknown>;
+									if (Array.isArray(postValues.todos) && postValues.todos.length > 0) {
+										console.log('[LangGraph] Todos after client tool resume:', postValues.todos.length);
+										callbacks.onTodosSync?.(postValues.todos as TodoItem[]);
 									}
+								} catch (err) {
+									console.warn('[LangGraph] Could not fetch state after client tool resume:', err);
 								}
 								
 								// After resume, continue loop to check for more interrupts
@@ -558,20 +713,18 @@ export async function submitMessage(
 											callbacks.onScratchFilesSync?.(data.scratch_files);
 										}
 									}
-									
-									if (resumeEvent.event === 'updates') {
-										const updateData = resumeEvent.data as Record<string, unknown>;
-										for (const [nodeName, nodeUpdate] of Object.entries(updateData)) {
-											if (nodeUpdate && typeof nodeUpdate === 'object') {
-												const update = nodeUpdate as Record<string, unknown>;
-												callbacks.onNodeUpdate?.(nodeName, update);
-												if (Array.isArray(update.todos)) {
-													console.log('[LangGraph] Todos from HITL resume update:', update.todos.length);
-													callbacks.onTodosSync?.(update.todos as TodoItem[]);
-												}
-											}
-										}
+								}
+								
+								// Sync final state after HITL resume
+								try {
+									const postResumeState = await client.threads.getState(threadId);
+									const postValues = postResumeState.values as Record<string, unknown>;
+									if (Array.isArray(postValues.todos) && postValues.todos.length > 0) {
+										console.log('[LangGraph] Todos after HITL resume:', postValues.todos.length);
+										callbacks.onTodosSync?.(postValues.todos as TodoItem[]);
 									}
+								} catch (err) {
+									console.warn('[LangGraph] Could not fetch state after HITL resume:', err);
 								}
 								
 								// After resume, continue loop to check for more interrupts
@@ -673,19 +826,6 @@ export async function submitMessage(
 			console.warn(`[LangGraph] Reached max tool iterations (${maxIterations})`);
 		}
 		
-		// Fetch final todos from thread state before completing
-		try {
-			const finalState = await client.threads.getState(threadId);
-			const values = finalState.values as Record<string, unknown>;
-			const finalTodos = values.todos || values.todo_list;
-			if (Array.isArray(finalTodos) && finalTodos.length > 0) {
-				console.log('[LangGraph] Final todos from thread state (submitMessage):', finalTodos.length);
-				callbacks.onTodosSync?.(finalTodos as TodoItem[]);
-			}
-		} catch (fetchError) {
-			console.warn('[LangGraph] Could not fetch final todos:', fetchError);
-		}
-		
 		console.log('[LangGraph] Calling onComplete with', messages.length, 'messages');
 		console.log('[LangGraph] Final messages:', messages.map(m => ({ 
 			type: m.type, 
@@ -694,7 +834,7 @@ export async function submitMessage(
 				: typeof (m as { content?: unknown }).content 
 		})));
 		callbacks.onComplete?.(messages);
-		
+
 		return { threadId, messages };
 		
 	} catch (error) {
@@ -746,12 +886,7 @@ export function createAutoApproveResponse(interrupt: HITLInterrupt): HITLResumeR
 
 /**
  * Resume a thread with HITL decisions after an interrupt.
- * 
- * @param threadId - The thread ID to resume
- * @param interruptId - The interrupt ID from the thread state
- * @param response - The HITL resume response with decisions
- * @param assistantId - The assistant ID to use
- * @param callbacks - Stream callbacks for the resumed execution
+ * Uses shared stream processing helper.
  */
 export async function resumeWithHITLDecisions(
 	threadId: string,
@@ -761,157 +896,39 @@ export async function resumeWithHITLDecisions(
 	callbacks: StreamCallbacks
 ): Promise<{ threadId: string; messages: Message[] }> {
 	const client = getClient();
-	const messages: Message[] = [];
-	let currentContent = '';
+	const ctx: StreamContext = { messages: [], currentContent: '' };
 	
-	// Build the resume payload: { [interrupt_id]: { decisions: [...] } }
-	const resumePayload = {
-		[interruptId]: response
-	};
-	
-	console.log('[LangGraph] Resuming with HITL decisions:', resumePayload);
+	const resumePayload = { [interruptId]: response };
+	console.log('[LangGraph] Resuming with HITL decisions');
 	
 	try {
-		// Stream the response with resume command
 		const stream = client.runs.stream(threadId, assistantId, {
-			input: null, // null input means resume from interrupt
-			command: {
-				resume: resumePayload,
-			},
-			streamMode: ['messages', 'values', 'updates'],
+			input: null,
+			command: { resume: resumePayload },
+			streamMode: ['messages', 'values'],
 		});
 		
-		for await (const event of stream) {
-			// Handle streaming message chunks
-			if (event.event === 'messages/partial') {
-				const chunks = event.data as Array<{ type: string; content?: string; tool_calls?: unknown[] }>;
-				if (chunks && chunks.length > 0) {
-					const lastChunk = chunks[chunks.length - 1];
-					if (lastChunk?.type === 'ai' && lastChunk.content) {
-						const newContent = lastChunk.content;
-						if (newContent.length > currentContent.length) {
-							const newTokens = newContent.slice(currentContent.length);
-							callbacks.onToken?.(newTokens);
-							currentContent = newContent;
-						}
-					}
-					// Check for new tool calls
-					if (lastChunk?.type === 'ai' && lastChunk.tool_calls && lastChunk.tool_calls.length > 0) {
-						const toolCalls = (lastChunk.tool_calls as Array<{ id: string; name: string; args?: Record<string, unknown> }>).map((tc) => ({
-							id: tc.id,
-							name: tc.name,
-							args: tc.args || {},
-						}));
-						callbacks.onToolCall?.(toolCalls);
-					}
-				}
+		await processStreamEvents(stream, callbacks, ctx);
+		
+		// Check for new interrupts after resume
+		const interrupt = await checkForInterrupts(client, threadId);
+		if (interrupt) {
+			if (interrupt.type === 'clarification') {
+				callbacks.onClarificationInterrupt?.(interrupt.value as ClarificationInterrupt, interrupt.id);
+				return { threadId, messages: ctx.messages };
 			}
-			
-			// Handle values events (full state snapshots)
-			if (event.event === 'values') {
-				const data = event.data as { messages?: Message[]; todos?: TodoItem[]; scratch_files?: Record<string, ScratchFile> };
-				
-				if (data.messages) {
-					messages.length = 0;
-					messages.push(...data.messages);
-					callbacks.onMessagesSync?.(messages);
-					
-					// Check for tool calls in last message
-					const lastMessage = messages[messages.length - 1];
-					if (lastMessage?.type === 'ai' && (lastMessage as { tool_calls?: unknown[] }).tool_calls?.length) {
-						const toolCalls = ((lastMessage as { tool_calls: Array<{ id: string; name: string; args?: Record<string, unknown> }> }).tool_calls).map((tc) => ({
-							id: tc.id,
-							name: tc.name,
-							args: tc.args || {},
-						}));
-						callbacks.onToolCall?.(toolCalls);
-					}
-				}
-				// Extract todos from values
-				if (data.todos && Array.isArray(data.todos)) {
-					console.log('[LangGraph] Todos from HITL resume values:', data.todos.length);
-					callbacks.onTodosSync?.(data.todos);
-				}
-				// Extract scratch files from values
-				if (data.scratch_files && Object.keys(data.scratch_files).length > 0) {
-					callbacks.onScratchFilesSync?.(data.scratch_files);
-				}
+			if (interrupt.type === 'client_tool') {
+				callbacks.onClientToolInterrupt?.(interrupt.value as ClientToolInterrupt, interrupt.id);
+				return { threadId, messages: ctx.messages };
 			}
-			
-			// Handle updates events for real-time todo updates
-			if (event.event === 'updates') {
-				const updateData = event.data as Record<string, unknown>;
-				for (const [nodeName, nodeUpdate] of Object.entries(updateData)) {
-					if (nodeUpdate && typeof nodeUpdate === 'object') {
-						const update = nodeUpdate as Record<string, unknown>;
-						callbacks.onNodeUpdate?.(nodeName, update);
-						if (Array.isArray(update.todos)) {
-							console.log('[LangGraph] Todos from HITL resume update:', update.todos.length);
-							callbacks.onTodosSync?.(update.todos as TodoItem[]);
-						}
-					}
-				}
+			if (interrupt.type === 'hitl') {
+				callbacks.onHITLInterrupt?.(interrupt.value as HITLInterrupt, interrupt.id);
+				return { threadId, messages: ctx.messages };
 			}
 		}
 		
-		// After stream ends, check thread state for interrupts
-		// The backend may have triggered another interrupt during the resume
-		console.log('[LangGraph] Resume stream ended, checking for interrupts...');
-		try {
-			const threadState = await client.threads.getState(threadId);
-			const tasks = (threadState as { tasks?: Array<{ id?: string; interrupts?: Array<{ value?: unknown; id?: string }> }> }).tasks;
-			
-			if (tasks && tasks.length > 0) {
-				const task = tasks[0];
-				const interrupts = task.interrupts;
-				
-				if (interrupts && interrupts.length > 0) {
-					const interruptData = interrupts[0];
-					const interruptValue = interruptData.value;
-					const newInterruptId = (interruptData as { id?: string }).id || task.id || '';
-					
-					// Check for clarification interrupt
-					if (isClarificationInterrupt(interruptValue)) {
-						console.log('[LangGraph] Clarification interrupt detected after resume');
-						callbacks.onClarificationInterrupt?.(interruptValue, newInterruptId);
-						return { threadId, messages };
-					}
-					
-					// Check for client tool interrupt
-					if (isClientToolInterrupt(interruptValue)) {
-						console.log('[LangGraph] Client tool interrupt detected after resume');
-						callbacks.onClientToolInterrupt?.(interruptValue, newInterruptId);
-						return { threadId, messages };
-					}
-					
-					// Check for HITL interrupt
-					if (isHITLInterrupt(interruptValue)) {
-						console.log('[LangGraph] HITL interrupt detected after resume:', 
-							interruptValue.action_requests.map(a => a.name));
-						callbacks.onHITLInterrupt?.(interruptValue, newInterruptId);
-						return { threadId, messages };
-					}
-				}
-			}
-		} catch (stateError) {
-			console.warn('[LangGraph] Could not check thread state after resume:', stateError);
-		}
-		
-		// Fetch final todos from thread state before completing
-		try {
-			const finalState = await client.threads.getState(threadId);
-			const values = finalState.values as Record<string, unknown>;
-			const finalTodos = values.todos || values.todo_list;
-			if (Array.isArray(finalTodos) && finalTodos.length > 0) {
-				console.log('[LangGraph] Final todos from thread state (HITL resume):', finalTodos.length);
-				callbacks.onTodosSync?.(finalTodos as TodoItem[]);
-			}
-		} catch (fetchError) {
-			console.warn('[LangGraph] Could not fetch final todos:', fetchError);
-		}
-		
-		callbacks.onComplete?.(messages);
-		return { threadId, messages };
+		callbacks.onComplete?.(ctx.messages);
+		return { threadId, messages: ctx.messages };
 		
 	} catch (error) {
 		callbacks.onError?.(error as Error);
@@ -982,15 +999,13 @@ export async function getThreadTodos(threadId: string): Promise<TodoItem[]> {
 	const state = await client.threads.getState(threadId);
 	const values = state.values as Record<string, unknown>;
 	
-	// Try different possible field names
-	const todos = values.todos || values.todo_list || values.todoList || values.tasks;
-	
-	if (Array.isArray(todos)) {
-		console.log('[LangGraph] Got todos from thread state:', todos.length);
-		return todos as TodoItem[];
+	// TodoListMiddleware uses 'todos' field with structure: {content, status}
+	if (Array.isArray(values.todos)) {
+		console.log('[LangGraph] Got todos from thread state:', values.todos.length);
+		return values.todos as TodoItem[];
 	}
 	
-	console.log('[LangGraph] No todos found in thread state. Available keys:', Object.keys(values));
+	console.log('[LangGraph] No todos found in thread state');
 	return [];
 }
 
@@ -1188,6 +1203,7 @@ export async function checkForUnclaimedRefund(threadId: string): Promise<StoredR
 
 /**
  * Resume a thread with additional payment after funds exhausted.
+ * Uses shared stream processing helper.
  */
 export async function resumeWithPayment(
 	threadId: string,
@@ -1196,18 +1212,11 @@ export async function resumeWithPayment(
 	assistantId: string,
 	callbacks: StreamCallbacks
 ): Promise<{ threadId: string; messages: Message[] }> {
-	// The resume payload includes the new payment token
-	const resumePayload = {
-		[interruptId]: {
-			payment_token: paymentToken,
-		}
-	};
-	
-	console.log('[LangGraph] Resuming with additional payment');
-	
 	const client = getClient();
-	const messages: Message[] = [];
-	let currentContent = '';
+	const ctx: StreamContext = { messages: [], currentContent: '' };
+	
+	const resumePayload = { [interruptId]: { payment_token: paymentToken } };
+	console.log('[LangGraph] Resuming with additional payment');
 	
 	try {
 		const stream = client.runs.stream(threadId, assistantId, {
@@ -1216,103 +1225,27 @@ export async function resumeWithPayment(
 			streamMode: ['messages', 'values', 'updates'],
 		});
 		
-		for await (const event of stream) {
-			if (event.event === 'messages/partial') {
-				const chunks = event.data as Array<{ type: string; content?: string }>;
-				if (chunks && chunks.length > 0) {
-					const lastChunk = chunks[chunks.length - 1];
-					if (lastChunk?.type === 'ai' && lastChunk.content) {
-						const newContent = lastChunk.content;
-						if (newContent.length > currentContent.length) {
-							callbacks.onToken?.(newContent.slice(currentContent.length));
-							currentContent = newContent;
-						}
-					}
-				}
+		await processStreamEvents(stream, callbacks, ctx);
+		
+		// Check for new interrupts after resume
+		const interrupt = await checkForInterrupts(client, threadId);
+		if (interrupt) {
+			if (interrupt.type === 'clarification') {
+				callbacks.onClarificationInterrupt?.(interrupt.value as ClarificationInterrupt, interrupt.id);
+				return { threadId, messages: ctx.messages };
 			}
-			
-			if (event.event === 'values') {
-				const data = event.data as { messages?: Message[]; todos?: TodoItem[]; scratch_files?: Record<string, ScratchFile> };
-				if (data.messages) {
-					messages.length = 0;
-					messages.push(...data.messages);
-					callbacks.onMessagesSync?.(messages);
-				}
-				// Extract todos from values
-				if (data.todos && Array.isArray(data.todos)) {
-					console.log('[LangGraph] Todos from payment resume values:', data.todos.length);
-					callbacks.onTodosSync?.(data.todos);
-				}
-				// Extract scratch files from values
-				if (data.scratch_files && Object.keys(data.scratch_files).length > 0) {
-					callbacks.onScratchFilesSync?.(data.scratch_files);
-				}
+			if (interrupt.type === 'client_tool') {
+				callbacks.onClientToolInterrupt?.(interrupt.value as ClientToolInterrupt, interrupt.id);
+				return { threadId, messages: ctx.messages };
 			}
-			
-			if (event.event === 'updates') {
-				const updateData = event.data as Record<string, unknown>;
-				for (const [nodeName, nodeUpdate] of Object.entries(updateData)) {
-					if (nodeUpdate && typeof nodeUpdate === 'object') {
-						const update = nodeUpdate as Record<string, unknown>;
-						callbacks.onNodeUpdate?.(nodeName, update);
-						if (Array.isArray(update.todos)) {
-							console.log('[LangGraph] Todos from payment resume update:', update.todos.length);
-							callbacks.onTodosSync?.(update.todos as TodoItem[]);
-						}
-					}
-				}
+			if (interrupt.type === 'hitl') {
+				callbacks.onHITLInterrupt?.(interrupt.value as HITLInterrupt, interrupt.id);
+				return { threadId, messages: ctx.messages };
 			}
 		}
 		
-		// Check for interrupts after payment resume
-		try {
-			const threadState = await client.threads.getState(threadId);
-			const tasks = (threadState as { tasks?: Array<{ id?: string; interrupts?: Array<{ value?: unknown; id?: string }> }> }).tasks;
-			
-			if (tasks && tasks.length > 0) {
-				const task = tasks[0];
-				const interrupts = task.interrupts;
-				
-				if (interrupts && interrupts.length > 0) {
-					const interruptData = interrupts[0];
-					const interruptValue = interruptData.value;
-					const newInterruptId = (interruptData as { id?: string }).id || task.id || '';
-					
-					if (isClarificationInterrupt(interruptValue)) {
-						callbacks.onClarificationInterrupt?.(interruptValue, newInterruptId);
-						return { threadId, messages };
-					}
-					
-					if (isClientToolInterrupt(interruptValue)) {
-						callbacks.onClientToolInterrupt?.(interruptValue, newInterruptId);
-						return { threadId, messages };
-					}
-					
-					if (isHITLInterrupt(interruptValue)) {
-						callbacks.onHITLInterrupt?.(interruptValue, newInterruptId);
-						return { threadId, messages };
-					}
-				}
-			}
-		} catch (stateError) {
-			console.warn('[LangGraph] Could not check thread state after payment resume:', stateError);
-		}
-		
-		// Fetch final todos from thread state before completing
-		try {
-			const finalState = await client.threads.getState(threadId);
-			const values = finalState.values as Record<string, unknown>;
-			const finalTodos = values.todos || values.todo_list;
-			if (Array.isArray(finalTodos) && finalTodos.length > 0) {
-				console.log('[LangGraph] Final todos from thread state (payment resume):', finalTodos.length);
-				callbacks.onTodosSync?.(finalTodos as TodoItem[]);
-			}
-		} catch (fetchError) {
-			console.warn('[LangGraph] Could not fetch final todos:', fetchError);
-		}
-		
-		callbacks.onComplete?.(messages);
-		return { threadId, messages };
+		callbacks.onComplete?.(ctx.messages);
+		return { threadId, messages: ctx.messages };
 		
 	} catch (error) {
 		callbacks.onError?.(error as Error);
@@ -1322,7 +1255,7 @@ export async function resumeWithPayment(
 
 /**
  * Resume a thread with client tool execution results.
- * Used after ClientToolsMiddleware interrupts for file operations.
+ * Uses shared stream processing helper.
  */
 export async function resumeWithToolResults(
 	threadId: string,
@@ -1331,6 +1264,9 @@ export async function resumeWithToolResults(
 	assistantId: string,
 	callbacks: StreamCallbacks
 ): Promise<{ threadId: string; messages: Message[] }> {
+	const client = getClient();
+	const ctx: StreamContext = { messages: [], currentContent: '' };
+	
 	const resumePayload = {
 		[interruptId]: {
 			tool_results: toolResults.map(r => ({
@@ -1342,10 +1278,6 @@ export async function resumeWithToolResults(
 	
 	console.log('[LangGraph] Resuming with tool results:', toolResults.map(r => r.tool_call_id));
 	
-	const client = getClient();
-	const messages: Message[] = [];
-	let currentContent = '';
-	
 	try {
 		const stream = client.runs.stream(threadId, assistantId, {
 			input: null,
@@ -1353,108 +1285,27 @@ export async function resumeWithToolResults(
 			streamMode: ['messages', 'values', 'updates'],
 		});
 		
-		for await (const event of stream) {
-			if (event.event === 'messages/partial') {
-				const chunks = event.data as Array<{ type: string; content?: string }>;
-				if (chunks && chunks.length > 0) {
-					const lastChunk = chunks[chunks.length - 1];
-					if (lastChunk?.type === 'ai' && lastChunk.content) {
-						const newContent = lastChunk.content;
-						if (newContent.length > currentContent.length) {
-							callbacks.onToken?.(newContent.slice(currentContent.length));
-							currentContent = newContent;
-						}
-					}
-				}
+		await processStreamEvents(stream, callbacks, ctx);
+		
+		// Check for new interrupts after resume
+		const interrupt = await checkForInterrupts(client, threadId);
+		if (interrupt) {
+			if (interrupt.type === 'clarification') {
+				callbacks.onClarificationInterrupt?.(interrupt.value as ClarificationInterrupt, interrupt.id);
+				return { threadId, messages: ctx.messages };
 			}
-			
-			if (event.event === 'values') {
-				const data = event.data as { messages?: Message[]; todos?: TodoItem[]; scratch_files?: Record<string, ScratchFile> };
-				if (data.messages) {
-					messages.length = 0;
-					messages.push(...data.messages);
-					callbacks.onMessagesSync?.(messages);
-				}
-				// Extract todos from values
-				if (data.todos && Array.isArray(data.todos)) {
-					console.log('[LangGraph] Todos from tool results resume values:', data.todos.length);
-					callbacks.onTodosSync?.(data.todos);
-				}
-				// Extract scratch files from values
-				if (data.scratch_files && Object.keys(data.scratch_files).length > 0) {
-					callbacks.onScratchFilesSync?.(data.scratch_files);
-				}
+			if (interrupt.type === 'client_tool') {
+				callbacks.onClientToolInterrupt?.(interrupt.value as ClientToolInterrupt, interrupt.id);
+				return { threadId, messages: ctx.messages };
 			}
-			
-			if (event.event === 'updates') {
-				const updateData = event.data as Record<string, unknown>;
-				for (const [nodeName, nodeUpdate] of Object.entries(updateData)) {
-					if (nodeUpdate && typeof nodeUpdate === 'object') {
-						const update = nodeUpdate as Record<string, unknown>;
-						callbacks.onNodeUpdate?.(nodeName, update);
-						if (Array.isArray(update.todos)) {
-							console.log('[LangGraph] Todos from tool results resume update:', update.todos.length);
-							callbacks.onTodosSync?.(update.todos as TodoItem[]);
-						}
-					}
-				}
+			if (interrupt.type === 'hitl') {
+				callbacks.onHITLInterrupt?.(interrupt.value as HITLInterrupt, interrupt.id);
+				return { threadId, messages: ctx.messages };
 			}
 		}
 		
-		// Check for another interrupt after resume
-		try {
-			const threadState = await client.threads.getState(threadId);
-			const tasks = (threadState as { tasks?: Array<{ id?: string; interrupts?: Array<{ value?: unknown; id?: string }> }> }).tasks;
-			
-			if (tasks && tasks.length > 0) {
-				const task = tasks[0];
-				const interrupts = task.interrupts;
-				
-				if (interrupts && interrupts.length > 0) {
-					const interruptData = interrupts[0];
-					const interruptValue = interruptData.value;
-					const newInterruptId = (interruptData as { id?: string }).id || task.id || '';
-					
-					// Check for clarification interrupt
-					if (isClarificationInterrupt(interruptValue)) {
-						console.log('[LangGraph] Clarification interrupt detected after tool resume');
-						callbacks.onClarificationInterrupt?.(interruptValue, newInterruptId);
-						return { threadId, messages };
-					}
-					
-					// Check for client tool interrupt
-					if (isClientToolInterrupt(interruptValue)) {
-						console.log('[LangGraph] Client tool interrupt detected after tool resume');
-						callbacks.onClientToolInterrupt?.(interruptValue, newInterruptId);
-						return { threadId, messages };
-					}
-					
-					// Check for HITL interrupt
-					if (isHITLInterrupt(interruptValue)) {
-						callbacks.onHITLInterrupt?.(interruptValue, newInterruptId);
-						return { threadId, messages };
-					}
-				}
-			}
-		} catch (stateError) {
-			console.warn('[LangGraph] Could not check thread state after tool resume:', stateError);
-		}
-		
-		// Fetch final todos from thread state before completing
-		try {
-			const finalState = await client.threads.getState(threadId);
-			const values = finalState.values as Record<string, unknown>;
-			const finalTodos = values.todos || values.todo_list;
-			if (Array.isArray(finalTodos) && finalTodos.length > 0) {
-				console.log('[LangGraph] Final todos from thread state (tool results resume):', finalTodos.length);
-				callbacks.onTodosSync?.(finalTodos as TodoItem[]);
-			}
-		} catch (fetchError) {
-			console.warn('[LangGraph] Could not fetch final todos:', fetchError);
-		}
-		
-		callbacks.onComplete?.(messages);
-		return { threadId, messages };
+		callbacks.onComplete?.(ctx.messages);
+		return { threadId, messages: ctx.messages };
 		
 	} catch (error) {
 		callbacks.onError?.(error as Error);

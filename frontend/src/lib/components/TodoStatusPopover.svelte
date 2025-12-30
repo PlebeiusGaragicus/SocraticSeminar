@@ -66,6 +66,13 @@
       return () => document.removeEventListener('click', handleClickOutside);
     }
   });
+
+  // Debug: log when todos change
+  $effect(() => {
+    console.log('[TodoPopover] Todos updated:', todos.length, 'items, hasTodos:', hasTodos);
+    console.log('[TodoPopover] Stats:', stats);
+    console.log('[TodoPopover] All statuses:', todos.map(t => t.status));
+  });
 </script>
 
 {#if hasTodos}

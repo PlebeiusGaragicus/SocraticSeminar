@@ -38,7 +38,6 @@ import {
   checkForUnclaimedRefund,
   getThreadStateWithInterrupts,
   getThreadTodos,
-  debugGetThreadState,
   type Message as LangGraphMessage,
   type ThreadStateInfo
 } from '$lib/services/langgraph.js';
@@ -199,10 +198,6 @@ async function sendMessage(
     id: `optimistic-user-${Date.now()}`
   } as LangGraphMessage];
   
-  // Track which AI message ID we're streaming to
-  let currentAiMessageId: string | null = null;
-  let knownAiMessageIds = new Set<string>();
-  
   try {
     // Add user message to local store (persisted)
     threadStore.addMessage(localThreadId, {
@@ -229,35 +224,18 @@ async function sendMessage(
           streamingContent += token;
         },
         
-        onIterationStart: (iteration) => {
-          // Reset for new iteration (after tool execution)
-          if (currentAiMessageId) {
-            knownAiMessageIds.add(currentAiMessageId);
-          }
-          console.log(`[Agent] Iteration ${iteration} starting`);
-          currentAiMessageId = null;
-          streamingContent = '';
-        },
-        
         onMessagesSync: (messages) => {
-          console.log('[Agent] Messages synced:', messages.length, 'messages');
-          console.log('[Agent] Message types:', messages.map(m => m.type));
-          // Sync with server state
+          // Sync with server state - this is the source of truth
           langGraphMessages = [...messages];
           
-          // Find the latest AI message
+          // Reset streaming content when we get a full message sync
+          // The UI will show the server content from langGraphMessages
           const lastAi = messages.findLast(m => m.type === 'ai');
-          console.log('[Agent] Last AI message:', lastAi ? 'found' : 'not found', 
-            lastAi ? { id: lastAi.id, hasContent: !!(lastAi as { content?: unknown }).content } : null);
-          if (lastAi && lastAi.id) {
-            if (!knownAiMessageIds.has(lastAi.id)) {
-              currentAiMessageId = lastAi.id;
-              // Use server content if we haven't started streaming yet
-              if (!streamingContent) {
-                const serverContent = typeof lastAi.content === 'string' ? lastAi.content : '';
-                streamingContent = serverContent;
-                console.log('[Agent] Set streaming content from server:', serverContent.substring(0, 100) + '...');
-              }
+          if (lastAi) {
+            const serverContent = typeof lastAi.content === 'string' ? lastAi.content : '';
+            // Only update streaming content if server has more content
+            if (serverContent.length > streamingContent.length) {
+              streamingContent = serverContent;
             }
           }
         },
@@ -372,16 +350,8 @@ async function sendMessage(
           }
         },
         
-        onComplete: async (finalMessages) => {
+        onComplete: (finalMessages) => {
           console.log('[Agent] Stream completed. Messages:', finalMessages.length);
-          console.log('[Agent] Final message types:', finalMessages.map(m => ({
-            type: m.type,
-            hasContent: !!((m as { content?: unknown }).content),
-            contentPreview: typeof (m as { content?: unknown }).content === 'string' 
-              ? (m as { content: string }).content.substring(0, 100) 
-              : typeof (m as { content?: unknown }).content,
-            toolCalls: ((m as { tool_calls?: unknown[] }).tool_calls || []).length
-          })));
           
           langGraphMessages = [...finalMessages];
           
@@ -389,24 +359,10 @@ async function sendMessage(
           // This ensures we have the complete conversation history including
           // multiple AI messages from tool call iterations
           const convertedMessages = convertLangGraphMessages(finalMessages, localThreadId);
-          console.log('[Agent] Converted to local messages:', convertedMessages.length);
           threadStore.syncMessages(localThreadId, convertedMessages);
           
-          // Fetch todos from thread state after stream completes
-          // This ensures we have the final state of todos
-          if (threadId) {
-            try {
-              console.log('[Agent] Fetching todos from thread state after completion...');
-              await debugGetThreadState(threadId);
-              const stateTodos = await getThreadTodos(threadId);
-              if (stateTodos.length > 0) {
-                console.log('[Agent] Got todos from thread state:', stateTodos);
-                todos = stateTodos;
-              }
-            } catch (err) {
-              console.error('[Agent] Failed to fetch todos from thread state:', err);
-            }
-          }
+          // Todos are synced via onTodosSync callback during stream processing
+          // No need for redundant fetch - values events are the source of truth
           
           isStreaming = false;
           isInterrupted = false;
