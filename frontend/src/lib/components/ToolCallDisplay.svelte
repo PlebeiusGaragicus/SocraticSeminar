@@ -19,6 +19,8 @@
   import ListTodo from '@lucide/svelte/icons/list-todo';
   import Brain from '@lucide/svelte/icons/brain';
   import Search from '@lucide/svelte/icons/search';
+  import HelpCircle from '@lucide/svelte/icons/help-circle';
+  import MessageCircle from '@lucide/svelte/icons/message-circle';
   import type { ToolCallWithStatus } from '$lib/stores/types.js';
 
   interface Props {
@@ -74,6 +76,23 @@
     }
     return { text: content.slice(0, maxLength) + '...', truncated: true };
   }
+
+  function parseChoicesResponse(content: string, options: any[] = []) {
+    try {
+      const data = JSON.parse(content);
+      const selected = data.selected || [];
+      const freeform = data.freeform;
+      
+      const labels = selected.map((id: string) => {
+        const option = options.find(o => o.id === id);
+        return option ? option.label : id;
+      });
+      
+      return { labels, freeform };
+    } catch {
+      return { labels: [], freeform: content };
+    }
+  }
 </script>
 
 <div class="flex flex-col gap-2">
@@ -81,7 +100,7 @@
     {#if toolCall.name === 'write_todos'}
       <div class="flex items-center gap-2 px-1 py-1.5 text-sm text-zinc-400 font-medium">
         <ListTodo class="h-4 w-4 text-amber-500/50" />
-        <span>Updated task list</span>
+        <span>{toolCall.status === 'completed' ? 'Updated todos' : 'Updating todos...'}</span>
         {#if toolCall.status === 'executing'}
           <Loader2 class="h-3.5 w-3.5 animate-spin text-amber-500/50" />
         {/if}
@@ -95,7 +114,7 @@
           class="flex items-center gap-2 px-1 py-1.5 text-sm text-zinc-400 font-medium hover:text-zinc-300 transition-colors group"
         >
           <Brain class="h-4 w-4 text-purple-500/50 group-hover:text-purple-400/70" />
-          <span>Thinking...</span>
+          <span>{toolCall.status === 'completed' ? 'Reflected on progress' : 'Thinking...'}</span>
           {#if toolCall.status === 'executing'}
             <Loader2 class="h-3.5 w-3.5 animate-spin text-purple-500/50" />
           {/if}
@@ -118,9 +137,56 @@
     {:else if toolCall.name === 'tavily_search'}
       <div class="flex items-center gap-2 px-1 py-1.5 text-sm text-zinc-400 font-medium">
         <Search class="h-4 w-4 text-blue-500/50" />
-        <span>Searched for: <span class="text-zinc-300 font-semibold italic">"{toolCall.args.query}"</span></span>
+        <span>{toolCall.status === 'completed' ? 'Searched for:' : 'Searching for:'} <span class="text-zinc-300 font-semibold italic">"{toolCall.args.query}"</span></span>
         {#if toolCall.status === 'executing'}
           <Loader2 class="h-3.5 w-3.5 animate-spin text-blue-500/50" />
+        {/if}
+      </div>
+    {:else if toolCall.name === 'ask_user' || toolCall.name === 'ask_choices'}
+      {@const isChoices = toolCall.name === 'ask_choices'}
+      {@const question = toolCall.args.question}
+      {@const response = toolCall.result?.content}
+      <div class="my-2 flex flex-col gap-2 rounded-xl border border-blue-500/20 bg-blue-500/5 p-3 overflow-hidden">
+        <!-- Question -->
+        <div class="flex items-start gap-2.5">
+          <div class="mt-0.5 rounded-full bg-blue-500/10 p-1 text-blue-400">
+            <HelpCircle class="h-3.5 w-3.5" />
+          </div>
+          <div class="flex-1 min-w-0">
+            <p class="text-[10px] font-semibold uppercase tracking-wider text-blue-400/70 mb-0.5">Clarification Request</p>
+            <p class="text-sm text-zinc-200 leading-relaxed font-medium">{question}</p>
+          </div>
+        </div>
+        
+        <!-- Answer -->
+        {#if response}
+          <div class="flex items-start gap-2.5 ml-1 border-l-2 border-blue-500/20 pl-4 py-1 mt-1">
+            <div class="mt-0.5 text-blue-400/50">
+              <MessageCircle class="h-3.5 w-3.5" />
+            </div>
+            <div class="flex-1 min-w-0">
+              {#if isChoices}
+                {@const { labels, freeform } = parseChoicesResponse(response, toolCall.args.options as any[])}
+                <div class="flex flex-wrap gap-1.5 mb-1">
+                  {#each labels as label}
+                    <span class="rounded-md bg-blue-500/20 px-2 py-0.5 text-xs font-medium text-blue-200 border border-blue-500/30">
+                      {label}
+                    </span>
+                  {/each}
+                </div>
+                {#if freeform}
+                  <p class="text-sm text-zinc-300 italic">{freeform}</p>
+                {/if}
+              {:else}
+                <p class="text-sm text-zinc-300 italic">"{response}"</p>
+              {/if}
+            </div>
+          </div>
+        {:else if toolCall.status === 'executing'}
+          <div class="flex items-center gap-2 ml-7 mt-1 text-xs text-blue-400/60 italic">
+            <Loader2 class="h-3 w-3 animate-spin" />
+            <span>Awaiting user response...</span>
+          </div>
         {/if}
       </div>
     {:else}

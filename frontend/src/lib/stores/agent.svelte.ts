@@ -210,6 +210,11 @@ async function sendMessage(
   const thread = threadStore.threads.find(t => t.id === localThreadId);
   const projectId = thread?.projectId || '';
   
+  // Preserve current history if we're in the same thread
+  if (langGraphThreadId !== threadId) {
+    langGraphMessages = [];
+  }
+  
   // Reset state
   isStreaming = true;
   isInterrupted = false;
@@ -258,26 +263,33 @@ async function sendMessage(
         },
         
         onMessagesSync: (messages) => {
-          // Sync with server state - this is the source of truth
-          // We must preserve the existing length if the server sends back a shorter list
-          // which can happen in the first few events of a run
-          if (messages.length >= langGraphMessages.length) {
+          // Sync with server state - this is the source of truth.
+          // We only overwrite our local state if the server has at least as many 
+          // messages as we do, or if the server messages are definitely more up-to-date.
+          const localHasOptimistic = langGraphMessages.some(m => m.id?.startsWith('optimistic-'));
+          
+          if (messages.length >= langGraphMessages.length || !localHasOptimistic) {
+            // Server has caught up to or surpassed our local state
             langGraphMessages = [...messages];
           } else {
-            // Merge logic: find the point where they diverge and append
-            // This is a safety measure for streaming jitter
-            const newMessages = [...langGraphMessages];
-            const startIdx = messages.length - 1;
-            if (startIdx >= 0) {
-              // Replace from the last known server message
-              // (which might have been updated with new tokens)
-              langGraphMessages = [...messages];
+            // Server might be sending a slightly stale snapshot during run startup.
+            // We keep our local state (which includes Turn 1 history + Turn 2 Human)
+            // but we update the existing messages if they changed.
+            const updatedLocal = [...langGraphMessages];
+            for (let i = 0; i < messages.length; i++) {
+              if (messages[i].content !== updatedLocal[i]?.content) {
+                updatedLocal[i] = { ...updatedLocal[i], ...messages[i] };
+              }
             }
+            langGraphMessages = updatedLocal;
           }
           
-          // Reset streaming content when we get a full message sync
-          // The UI will show the server content from langGraphMessages
-          const lastAi = messages.findLast(m => m.type === 'ai');
+          // Reset streaming content when we get a full message sync.
+          // IMPORTANT: We only sync content from the LATEST AI message if it
+          // actually follows the latest human message (to avoid duplicating history).
+          const lastHumanIdx = messages.findLastIndex(m => m.type === 'human');
+          const lastAi = messages.findLast((m, i) => m.type === 'ai' && i > lastHumanIdx);
+          
           if (lastAi) {
             const serverContent = typeof lastAi.content === 'string' ? lastAi.content : '';
             // Only update streaming content if server has more content
@@ -343,6 +355,18 @@ async function sendMessage(
         
         onClarificationInterrupt: (interrupt, interruptId) => {
           console.log('[Agent] Clarification interrupt received:', interrupt.tool, interrupt.question);
+          
+          // Sanitize options if they've come back as a string (happens with some models)
+          if (typeof interrupt.options === 'string') {
+            try {
+              // Try to fix common JSON typos like ), instead of }, which can happen with model hallucination
+              let sanitized = (interrupt.options as string).replace(/\)\s*,\s*\{/g, '}, {');
+              interrupt.options = JSON.parse(sanitized);
+            } catch (e) {
+              console.error('[Agent] Failed to parse clarification options:', e);
+              interrupt.options = [];
+            }
+          }
           
           // Store the interrupt for the UI to handle
           clarificationInterrupt = interrupt;
@@ -1200,7 +1224,18 @@ async function loadThreadState(
       
       switch (stateInfo.interruptType) {
         case 'clarification':
-          clarificationInterrupt = stateInfo.interruptData as ClarificationInterrupt;
+          const interrupt = stateInfo.interruptData as ClarificationInterrupt;
+          // Sanitize options if they've come back as a string
+          if (typeof interrupt.options === 'string') {
+            try {
+              let sanitized = (interrupt.options as string).replace(/\)\s*,\s*\{/g, '}, {');
+              interrupt.options = JSON.parse(sanitized);
+            } catch (e) {
+              console.error('[Agent] Failed to parse restored clarification options:', e);
+              interrupt.options = [];
+            }
+          }
+          clarificationInterrupt = interrupt;
           console.log('[Agent] Restored clarification interrupt:', clarificationInterrupt.tool);
           break;
           

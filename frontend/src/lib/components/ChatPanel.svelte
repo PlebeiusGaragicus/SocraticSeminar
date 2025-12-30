@@ -96,22 +96,23 @@
   // INPUT MODE LOGIC - Unified input area adapts to current context
   // =============================================================================
 
-  const inputMode = $derived.by((): InputMode => {
-    if (!awaitingHumanResponse) return 'normal';
-    
-    if (clarificationInterrupt) {
-      if (clarificationInterrupt.tool === 'ask_choices' && clarificationInterrupt.options?.length) {
-        return 'choices';
+    // Unified input mode logic
+    const inputMode = $derived.by((): InputMode => {
+      if (!awaitingHumanResponse) return 'normal';
+      
+      if (clarificationInterrupt) {
+        if (clarificationInterrupt.tool === 'ask_choices' && Array.isArray(clarificationInterrupt.options) && clarificationInterrupt.options.length > 0) {
+          return 'choices';
+        }
+        return 'clarification';
       }
-      return 'clarification';
-    }
-    
-    if (hitlInterrupt || clientToolInterrupt) {
-      return 'hitl';
-    }
-    
-    return 'normal';
-  });
+      
+      if (hitlInterrupt || clientToolInterrupt) {
+        return 'hitl';
+      }
+      
+      return 'normal';
+    });
 
   // Unified interrupt for HITL display
   const activeHitlInterrupt = $derived.by(() => {
@@ -285,14 +286,21 @@
   const showStreamingBubble = $derived.by(() => {
     if (!isStreaming || !streamingContent) return false;
     
-    // During a long run with many messages, the server might be appending to 
-    // the history in LangGraph state. Our processedMessages derivation 
-    // already handles showing the partial content of the LATEST AI message.
-    // We only need the streaming bubble if the content isn't already 
-    // reflected in the message list.
-    const lastMessage = processedMessages[processedMessages.length - 1];
-    if (lastMessage?.type === 'ai' && lastMessage.content.includes(streamingContent.slice(0, 10))) {
-      return false;
+    // Find the latest human message index
+    const lastHumanIdx = processedMessages.findLastIndex(m => m.type === 'human');
+    
+    // Find if there is an AI message AFTER the latest human message
+    const lastAiAfterHuman = processedMessages.findLast((m, i) => m.type === 'ai' && i > lastHumanIdx);
+    
+    // If we have an AI message already synced into the history list after your latest prompt,
+    // check if it's already showing the same content we're streaming.
+    if (lastAiAfterHuman) {
+      const historyContent = lastAiAfterHuman.content || '';
+      // If the synced history content is already nearly as long as the streaming content,
+      // it means the 'values' event has caught up, so we hide the separate bubble.
+      if (historyContent.length > 0 && streamingContent.startsWith(historyContent.slice(0, 20))) {
+        return false;
+      }
     }
     
     return true;
@@ -689,7 +697,7 @@
         <div class="p-3">
           <p class="text-sm text-zinc-200 leading-relaxed">{clarificationInterrupt.question}</p>
           
-          {#if inputMode === 'choices' && clarificationInterrupt.options}
+          {#if inputMode === 'choices' && Array.isArray(clarificationInterrupt.options)}
             <div class="mt-3 flex flex-wrap gap-2">
               {#each clarificationInterrupt.options as option}
                 <button
@@ -704,7 +712,7 @@
                   {#if selectedChoices.includes(option.id)}
                     <Check class="h-3 w-3 inline mr-1" />
                   {/if}
-                  {option.label}
+                  {option.label || option.id || 'Option'}
                 </button>
               {/each}
             </div>
