@@ -71,7 +71,7 @@
   </button>
 
   {#if isOpen}
-    <div class="absolute right-0 top-full z-50 mt-1 min-w-[220px] rounded-lg border border-zinc-700 bg-zinc-800 py-1 shadow-xl">
+    <div class="absolute left-0 top-full z-50 mt-1 min-w-[220px] rounded-lg border border-zinc-700 bg-zinc-800 py-1 shadow-xl">
       <!-- Header -->
       <div class="flex items-center justify-between border-b border-zinc-700 px-3 py-2">
         <span class="text-xs font-semibold uppercase tracking-wider text-zinc-500">

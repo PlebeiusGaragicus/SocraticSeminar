@@ -33,9 +33,9 @@ from deepagents.middleware.subagents import SubAgentMiddleware
 
 from src.middleware import (
     CashuPaymentMiddleware, 
-    ClarifyWithHumanMiddleware, 
+    ClarifyWithHumanMiddleware,
     ClientToolsMiddleware,
-    ScratchFilesMiddleware,
+    # ScratchFilesMiddleware,
     WebsearchMiddleware,
     ThinkingMiddleware,
 )
@@ -204,7 +204,7 @@ def create_deepresearch_agent(
     # 4. Scratch files - agent working memory stored in state (visible to user, read-only)
     #    Agent can write to /scratch/ freely without approval
     #    Frontend can display these files for transparency
-    middleware.append(ScratchFilesMiddleware())
+    # middleware.append(ScratchFilesMiddleware())
     
     # 5. Client tools - ALL client file operations interrupt for client-side execution
     #    Write tools include requires_approval=True for frontend approval UI
@@ -226,7 +226,7 @@ def create_deepresearch_agent(
                 subagents=[subagent_config],
                 default_middleware=[
                     TodoListMiddleware(),
-                    ScratchFilesMiddleware(),  # Sub-agents also use scratch files
+                    # ScratchFilesMiddleware(),  # Sub-agents also use scratch files
                     ThinkingMiddleware(),      # Sub-agents also think
                 ],
                 general_purpose_agent=False,  # Research-specific sub-agent

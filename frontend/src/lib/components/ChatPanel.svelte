@@ -523,11 +523,9 @@
 
 <div class="flex h-full flex-col bg-zinc-900/30">
   <!-- Header with Agent Picker and Todo Status -->
-  <div class="flex items-center justify-end border-b border-zinc-800 px-4 py-2">
-    <div class="flex items-center gap-2">
-      <AgentPicker />
-      <TodoStatusPopover />
-    </div>
+  <div class="flex items-center justify-between border-b border-zinc-800 px-4 py-2">
+    <AgentPicker />
+    <TodoStatusPopover />
   </div>
 
   <!-- Messages -->
@@ -590,7 +588,6 @@
           <div class="flex justify-start">
             <div class="max-w-[85%] rounded-xl bg-zinc-800 px-4 py-2 text-zinc-200">
               <p class="whitespace-pre-wrap text-sm">{streamingContent}</p>
-              <span class="animate-pulse text-amber-500">▊</span>
             </div>
           </div>
         {/if}
