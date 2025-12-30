@@ -54,17 +54,23 @@ setToolExecutor(executeToolCall);
  * Convert LangGraph messages to local message format.
  * Filters out tool messages (they're displayed as part of AI messages).
  */
+/**
+ * Convert LangGraph messages to local message format.
+ * Filters out tool messages but associates their content with the corresponding AI message.
+ */
 function convertLangGraphMessages(
   lgMessages: LangGraphMessage[],
   threadId: string
-): Omit<LocalMessage, 'id' | 'createdAt'>[] {
-  const localMessages: Omit<LocalMessage, 'id' | 'createdAt'>[] = [];
+): Omit<LocalMessage, 'createdAt'>[] {
+  const localMessages: Array<Omit<LocalMessage, 'createdAt'> & { toolCalls?: ToolCallWithStatus[] }> = [];
+  const aiMessageMap = new Map<string, typeof localMessages[0]>();
   
   for (let i = 0; i < lgMessages.length; i++) {
     const msg = lgMessages[i];
     
     if (msg.type === 'human') {
       localMessages.push({
+        id: msg.id || `human-${i}`,
         threadId,
         role: 'user',
         content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
@@ -75,15 +81,42 @@ function convertLangGraphMessages(
       
       // Only add if there's content or tool calls
       if (content || (toolCalls && toolCalls.length > 0)) {
-        localMessages.push({
+        const localAiMsg = {
+          id: msg.id || `ai-${i}`,
           threadId,
-          role: 'assistant',
+          role: 'assistant' as const,
           content,
-          toolCalls: toolCalls
-        });
+          toolCalls: toolCalls?.map(tc => ({
+            ...tc,
+            status: 'completed' as const // Default to completed for historical messages
+          })) || []
+        };
+        localMessages.push(localAiMsg);
+        aiMessageMap.set(localAiMsg.id, localAiMsg);
+      }
+    } else if (msg.type === 'tool') {
+      const toolMsg = msg as { tool_call_id?: string };
+      const toolCallId = toolMsg.tool_call_id;
+      if (!toolCallId) continue;
+      
+      const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+      
+      // Look for the corresponding AI message that made this tool call
+      for (const aiMsg of localMessages) {
+        if (aiMsg.role === 'assistant' && aiMsg.toolCalls) {
+          const toolCall = aiMsg.toolCalls.find(tc => tc.id === toolCallId);
+          if (toolCall) {
+            toolCall.result = {
+              tool_call_id: toolCallId,
+              name: toolCall.name,
+              content: content
+            };
+            toolCall.status = 'completed';
+            break;
+          }
+        }
       }
     }
-    // Skip 'tool' messages - they're displayed as part of the AI message's tool calls
   }
   
   return localMessages;
@@ -190,9 +223,9 @@ async function sendMessage(
   setPendingToolCalls([]);
   setStreamingContent('');
   
-  // Initialize langGraphMessages with user message for immediate display
-  // This will be replaced by server state via onMessagesSync
-  langGraphMessages = [{
+  // Add new message to existing history for immediate display
+  // This prevents history from "disappearing" while streaming starts
+  langGraphMessages = [...langGraphMessages, {
     type: 'human',
     content: message,
     id: `optimistic-user-${Date.now()}`
@@ -226,7 +259,21 @@ async function sendMessage(
         
         onMessagesSync: (messages) => {
           // Sync with server state - this is the source of truth
-          langGraphMessages = [...messages];
+          // We must preserve the existing length if the server sends back a shorter list
+          // which can happen in the first few events of a run
+          if (messages.length >= langGraphMessages.length) {
+            langGraphMessages = [...messages];
+          } else {
+            // Merge logic: find the point where they diverge and append
+            // This is a safety measure for streaming jitter
+            const newMessages = [...langGraphMessages];
+            const startIdx = messages.length - 1;
+            if (startIdx >= 0) {
+              // Replace from the last known server message
+              // (which might have been updated with new tokens)
+              langGraphMessages = [...messages];
+            }
+          }
           
           // Reset streaming content when we get a full message sync
           // The UI will show the server content from langGraphMessages

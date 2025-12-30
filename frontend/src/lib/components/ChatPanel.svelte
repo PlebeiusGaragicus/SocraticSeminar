@@ -190,7 +190,7 @@
 
     const messageMap = new Map<string, { message: LangGraphMessage; toolCalls: ToolCallWithStatus[] }>();
     
-    langGraphMessages.forEach((message: LangGraphMessage) => {
+    langGraphMessages.forEach((message: LangGraphMessage, index: number) => {
       if (message.type === 'ai') {
         const toolCallsInMessage: Array<{
           id?: string;
@@ -214,16 +214,17 @@
           toolCallsInMessage.push(...toolUseBlocks);
         }
         
-        const toolCallsWithStatus: ToolCallWithStatus[] = toolCallsInMessage.map(toolCall => {
-          const name = toolCall.function?.name || toolCall.name || toolCall.type || 'unknown';
-          const args = (toolCall.function?.arguments || toolCall.args || toolCall.input || {}) as Record<string, unknown>;
-          return {
-            id: toolCall.id || `tool-${Math.random().toString(36).substr(2, 9)}`,
-            name,
-            args,
-            status: isInterrupted ? 'pending' : 'pending' as const
-          };
-        });
+        const toolCallsWithStatus: ToolCallWithStatus[] = toolCallsInMessage
+          .map(toolCall => {
+            const name = toolCall.function?.name || toolCall.name || toolCall.type || 'unknown';
+            const args = (toolCall.function?.arguments || toolCall.args || toolCall.input || {}) as Record<string, unknown>;
+            return {
+              id: toolCall.id || `tool-${index}-${name}`,
+              name,
+              args,
+              status: 'pending' as const
+            };
+          });
         
         // Only include AI messages if they have content OR tool calls
         // This prevents empty intermediate messages from appearing as "Processing..."
@@ -232,7 +233,8 @@
         const hasToolCalls = toolCallsWithStatus.length > 0;
         
         if (hasContent || hasToolCalls) {
-          const stableId = message.id || `ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+          // Use server ID if available, otherwise a stable ID based on index
+          const stableId = message.id || `ai-${index}`;
           messageMap.set(stableId, { message, toolCalls: toolCallsWithStatus });
         }
         
@@ -258,7 +260,7 @@
         }
         
       } else if (message.type === 'human') {
-        const stableId = message.id || `human-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const stableId = message.id || `human-${index}`;
         messageMap.set(stableId, { message, toolCalls: [] });
       }
     });
@@ -282,8 +284,17 @@
 
   const showStreamingBubble = $derived.by(() => {
     if (!isStreaming || !streamingContent) return false;
+    
+    // During a long run with many messages, the server might be appending to 
+    // the history in LangGraph state. Our processedMessages derivation 
+    // already handles showing the partial content of the LATEST AI message.
+    // We only need the streaming bubble if the content isn't already 
+    // reflected in the message list.
     const lastMessage = processedMessages[processedMessages.length - 1];
-    if (lastMessage?.type === 'ai' && lastMessage.content) return false;
+    if (lastMessage?.type === 'ai' && lastMessage.content.includes(streamingContent.slice(0, 10))) {
+      return false;
+    }
+    
     return true;
   });
 

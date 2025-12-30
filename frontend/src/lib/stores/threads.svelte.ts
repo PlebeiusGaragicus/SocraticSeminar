@@ -195,11 +195,11 @@ function clearMessages(threadId: string): void {
  * Sync/replace all messages for a thread.
  * Used to sync with LangGraph server state after a conversation completes.
  */
-function syncMessages(threadId: string, messages: Omit<Message, 'id' | 'createdAt'>[]): void {
+function syncMessages(threadId: string, messages: Omit<Message, 'createdAt'>[]): void {
   const now = Date.now();
   const newMessages: Message[] = messages.map((msg, index) => ({
     ...msg,
-    id: `synced-${threadId}-${index}-${now}`,
+    id: msg.id || `synced-${threadId}-${index}-${now}`,
     threadId,
     createdAt: now - (messages.length - index) * 1000 // Preserve order with timestamps
   }));
