@@ -5,7 +5,6 @@ Architecture:
 - CashuPaymentMiddleware: Streaming micropayments with per-iteration deduction
 - TodoListMiddleware: Task tracking for complex multi-step research
 - ClarifyWithHumanMiddleware: Ask user for intent clarification
-- ScratchFilesMiddleware: Agent working memory (visible to user, read-only)
 - ClientToolsMiddleware: Client-side file operations via HITL interrupts
 - HumanInTheLoopMiddleware: Approval for funding requests
 
@@ -125,21 +124,13 @@ def create_deepresearch_agent(
     1. CashuPaymentMiddleware - Payment validation and per-iteration deduction
     2. TodoListMiddleware - Task tracking for complex research operations
     3. ClarifyWithHumanMiddleware - Ask user for intent clarification
-    4. ScratchFilesMiddleware - Agent scratch files (visible to user, read-only)
-    5. ClientToolsMiddleware - Client-side file operations via HITL interrupts
-    6. SubAgentMiddleware - Parallel research delegation
-    7. HumanInTheLoopMiddleware - Approval for funding requests
+    4. ClientToolsMiddleware - Client-side file operations via HITL interrupts
+    5. SubAgentMiddleware - Parallel research delegation
+    6. HumanInTheLoopMiddleware - Approval for funding requests
     
     The agent operates with TWO file systems:
     
-    1. Scratch Files (via ScratchFilesMiddleware):
-       - Paths: /scratch/notes.md, /scratch/analysis/, etc.
-       - Agent can write freely without user approval
-       - Stored in agent state (visible to frontend for transparency)
-       - READ-ONLY from user's perspective
-       - Used for intermediate analysis, drafts, working memory
-    
-    2. User Files (via ClientToolsMiddleware):
+    1. User Files (via ClientToolsMiddleware):
        - User's project files stored in browser
        - Write operations require HITL approval
        - Used for: final reports, user documents
@@ -186,10 +177,6 @@ def create_deepresearch_agent(
     # NOTE: ClientToolsMiddleware handles ALL client file tool interrupts including approval.
     # Write operations (write_file, edit_file) have requires_approval=True which the
     # frontend uses to show approval UI before executing locally.
-    # 
-    # ScratchFilesMiddleware allows the agent to write freely to /scratch/ space.
-    # These files are stored in state and visible to the frontend for transparency.
-    #
     middleware: list[AgentMiddleware] = []
     
     # 1. Payment middleware (optional) - validates token, tracks balance, deducts per iteration
@@ -205,11 +192,7 @@ def create_deepresearch_agent(
     # 3. Clarification tools - ask user for intent clarification
     middleware.append(ClarifyWithHumanMiddleware())
     
-    # 4. Scratch files - agent working memory stored in state (visible to user, read-only)
-    #    Agent can write to /scratch/ freely without approval
-    #    Frontend can display these files for transparency
-    # middleware.append(ScratchFilesMiddleware())
-    
+
     # 5. Client tools - ALL client file operations interrupt for client-side execution
     #    Write tools include requires_approval=True for frontend approval UI
     middleware.append(ClientToolsMiddleware())

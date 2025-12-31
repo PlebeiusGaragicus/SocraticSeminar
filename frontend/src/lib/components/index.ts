@@ -7,5 +7,4 @@ export { default as ChatPanel } from './ChatPanel.svelte';
 export { default as TabbedEditor } from './TabbedEditor.svelte';
 export { default as AgentPicker } from './AgentPicker.svelte';
 export { default as ToolCallDisplay } from './ToolCallDisplay.svelte';
-export { default as ScratchFilesPanel } from './ScratchFilesPanel.svelte';
 export { default as TodoStatusPopover } from './TodoStatusPopover.svelte';

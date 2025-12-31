@@ -160,8 +160,6 @@ let clarificationInterrupt = $state<ClarificationInterrupt | null>(null);
 
 import type { ScratchFile, TodoItem } from './types.js';
 
-// Scratch files from agent's working memory (stored in agent state)
-let scratchFiles = $state<Record<string, ScratchFile>>({});
 
 // Todos from TodoListMiddleware
 let todos = $state<TodoItem[]>([]);
@@ -364,10 +362,6 @@ async function sendMessage(
           isStreaming = false;
         },
         
-        onScratchFilesSync: (files) => {
-          console.log('[Agent] Scratch files synced:', Object.keys(files).length, 'files');
-          scratchFiles = { ...files };
-        },
         
         onTodosSync: (todoList) => {
           console.log('[Agent] Todos synced:', todoList.length, 'items');
@@ -1152,7 +1146,6 @@ function resetStream(): void {
   paymentInterrupt = null;
   clientToolInterrupt = null;
   clarificationInterrupt = null;
-  scratchFiles = {};
   todos = [];
   setPendingToolCalls([]);
   setStreamingContent('');
@@ -1287,8 +1280,7 @@ export const agentStore = {
   // Clarification getter
   get clarificationInterrupt() { return clarificationInterrupt; },
   
-  // Scratch files & todos (visible to user, read-only)
-  get scratchFiles() { return scratchFiles; },
+  // Todos from TodoListMiddleware
   get todos() { return todos; },
   
   // Actions

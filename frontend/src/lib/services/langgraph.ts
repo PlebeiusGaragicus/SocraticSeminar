@@ -67,14 +67,6 @@ export function getClient(apiUrl?: string): Client {
 // TYPES
 // =============================================================================
 
-// Scratch file from agent state
-export interface ScratchFile {
-	path: string;
-	content: string[];
-	created_at?: string;
-	modified_at?: string;
-}
-
 // Todo item from TodoListMiddleware
 // Note: TodoListMiddleware provides {content, status} without id
 // We generate synthetic IDs on the frontend for React keys
@@ -101,8 +93,6 @@ export interface StreamCallbacks {
 	onClientToolInterrupt?: (interrupt: ClientToolInterrupt, interruptId: string) => void;
 	// Clarification interrupt (ask_user / ask_choices)
 	onClarificationInterrupt?: (interrupt: ClarificationInterrupt, interruptId: string) => void;
-	// Agent state sync (scratch files, todos)
-	onScratchFilesSync?: (files: Record<string, ScratchFile>) => void;
 	onTodosSync?: (todos: TodoItem[]) => void;
 	// Real-time node updates (requires 'updates' stream mode)
 	onNodeUpdate?: (nodeName: string, update: Record<string, unknown>) => void;
@@ -212,7 +202,6 @@ async function processStreamEvents(
 		if (eventType === 'values') {
 			const data = event.data as { 
 				messages?: Message[]; 
-				scratch_files?: Record<string, ScratchFile>;
 				todos?: TodoItem[];
 				[key: string]: unknown;
 			};
@@ -246,10 +235,6 @@ async function processStreamEvents(
 				}
 			}
 			
-			// Sync scratch files to UI
-			if (data.scratch_files !== undefined && Object.keys(data.scratch_files).length >= 0) {
-				callbacks.onScratchFilesSync?.(data.scratch_files);
-			}
 			
 			// Sync todos to UI
 			// TodoListMiddleware uses 'todos' field with structure: {content, status}
@@ -441,7 +426,6 @@ export async function submitMessage(
 				if (event.event === 'values') {
 					const data = event.data as { 
 						messages?: Message[]; 
-						scratch_files?: Record<string, ScratchFile>;
 						todos?: TodoItem[];
 						[key: string]: unknown;
 					};
@@ -494,11 +478,6 @@ export async function submitMessage(
 						}
 					}
 					
-					// Sync scratch files to UI (agent's working memory - visible to user)
-					if (data.scratch_files !== undefined) {
-						console.log('[LangGraph] Scratch files updated:', Object.keys(data.scratch_files).length, 'files');
-						callbacks.onScratchFilesSync?.(data.scratch_files);
-					}
 					
 					// Sync todos to UI
 					// TodoListMiddleware uses 'todos' field with structure: {content, status}
@@ -524,11 +503,6 @@ export async function submitMessage(
 							
 							callbacks.onNodeUpdate?.(nodeName, update);
 							
-							// Extract scratch_files from any node
-							if (update.scratch_files && typeof update.scratch_files === 'object') {
-								console.log('[LangGraph] Scratch files found in update');
-								callbacks.onScratchFilesSync?.(update.scratch_files as Record<string, ScratchFile>);
-							}
 							
 							// Extract todos from "tools" node when write_todos executes
 							// TodoListMiddleware uses 'todos' field with structure: {content, status}
@@ -630,7 +604,7 @@ export async function submitMessage(
 									}
 									
 									if (resumeEvent.event === 'values') {
-										const data = resumeEvent.data as { messages?: Message[]; todos?: TodoItem[]; scratch_files?: Record<string, ScratchFile> };
+										const data = resumeEvent.data as { messages?: Message[]; todos?: TodoItem[] };
 										console.log('[LangGraph] resumeEvent.event === "values" - Values event data:', JSON.stringify(data, null, 2));
 										if (data.messages) {
 											messages.length = 0;
@@ -641,10 +615,6 @@ export async function submitMessage(
 										if (data.todos !== undefined && Array.isArray(data.todos)) {
 											console.log('[LangGraph] Todos from client tool resume:', data.todos.length);
 											callbacks.onTodosSync?.(data.todos);
-										}
-										// Sync scratch files from inner resume stream
-										if (data.scratch_files !== undefined) {
-											callbacks.onScratchFilesSync?.(data.scratch_files);
 										}
 									}
 								}
@@ -723,7 +693,7 @@ export async function submitMessage(
 									}
 									
 									if (resumeEvent.event === 'values') {
-										const data = resumeEvent.data as { messages?: Message[]; todos?: TodoItem[]; scratch_files?: Record<string, ScratchFile> };
+										const data = resumeEvent.data as { messages?: Message[]; todos?: TodoItem[] };
 										if (data.messages) {
 											messages.length = 0;
 											messages.push(...data.messages);
@@ -733,10 +703,6 @@ export async function submitMessage(
 										if (data.todos !== undefined && Array.isArray(data.todos)) {
 											console.log('[LangGraph] Todos from HITL resume:', data.todos.length);
 											callbacks.onTodosSync?.(data.todos);
-										}
-										// Sync scratch files from inner resume stream
-										if (data.scratch_files !== undefined) {
-											callbacks.onScratchFilesSync?.(data.scratch_files);
 										}
 									}
 								}
