@@ -327,9 +327,64 @@
       searchTerm = '';
     }
   }
+
+  // Drag and drop state
+  let isDraggingOver = $state(false);
+
+  function handleDragStart(e: DragEvent, tabId: string, tabType: string) {
+    if (e.dataTransfer) {
+      e.dataTransfer.setData('application/svelte-tab-id', tabId);
+      e.dataTransfer.setData('application/svelte-tab-type', tabType);
+      e.dataTransfer.setData('application/svelte-tab-source-column', column);
+      // Set drag image or ghost effect
+      e.dataTransfer.effectAllowed = 'move';
+    }
+  }
+
+  function handleDrop(e: DragEvent) {
+    e.preventDefault();
+    isDraggingOver = false;
+    
+    const id = e.dataTransfer?.getData('application/svelte-tab-id');
+    const type = e.dataTransfer?.getData('application/svelte-tab-type');
+    const sourceColumn = e.dataTransfer?.getData('application/svelte-tab-source-column');
+
+    if (!id || !type) return;
+
+    if (sourceColumn && (sourceColumn === 'left' || sourceColumn === 'right')) {
+      if (sourceColumn !== column) {
+        workspaceStore.moveTab(id, sourceColumn, column);
+      }
+    } else {
+      // Sidebar drag or unknown source
+      workspaceStore.openItem(id, type as any, column);
+    }
+  }
+
+  function handleDragOver(e: DragEvent) {
+    e.preventDefault();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'move';
+    }
+    isDraggingOver = true;
+  }
+
+  function handleDragLeave() {
+    isDraggingOver = false;
+  }
 </script>
 
-<div class="flex h-full flex-col bg-zinc-950 relative">
+<div 
+  class={cn(
+    "flex h-full flex-col bg-zinc-950 relative transition-colors duration-200",
+    isDraggingOver ? "ring-2 ring-inset ring-amber-500/30 bg-amber-500/5" : ""
+  )}
+  role="region"
+  aria-label="Tabbed workspace panel"
+  ondragover={handleDragOver}
+  ondragleave={handleDragLeave}
+  ondrop={handleDrop}
+>
   {#if showNewMenu}
     <div 
       class="fixed inset-0 z-40" 
@@ -403,155 +458,155 @@
     </div>
   {/if}
 
-  {#if tabs.length === 0}
-    <div class="flex h-full items-center justify-center text-zinc-600">
-      <div class="text-center">
-        <p class="text-lg">No tabs open</p>
-        <p class="mt-1 text-sm">Select an item from the sidebar</p>
-      </div>
-    </div>
-  {:else}
-    <div class="flex items-center border-b border-zinc-800 bg-zinc-900/50">
-      <div class="flex flex-1 overflow-x-auto">
-        {#each tabs as tab (tab.id)}
-          {@const isActive = tab.id === activeTabId}
-          {@const title = getTabTitle(tab)}
-          {@const Icon = getTabIcon(tab)}
-          {@const art = tab.type === 'artifact' ? getArtifact(tab.id) : null}
-          {@const thread = tab.type === 'thread' ? getThread(tab.id) : null}
-          {@const source = tab.type === 'source' ? getSource(tab.id) : null}
-          {@const isUnviewed = (art && !art.viewed) || (thread && !thread.viewed) || (source && !source.viewed)}
-          
-          <div
-            class={cn(
-              "group flex items-center gap-2 border-r border-zinc-800 px-3 py-2 text-sm transition-colors cursor-pointer min-w-[100px]",
-              isActive
-                ? "bg-zinc-950 text-zinc-100"
-                : "bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-300"
-            )}
-            onclick={() => onTabSelect(tab.id)}
-            onkeydown={(e) => e.key === 'Enter' && onTabSelect(tab.id)}
-            role="tab"
-            tabindex="0"
-          >
-            {#if isUnviewed}
-              <span class="size-1.5 flex-shrink-0 rounded-full bg-blue-500"></span>
-            {/if}
-            {#if thread}
-              <span class={cn("size-2 flex-shrink-0 rounded-full", STATUS_COLORS[thread.status])}></span>
-            {/if}
-            <Icon class={cn(
-              "h-3.5 w-3.5 flex-shrink-0",
-              isActive ? "text-zinc-100" : (isUnviewed ? "text-blue-500" : "text-zinc-500")
-            )} />
-            <span class="max-w-[120px] truncate">{title}</span>
-            <button
-              onclick={(e) => { e.stopPropagation(); onTabClose(tab.id); }}
-              class="rounded p-0.5 text-zinc-500 opacity-0 transition-all hover:bg-zinc-700 hover:text-zinc-300 group-hover:opacity-100 {isActive ? 'opacity-100' : ''}"
-            >
-              <X class="h-3.5 w-3.5" />
-            </button>
-          </div>
-        {/each}
-
-        <button
-          onclick={() => showNewMenu = !showNewMenu}
-          class="flex items-center justify-center px-3 py-2 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors border-r border-zinc-800"
-          title="New tab"
+  <div class="flex items-center border-b border-zinc-800 bg-zinc-900/50">
+    <div class="flex flex-1 overflow-x-auto">
+      {#each tabs as tab (tab.id)}
+        {@const isActive = tab.id === activeTabId}
+        {@const title = getTabTitle(tab)}
+        {@const Icon = getTabIcon(tab)}
+        {@const art = tab.type === 'artifact' ? getArtifact(tab.id) : null}
+        {@const thread = tab.type === 'thread' ? getThread(tab.id) : null}
+        {@const source = tab.type === 'source' ? getSource(tab.id) : null}
+        {@const isUnviewed = (art && !art.viewed) || (thread && !thread.viewed) || (source && !source.viewed)}
+        
+        <div
+          class={cn(
+            "group flex items-center gap-2 border-r border-zinc-800 px-3 py-2 text-sm transition-colors cursor-pointer min-w-[100px]",
+            isActive
+              ? "bg-zinc-950 text-zinc-100"
+              : "bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-300"
+          )}
+          onclick={() => onTabSelect(tab.id)}
+          onkeydown={(e) => e.key === 'Enter' && onTabSelect(tab.id)}
+          draggable="true"
+          ondragstart={(e) => handleDragStart(e, tab.id, tab.type)}
+          role="tab"
+          tabindex="0"
         >
-          <Plus class="h-4 w-4" />
-        </button>
-      </div>
-
-      {#if activeArtifact}
-        <div class="flex items-center gap-2 px-3 border-r border-zinc-800 h-full">
-          <button onclick={handlePrevVersion} disabled={!canGoPrev} class="rounded p-1 text-zinc-500 hover:bg-zinc-800 disabled:opacity-30">
-            <ChevronLeft class="h-4 w-4" />
-          </button>
-          <span class="text-xs text-zinc-500">v{activeArtifact.currentVersionIndex + 1}/{activeArtifact.versions.length}</span>
-          <button onclick={handleNextVersion} disabled={!canGoNext} class="rounded p-1 text-zinc-500 hover:bg-zinc-800 disabled:opacity-30">
-            <ChevronRight class="h-4 w-4" />
-          </button>
-        </div>
-      {/if}
-
-      {#if column === 'left' && workspaceStore.rightPanelCollapsed}
-        <button
-          onclick={() => workspaceStore.toggleRightPanel()}
-          class="px-3 py-2 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors border-l border-zinc-800 h-full"
-          title="Open right panel"
-        >
-          <PanelRightOpen class="h-4 w-4" />
-        </button>
-      {/if}
-
-      {#if showClosePanel}
-        <button
-          onclick={onClosePanel}
-          class="px-3 py-2 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors border-l border-zinc-800 h-full"
-          title="Close panel and move tabs to left"
-        >
-          <PanelRightClose class="h-4 w-4" />
-        </button>
-      {/if}
-    </div>
-
-    <div class="relative flex-1 overflow-hidden">
-      {#if activeTab?.type === 'thread'}
-        <div class="absolute inset-0">
-          <ChatPanel threadId={activeTabId} />
-        </div>
-      {:else if activeTab?.type === 'source'}
-        <div class="absolute inset-0 flex flex-col bg-zinc-950 overflow-hidden">
-          {#if activeSource}
-            <div class="flex items-center justify-between border-b border-zinc-800 bg-zinc-900/30 px-4 py-2">
-              <div class="flex items-center gap-2 min-w-0">
-                <Globe class="h-4 w-4 text-blue-500" />
-                <span class="text-sm font-medium text-zinc-300 truncate">{activeSource.title}</span>
-              </div>
-              <a 
-                href={activeSource.url} 
-                target="_blank" 
-                rel="noopener noreferrer"
-                class="flex items-center gap-1.5 rounded-md bg-zinc-800 px-2.5 py-1 text-xs font-medium text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200 transition-colors"
-              >
-                <span>View Original</span>
-                <ExternalLink class="h-3 w-3" />
-              </a>
-            </div>
-            <div class="flex-1 overflow-y-auto p-8 prose prose-invert max-w-none prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-800">
-              <!-- Simple markdown-like rendering for source content -->
-              <div class="text-zinc-300 leading-relaxed whitespace-pre-wrap font-sans">
-                {activeSource.content}
-              </div>
-            </div>
+          {#if isUnviewed}
+            <span class="size-1.5 flex-shrink-0 rounded-full bg-blue-500"></span>
           {/if}
+          {#if thread}
+            <span class={cn("size-2 flex-shrink-0 rounded-full", STATUS_COLORS[thread.status])}></span>
+          {/if}
+          <Icon class={cn(
+            "h-3.5 w-3.5 flex-shrink-0",
+            isActive ? "text-zinc-100" : (isUnviewed ? "text-blue-500" : "text-zinc-500")
+          )} />
+          <span class="max-w-[120px] truncate">{title}</span>
+          <button
+            onclick={(e) => { e.stopPropagation(); onTabClose(tab.id); }}
+            class="rounded p-0.5 text-zinc-500 opacity-0 transition-all hover:bg-zinc-700 hover:text-zinc-300 group-hover:opacity-100 {isActive ? 'opacity-100' : ''}"
+          >
+            <X class="h-3.5 w-3.5" />
+          </button>
         </div>
-      {:else if activeTab?.type === 'artifact'}
-        {#if !isEditorReady}
-          <div class="absolute inset-0 flex items-center justify-center text-zinc-500">
-            <div class="text-center">
-              <div class="mb-2 h-6 w-6 animate-spin rounded-full border-2 border-zinc-600 border-t-amber-500 mx-auto"></div>
-              <p class="text-sm">Loading editor...</p>
-            </div>
-          </div>
-        {:else if showDiff}
-          <div class="absolute inset-0 flex flex-col">
-            <div class="flex items-center justify-between border-b border-amber-500/30 bg-amber-500/10 px-4 py-2">
-              <span class="text-sm font-medium text-amber-400">Agent proposed changes</span>
-              <div class="flex gap-2">
-                <Button variant="ghost" size="sm" onclick={() => artifactStore.rejectPendingChanges()}>Reject</Button>
-                <Button size="sm" class="bg-amber-600" onclick={() => artifactStore.acceptPendingChanges()}>Accept</Button>
-              </div>
-            </div>
-            <div use:setDiffContainer class="flex-1 overflow-auto"></div>
-          </div>
-        {:else}
-          <div use:setEditorContainer class="absolute inset-0 bg-zinc-950"></div>
-        {/if}
-      {/if}
+      {/each}
+
+      <button
+        onclick={() => showNewMenu = !showNewMenu}
+        class="flex items-center justify-center px-3 py-2 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors border-r border-zinc-800"
+        title="New tab"
+      >
+        <Plus class="h-4 w-4" />
+      </button>
     </div>
-  {/if}
+
+    {#if activeArtifact}
+      <div class="flex items-center gap-2 px-3 border-r border-zinc-800 h-full">
+        <button onclick={handlePrevVersion} disabled={!canGoPrev} class="rounded p-1 text-zinc-500 hover:bg-zinc-800 disabled:opacity-30">
+          <ChevronLeft class="h-4 w-4" />
+        </button>
+        <span class="text-xs text-zinc-500">v{activeArtifact.currentVersionIndex + 1}/{activeArtifact.versions.length}</span>
+        <button onclick={handleNextVersion} disabled={!canGoNext} class="rounded p-1 text-zinc-500 hover:bg-zinc-800 disabled:opacity-30">
+          <ChevronRight class="h-4 w-4" />
+        </button>
+      </div>
+    {/if}
+
+    {#if column === 'left' && workspaceStore.rightPanelCollapsed}
+      <button
+        onclick={() => workspaceStore.toggleRightPanel()}
+        class="px-3 py-2 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors border-l border-zinc-800 h-full"
+        title="Open right panel"
+      >
+        <PanelRightOpen class="h-4 w-4" />
+      </button>
+    {/if}
+
+    {#if showClosePanel}
+      <button
+        onclick={onClosePanel}
+        class="px-3 py-2 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors border-l border-zinc-800 h-full"
+        title="Close panel and move tabs to left"
+      >
+        <PanelRightClose class="h-4 w-4" />
+      </button>
+    {/if}
+  </div>
+
+  <div class="relative flex-1 overflow-hidden">
+    {#if tabs.length === 0}
+      <div class="flex h-full items-center justify-center text-zinc-600">
+        <div class="text-center">
+          <p class="text-lg">No tabs open</p>
+          <p class="mt-1 text-sm">Select an item from the sidebar</p>
+        </div>
+      </div>
+    {:else if activeTab?.type === 'thread'}
+      <div class="absolute inset-0">
+        <ChatPanel threadId={activeTabId} />
+      </div>
+    {:else if activeTab?.type === 'source'}
+      <div class="absolute inset-0 flex flex-col bg-zinc-950 overflow-hidden">
+        {#if activeSource}
+          <div class="flex items-center justify-between border-b border-zinc-800 bg-zinc-900/30 px-4 py-2">
+            <div class="flex items-center gap-2 min-w-0">
+              <Globe class="h-4 w-4 text-blue-500" />
+              <span class="text-sm font-medium text-zinc-300 truncate">{activeSource.title}</span>
+            </div>
+            <a 
+              href={activeSource.url} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              class="flex items-center gap-1.5 rounded-md bg-zinc-800 px-2.5 py-1 text-xs font-medium text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200 transition-colors"
+            >
+              <span>View Original</span>
+              <ExternalLink class="h-3 w-3" />
+            </a>
+          </div>
+          <div class="flex-1 overflow-y-auto p-8 prose prose-invert max-w-none prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-800">
+            <!-- Simple markdown-like rendering for source content -->
+            <div class="text-zinc-300 leading-relaxed whitespace-pre-wrap font-sans">
+              {activeSource.content}
+            </div>
+          </div>
+        {/if}
+      </div>
+    {:else if activeTab?.type === 'artifact'}
+      {#if !isEditorReady}
+        <div class="absolute inset-0 flex items-center justify-center text-zinc-500">
+          <div class="text-center">
+            <div class="mb-2 h-6 w-6 animate-spin rounded-full border-2 border-zinc-600 border-t-amber-500 mx-auto"></div>
+            <p class="text-sm">Loading editor...</p>
+          </div>
+        </div>
+      {:else if showDiff}
+        <div class="absolute inset-0 flex flex-col">
+          <div class="flex items-center justify-between border-b border-amber-500/30 bg-amber-500/10 px-4 py-2">
+            <span class="text-sm font-medium text-amber-400">Agent proposed changes</span>
+            <div class="flex gap-2">
+              <Button variant="ghost" size="sm" onclick={() => artifactStore.rejectPendingChanges()}>Reject</Button>
+              <Button size="sm" class="bg-amber-600" onclick={() => artifactStore.acceptPendingChanges()}>Accept</Button>
+            </div>
+          </div>
+          <div use:setDiffContainer class="flex-1 overflow-auto"></div>
+        </div>
+      {:else}
+        <div use:setEditorContainer class="absolute inset-0 bg-zinc-950"></div>
+      {/if}
+    {/if}
+  </div>
 </div>
 
 {#if showNewFileModal}

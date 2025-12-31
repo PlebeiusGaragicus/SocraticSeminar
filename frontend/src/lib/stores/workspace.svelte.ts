@@ -109,9 +109,6 @@ function closeTab(id: string, column: 'left' | 'right') {
     if (activeRightTabId === id) {
       activeRightTabId = rightTabs[rightTabs.length - 1]?.id ?? null;
     }
-    if (rightTabs.length === 0) {
-      rightPanelCollapsed = true;
-    }
   }
 }
 
@@ -127,6 +124,47 @@ function closeItemGlobally(id: string) {
   }
   if (rightTabs.some(t => t.id === id)) {
     closeTab(id, 'right');
+  }
+}
+
+/**
+ * Move a tab from one column to another.
+ */
+function moveTab(id: string, fromColumn: 'left' | 'right', toColumn: 'left' | 'right') {
+  if (fromColumn === toColumn) return;
+
+  const tabToMove = (fromColumn === 'left' ? leftTabs : rightTabs).find(t => t.id === id);
+  if (!tabToMove) return;
+
+  // Remove from source
+  if (fromColumn === 'left') {
+    leftTabs = leftTabs.filter(t => t.id !== id);
+    if (activeLeftTabId === id) {
+      activeLeftTabId = leftTabs[leftTabs.length - 1]?.id ?? null;
+    }
+  } else {
+    rightTabs = rightTabs.filter(t => t.id !== id);
+    if (activeRightTabId === id) {
+      activeRightTabId = rightTabs[rightTabs.length - 1]?.id ?? null;
+    }
+    if (rightTabs.length === 0) {
+      rightPanelCollapsed = true;
+    }
+  }
+
+  // Add to target
+  if (toColumn === 'left') {
+    if (!leftTabs.some(t => t.id === id)) {
+      leftTabs = [...leftTabs, tabToMove];
+    }
+    activeLeftTabId = id;
+  } else {
+    if (!rightTabs.some(t => t.id === id)) {
+      rightTabs = [...rightTabs, tabToMove];
+    }
+    activeRightTabId = id;
+    rightPanelCollapsed = false;
+    forceSingleColumn = false;
   }
 }
 
@@ -173,6 +211,7 @@ export const workspaceStore = {
   createNewThread,
   selectTab,
   closeTab,
+  moveTab,
   closeItemGlobally,
   collapseRightPanel,
   toggleRightPanel,

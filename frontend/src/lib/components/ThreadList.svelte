@@ -78,7 +78,15 @@
             <div class="space-y-0.5">
               {#each groupThreads as thread (thread.id)}
                   {@const isOpen = workspaceStore.leftTabs.some(t => t.id === thread.id) || workspaceStore.rightTabs.some(t => t.id === thread.id)}
-                  <div class="group relative px-2">
+                  <div 
+                    class="group relative px-2"
+                    role="listitem"
+                    draggable="true"
+                    ondragstart={(e) => {
+                      e.dataTransfer?.setData('application/svelte-tab-id', thread.id);
+                      e.dataTransfer?.setData('application/svelte-tab-type', 'thread');
+                    }}
+                  >
                       <button
                         onclick={() => onThreadSelect(thread.id)}
                         class={cn(

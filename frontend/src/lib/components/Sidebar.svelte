@@ -519,7 +519,14 @@
                 <div class={cn(
                   "group relative px-2",
                   tagSelectorFor === artifact.id ? "z-50" : "z-auto"
-                )}>
+                )}
+                  role="listitem"
+                  draggable="true"
+                  ondragstart={(e) => {
+                    e.dataTransfer?.setData('application/svelte-tab-id', artifact.id);
+                    e.dataTransfer?.setData('application/svelte-tab-type', 'artifact');
+                  }}
+                >
                   <button
                     onclick={() => onSelectFile(artifact)}
                     class={cn(
@@ -709,7 +716,15 @@
           {:else}
             {#each sources as source (source.id)}
               {@const isOpen = isSourceOpen(source.id)}
-              <div class="group relative px-2">
+              <div 
+                class="group relative px-2"
+                role="listitem"
+                draggable="true"
+                ondragstart={(e) => {
+                  e.dataTransfer?.setData('application/svelte-tab-id', source.id);
+                  e.dataTransfer?.setData('application/svelte-tab-type', 'source');
+                }}
+              >
                 <button
                   onclick={() => onSelectSource(source)}
                   class={cn(
