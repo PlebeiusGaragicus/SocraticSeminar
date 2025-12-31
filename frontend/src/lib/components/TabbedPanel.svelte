@@ -5,9 +5,11 @@
   import Plus from '@lucide/svelte/icons/plus';
   import FilePlus from '@lucide/svelte/icons/file-plus';
   import MessageSquarePlus from '@lucide/svelte/icons/message-square-plus';
+  import Search from '@lucide/svelte/icons/search';
+  import Command from '@lucide/svelte/icons/command';
   import PanelRightOpen from '@lucide/svelte/icons/panel-right-open';
   import PanelRightClose from '@lucide/svelte/icons/panel-right-close';
-  import { artifactStore, threadStore, workspaceStore } from '$lib/stores/index.js';
+  import { artifactStore, threadStore, workspaceStore, projectStore } from '$lib/stores/index.js';
   import type { TabItem, Artifact, Thread } from '$lib/stores/types.js';
   import { getFileIcon } from '$lib/icons.js';
   import { cn } from '$lib/utils.js';
@@ -243,31 +245,118 @@
     workspaceStore.createNewThread(column);
     showNewMenu = false;
   }
+
+  let searchTerm = $state('');
+  let isSearching = $state(false);
+
+  const searchResults = $derived.by(() => {
+    const term = searchTerm.toLowerCase().trim();
+    const projectId = projectStore.currentProjectId || '';
+    
+    const projectFiles = artifactStore.getProjectArtifacts(projectId);
+    const projectThreads = threadStore.getProjectThreads(projectId);
+    
+    const filteredFiles = projectFiles.filter(f => {
+      const title = f.versions[f.currentVersionIndex]?.title?.toLowerCase() || '';
+      return title.includes(term);
+    }).map(f => ({ 
+      id: f.id, 
+      type: 'artifact' as const, 
+      title: f.versions[f.currentVersionIndex]?.title || 'Untitled',
+      icon: getFileIcon(f.versions[f.currentVersionIndex]?.title || '')
+    }));
+    
+    const filteredThreads = projectThreads.filter(t => {
+      return t.title.toLowerCase().includes(term);
+    }).map(t => ({ 
+      id: t.id, 
+      type: 'thread' as const, 
+      title: t.title,
+      icon: MessageCircle
+    }));
+    
+    return [...filteredFiles, ...filteredThreads];
+  });
+
+  function handleOpenItem(id: string, type: 'artifact' | 'thread') {
+    workspaceStore.openItem(id, type, column);
+    showNewMenu = false;
+    isSearching = false;
+    searchTerm = '';
+  }
+
+  function toggleSearch() {
+    isSearching = !isSearching;
+    if (isSearching) {
+      searchTerm = '';
+    }
+  }
 </script>
 
 <div class="flex h-full flex-col bg-zinc-950 relative">
   {#if showNewMenu}
     <div 
       class="fixed inset-0 z-40" 
-      onclick={() => showNewMenu = false}
+      onclick={() => { showNewMenu = false; isSearching = false; }}
       onkeydown={(e) => e.key === 'Escape' && (showNewMenu = false)}
       role="presentation"
     ></div>
-    <div class="absolute left-10 top-10 z-50 w-48 rounded-lg border border-zinc-800 bg-zinc-900 p-1 shadow-xl">
-      <button
-        onclick={handleCreateFile}
-        class="flex w-full items-center gap-2 rounded px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
-      >
-        <FilePlus class="h-4 w-4" />
-        New File
-      </button>
-      <button
-        onclick={handleCreateThread}
-        class="flex w-full items-center gap-2 rounded px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
-      >
-        <MessageSquarePlus class="h-4 w-4" />
-        New Chat
-      </button>
+    <div class="absolute left-10 top-10 z-50 w-64 rounded-lg border border-zinc-800 bg-zinc-900 p-1 shadow-xl">
+      {#if !isSearching}
+        <button
+          onclick={handleCreateFile}
+          class="flex w-full items-center gap-2 rounded px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
+        >
+          <FilePlus class="h-4 w-4" />
+          New File
+        </button>
+        <button
+          onclick={handleCreateThread}
+          class="flex w-full items-center gap-2 rounded px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
+        >
+          <MessageSquarePlus class="h-4 w-4" />
+          New Chat
+        </button>
+        <div class="my-1 border-t border-zinc-800"></div>
+        <button
+          onclick={toggleSearch}
+          class="flex w-full items-center justify-between rounded px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
+        >
+          <div class="flex items-center gap-2">
+            <Search class="h-4 w-4" />
+            Open...
+          </div>
+          <Command class="h-3 w-3 opacity-50" />
+        </button>
+      {:else}
+        <div class="p-2">
+          <div class="relative">
+            <Search class="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
+            <input
+              type="text"
+              bind:value={searchTerm}
+              placeholder="Search files & chats..."
+              class="w-full rounded bg-zinc-800 py-1.5 pl-8 pr-3 text-xs text-zinc-200 outline-none focus:ring-1 focus:ring-amber-500/50"
+              autofocus
+            />
+          </div>
+        </div>
+        <div class="max-h-[300px] overflow-y-auto py-1">
+          {#each searchResults as result}
+            <button
+              onclick={() => handleOpenItem(result.id, result.type)}
+              class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+            >
+              <result.icon class="h-3.5 w-3.5 flex-shrink-0" />
+              <span class="truncate">{result.title}</span>
+            </button>
+          {:else}
+            <div class="px-3 py-4 text-center text-xs text-zinc-600">
+              No results found
+            </div>
+          {/each}
+        </div>
+      {/if}
     </div>
   {/if}
 
