@@ -11,6 +11,7 @@
 #   ./scripts/fetch_trace.sh --latest > trace.json
 #   ./scripts/fetch_trace.sh --latest | jq '.runs[] | select(.error)'
 
+# ./fetch_trace.sh --latest | jq '.runs[-1].inputs.messages'
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
