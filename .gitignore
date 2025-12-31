@@ -6,3 +6,5 @@ __pycache__/
 .env
 *.json
 # traces/
+.DS_Store
+.cursor/

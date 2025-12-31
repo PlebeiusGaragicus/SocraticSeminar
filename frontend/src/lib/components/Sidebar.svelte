@@ -8,6 +8,7 @@
   import PanelLeft from '@lucide/svelte/icons/panel-left';
   import { artifactStore, threadStore, projectStore, agentStore } from '$lib/stores/index.js';
   import type { Artifact, Thread } from '$lib/stores/types.js';
+  import ThreadList from './ThreadList.svelte';
 
   interface Props {
     onSelectFile: (artifact: Artifact) => void;
@@ -94,11 +95,7 @@
   }
   
   function handleSelectThread(thread: Thread) {
-    // If there's a pending interrupt on the current thread and we're switching,
-    // reset the agent state to prevent UI confusion
-    if (agentStore.awaitingHumanResponse && thread.id !== currentThreadId) {
-      agentStore.resetStream();
-    }
+    // REMOVED: agentStore.resetStream() - allow background runs to continue
     onSelectThread(thread);
   }
 
@@ -182,7 +179,7 @@
     </div>
 
     <!-- Threads Section -->
-    <div class="flex flex-col overflow-hidden" style="height: {threadSectionHeight}px">
+    <div class="flex flex-col overflow-hidden border-b border-zinc-800" style="height: {threadSectionHeight}px">
       <!-- Threads Header -->
       <div class="flex items-center justify-between px-3 py-2">
         <span class="text-xs font-semibold uppercase tracking-wider text-zinc-500">
@@ -197,35 +194,14 @@
         </button>
       </div>
 
-      <!-- Thread List -->
-      <div class="flex-1 overflow-y-auto py-1">
-        {#if threads.length === 0}
-          <div class="px-3 py-2 text-center text-xs text-zinc-600">
-            No threads yet
-          </div>
-        {:else}
-          {#each threads as thread (thread.id)}
-            <div class="group relative">
-              <button
-                onclick={() => handleSelectThread(thread)}
-                class="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-zinc-800/50
-                  {thread.id === currentThreadId ? 'bg-zinc-800/70 border-l-2 border-amber-500' : ''}"
-              >
-                <MessageCircle class="h-4 w-4 flex-shrink-0 text-blue-400" />
-                <span class="flex-1 truncate text-sm text-zinc-300">
-                  {thread.title}
-                </span>
-              </button>
-
-              <button
-                onclick={() => (threadToDelete = thread.id)}
-                class="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-zinc-600 opacity-0 transition-all hover:bg-red-500/10 hover:text-red-500 group-hover:opacity-100"
-              >
-                <Trash2 class="h-3 w-3" />
-              </button>
-            </div>
-          {/each}
-        {/if}
+      <!-- Thread List Component -->
+      <div class="flex-1 overflow-hidden">
+        <ThreadList
+          {threads}
+          {currentThreadId}
+          onThreadSelect={(id) => handleSelectThread(threads.find(t => t.id === id)!)}
+          onThreadDelete={(id) => (threadToDelete = id)}
+        />
       </div>
     </div>
 

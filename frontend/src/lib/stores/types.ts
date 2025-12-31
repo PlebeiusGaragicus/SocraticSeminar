@@ -37,10 +37,14 @@ export interface Project {
   updatedAt: number;
 }
 
+export type ThreadStatus = 'idle' | 'busy' | 'interrupted' | 'error';
+
 export interface Thread {
   id: string;
   projectId: string;
   title: string;
+  description?: string; // Last message preview or summary
+  status: ThreadStatus;
   langGraphThreadId?: string; // LangGraph server's thread ID (different from local id)
   metadata?: Record<string, unknown>;
   createdAt: number;

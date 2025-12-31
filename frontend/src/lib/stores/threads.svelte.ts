@@ -76,6 +76,7 @@ function createThread(projectId: string, title?: string): Thread {
     id: nanoid(),
     projectId,
     title: title ?? 'New Thread',
+    status: 'idle',
     createdAt: now,
     updatedAt: now
   };
@@ -91,7 +92,7 @@ function createThread(projectId: string, title?: string): Thread {
   return thread;
 }
 
-function updateThread(id: string, updates: Partial<Pick<Thread, 'title' | 'metadata' | 'langGraphThreadId'>>): void {
+function updateThread(id: string, updates: Partial<Pick<Thread, 'title' | 'description' | 'status' | 'metadata' | 'langGraphThreadId'>>): void {
   let updatedThread: Thread | null = null;
   
   threads = threads.map((t) => {

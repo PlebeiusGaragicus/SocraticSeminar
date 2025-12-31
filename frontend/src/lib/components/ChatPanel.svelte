@@ -16,6 +16,7 @@
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import ChevronUp from '@lucide/svelte/icons/chevron-up';
   import Maximize2 from '@lucide/svelte/icons/maximize-2';
+  import Square from '@lucide/svelte/icons/square';
   import { Button, Textarea } from './ui/index.js';
   import AgentPicker from './AgentPicker.svelte';
   import ToolCallDisplay from './ToolCallDisplay.svelte';
@@ -772,17 +773,28 @@
               <X class="h-4 w-4" />
             </Button>
           {:else}
-            <!-- Normal/Clarification: Send button -->
-      <Button
-              onclick={handleSubmit}
-              disabled={!canSubmit || isSubmitting}
-        size="icon"
-              class="self-end {inputMode === 'clarification' || inputMode === 'choices' 
-                ? 'bg-blue-600 hover:bg-blue-500' 
-                : 'bg-amber-600 hover:bg-amber-500'}"
-      >
-        <Send class="h-4 w-4" />
-      </Button>
+            <!-- Normal/Clarification/Streaming: Action button -->
+            {#if isStreaming}
+              <Button
+                onclick={() => agentStore.stopStreaming()}
+                size="icon"
+                class="self-end bg-red-600 hover:bg-red-500 text-white"
+                title="Stop"
+              >
+                <Square class="h-4 w-4" />
+              </Button>
+            {:else}
+              <Button
+                onclick={handleSubmit}
+                disabled={!canSubmit || isSubmitting}
+                size="icon"
+                class="self-end {inputMode === 'clarification' || inputMode === 'choices' 
+                  ? 'bg-blue-600 hover:bg-blue-500' 
+                  : 'bg-amber-600 hover:bg-amber-500'}"
+              >
+                <Send class="h-4 w-4" />
+              </Button>
+            {/if}
           {/if}
         </div>
     </div>

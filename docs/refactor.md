@@ -36,9 +36,7 @@ Our agents are meant to work well with human direction and follow behaviours tha
 
 ### `ThinkingMiddleware`
 
-Similarly to `TodoListMiddleware`, this tool is meant to for the agent to self-reflect on its trajectory thus far, synthesis new information and voice its intended next steps. The goal is that by doing this we can run far without problems.
-
-
+Similarly to `TodoListMiddleware`, this tool is meant to for the agent to self-reflect on its trajectory thus far, synthesis any new information and voice its intended next steps. The goal is that by doing this the agent can run longer threads without getting stuck.
 
 ## Implementation
 

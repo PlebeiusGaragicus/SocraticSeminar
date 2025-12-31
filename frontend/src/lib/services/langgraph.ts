@@ -1105,6 +1105,25 @@ export async function deleteThread(threadId: string): Promise<void> {
 }
 
 /**
+ * Cancel all active runs for a thread.
+ */
+export async function cancelActiveRuns(threadId: string): Promise<void> {
+	const client = getClient();
+	try {
+		const runs = await client.runs.list(threadId);
+		const activeRuns = runs.filter(run => run.status === 'running' || run.status === 'pending');
+		
+		for (const run of activeRuns) {
+			console.log(`[LangGraph] Cancelling run ${run.run_id} on thread ${threadId}`);
+			await client.runs.cancel(threadId, run.run_id);
+		}
+	} catch (error) {
+		console.error('[LangGraph] Error cancelling runs:', error);
+		throw error;
+	}
+}
+
+/**
  * Create a new thread.
  */
 export async function createThread(metadata?: Record<string, unknown>): Promise<Thread> {

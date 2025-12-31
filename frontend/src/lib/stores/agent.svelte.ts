@@ -38,6 +38,7 @@ import {
   checkForUnclaimedRefund,
   getThreadStateWithInterrupts,
   getThreadTodos,
+  cancelActiveRuns,
   type Message as LangGraphMessage,
   type ThreadStateInfo
 } from '$lib/services/langgraph.js';
@@ -52,10 +53,6 @@ setToolExecutor(executeToolCall);
 
 /**
  * Convert LangGraph messages to local message format.
- * Filters out tool messages (they're displayed as part of AI messages).
- */
-/**
- * Convert LangGraph messages to local message format.
  * Filters out tool messages but associates their content with the corresponding AI message.
  */
 function convertLangGraphMessages(
@@ -63,7 +60,6 @@ function convertLangGraphMessages(
   threadId: string
 ): Omit<LocalMessage, 'createdAt'>[] {
   const localMessages: Array<Omit<LocalMessage, 'createdAt'> & { toolCalls?: ToolCallWithStatus[] }> = [];
-  const aiMessageMap = new Map<string, typeof localMessages[0]>();
   
   for (let i = 0; i < lgMessages.length; i++) {
     const msg = lgMessages[i];
@@ -79,7 +75,6 @@ function convertLangGraphMessages(
       const content = typeof msg.content === 'string' ? msg.content : '';
       const toolCalls = (msg as { tool_calls?: ToolCall[] }).tool_calls;
       
-      // Only add if there's content or tool calls
       if (content || (toolCalls && toolCalls.length > 0)) {
         const localAiMsg = {
           id: msg.id || `ai-${i}`,
@@ -88,11 +83,10 @@ function convertLangGraphMessages(
           content,
           toolCalls: toolCalls?.map(tc => ({
             ...tc,
-            status: 'completed' as const // Default to completed for historical messages
+            status: 'completed' as const
           })) || []
         };
         localMessages.push(localAiMsg);
-        aiMessageMap.set(localAiMsg.id, localAiMsg);
       }
     } else if (msg.type === 'tool') {
       const toolMsg = msg as { tool_call_id?: string };
@@ -101,7 +95,6 @@ function convertLangGraphMessages(
       
       const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
       
-      // Look for the corresponding AI message that made this tool call
       for (const aiMsg of localMessages) {
         if (aiMsg.role === 'assistant' && aiMsg.toolCalls) {
           const toolCall = aiMsg.toolCalls.find(tc => tc.id === toolCallId);
@@ -123,50 +116,87 @@ function convertLangGraphMessages(
 }
 
 // =============================================================================
-// REACTIVE STATE
+// THREAD-SPECIFIC RUN STATE
 // =============================================================================
 
-let isStreaming = $state(false);
-let isInterrupted = $state(false);
-let threadId = $state<string | null>(null);
-let error = $state<string | null>(null);
-let pendingToolCalls = $state<ToolCallWithStatus[]>([]);
-let streamingContent = $state<string>('');
+interface ThreadRunState {
+  isStreaming: boolean;
+  isInterrupted: boolean;
+  langGraphThreadId: string | null;
+  error: string | null;
+  pendingToolCalls: ToolCallWithStatus[];
+  streamingContent: string;
+  langGraphMessages: LangGraphMessage[];
+  hitlInterrupt: HITLInterrupt | null;
+  hitlInterruptId: string | null;
+  awaitingHumanResponse: boolean;
+  paymentState: CashuPaymentState | null;
+  pendingRefund: StoredRefund | null;
+  paymentInterrupt: PaymentExhaustedInterrupt | null;
+  clientToolInterrupt: ClientToolInterrupt | null;
+  clarificationInterrupt: ClarificationInterrupt | null;
+  todos: TodoItem[];
+}
 
-// Track LangGraph messages for the current conversation
-let langGraphMessages = $state<LangGraphMessage[]>([]);
+const runStates = $state<Record<string, ThreadRunState>>({});
 
-// Human-in-the-loop interrupt state
-let hitlInterrupt = $state<HITLInterrupt | null>(null);
-let hitlInterruptId = $state<string | null>(null);
-let awaitingHumanResponse = $state(false);
+/**
+ * Get the run state for a specific local thread.
+ * Initializes the state if it doesn't exist.
+ */
+function getThreadState(localThreadId: string): ThreadRunState {
+  if (!runStates[localThreadId]) {
+    runStates[localThreadId] = {
+      isStreaming: false,
+      isInterrupted: false,
+      langGraphThreadId: null,
+      error: null,
+      pendingToolCalls: [],
+      streamingContent: '',
+      langGraphMessages: [],
+      hitlInterrupt: null,
+      hitlInterruptId: null,
+      awaitingHumanResponse: false,
+      paymentState: null,
+      pendingRefund: null,
+      paymentInterrupt: null,
+      clientToolInterrupt: null,
+      clarificationInterrupt: null,
+      todos: []
+    };
+  }
+  return runStates[localThreadId];
+}
 
-// Store the local thread ID for resuming after HITL
-let currentLocalThreadId = $state<string | null>(null);
+/**
+ * Update thread status in threadStore based on agent state.
+ */
+function updateThreadStatus(localThreadId: string) {
+  const state = getThreadState(localThreadId);
+  let status: 'idle' | 'busy' | 'interrupted' | 'error' = 'idle';
+  
+  if (state.error) {
+    status = 'error';
+  } else if (state.awaitingHumanResponse) {
+    // Only 'interrupted' if we are actually waiting for human input (HITL, payment, etc.)
+    status = 'interrupted';
+  } else if (state.isStreaming || state.isInterrupted || state.pendingToolCalls.length > 0) {
+    // If the agent is running, streaming, or handling tools automatically, it's 'busy'
+    status = 'busy';
+  }
+  
+  threadStore.updateThread(localThreadId, { status });
+}
 
-// =============================================================================
-// CASHU PAYMENT STATE
-// =============================================================================
-
-let paymentState = $state<CashuPaymentState | null>(null);
-let pendingRefund = $state<StoredRefund | null>(null);
-let paymentInterrupt = $state<PaymentExhaustedInterrupt | null>(null);
-let clientToolInterrupt = $state<ClientToolInterrupt | null>(null);
-let clarificationInterrupt = $state<ClarificationInterrupt | null>(null);
-
-// =============================================================================
-// AGENT SCRATCH FILES & TODOS (visible to user, read-only)
-// =============================================================================
-
-import type { ScratchFile, TodoItem } from './types.js';
-
-
-// Todos from TodoListMiddleware
-let todos = $state<TodoItem[]>([]);
+// Reactive helpers to access state for the current thread
+const currentLocalThreadId = $derived(threadStore.currentThreadId);
+const currentState = $derived(currentLocalThreadId ? getThreadState(currentLocalThreadId) : null);
 
 // =============================================================================
 // HELPERS
 // =============================================================================
+
+import type { ScratchFile, TodoItem } from './types.js';
 
 // Build project files with content for agent context
 function buildProjectFiles(): ProjectFile[] {
@@ -182,16 +212,6 @@ function buildProjectFiles(): ProjectFile[] {
   });
 }
 
-// Update streaming content (triggers reactivity)
-function setStreamingContent(content: string) {
-  streamingContent = content;
-}
-
-// Update pending tool calls (triggers reactivity)
-function setPendingToolCalls(calls: ToolCallWithStatus[]) {
-  pendingToolCalls = [...calls];
-}
-
 // =============================================================================
 // MAIN SEND MESSAGE FUNCTION
 // =============================================================================
@@ -201,50 +221,43 @@ async function sendMessage(
   langGraphThreadId: string | null,
   localThreadId: string
 ): Promise<{ langGraphThreadId: string }> {
-  // Get the selected assistant ID
-  const assistantId = assistantStore.selectedAssistantId || 'seminar_agent';
+  const state = getThreadState(localThreadId);
   
-  // Get project ID from current thread
+  const assistantId = assistantStore.selectedAssistantId || 'seminar_agent';
   const thread = threadStore.threads.find(t => t.id === localThreadId);
   const projectId = thread?.projectId || '';
   
-  // Preserve current history if we're in the same thread
-  if (langGraphThreadId !== threadId) {
-    langGraphMessages = [];
+  if (langGraphThreadId !== state.langGraphThreadId) {
+    state.langGraphMessages = [];
   }
   
-  // Reset state
-  isStreaming = true;
-  isInterrupted = false;
-  threadId = langGraphThreadId;
-  error = null;
-  hitlInterrupt = null;
-  hitlInterruptId = null;
-  awaitingHumanResponse = false;
-  currentLocalThreadId = localThreadId;
-  clarificationInterrupt = null;
-  setPendingToolCalls([]);
-  setStreamingContent('');
+  state.isStreaming = true;
+  state.isInterrupted = false;
+  state.langGraphThreadId = langGraphThreadId;
+  state.error = null;
+  state.hitlInterrupt = null;
+  state.hitlInterruptId = null;
+  state.awaitingHumanResponse = false;
+  state.clarificationInterrupt = null;
+  state.pendingToolCalls = [];
+  state.streamingContent = '';
   
-  // Add new message to existing history for immediate display
-  // This prevents history from "disappearing" while streaming starts
-  langGraphMessages = [...langGraphMessages, {
+  updateThreadStatus(localThreadId);
+  
+  state.langGraphMessages = [...state.langGraphMessages, {
     type: 'human',
     content: message,
     id: `optimistic-user-${Date.now()}`
   } as LangGraphMessage];
   
   try {
-    // Add user message to local store (persisted)
     threadStore.addMessage(localThreadId, {
       role: 'user',
       content: message
     });
     
-    console.log('[Agent] Starting stream for thread:', langGraphThreadId || 'new');
+    threadStore.updateThread(localThreadId, { description: message });
     
-    // Submit to LangGraph with callbacks
-    // Include 'updates' stream mode for real-time visibility of node execution
     const result = await submitToLangGraph(
       message,
       {
@@ -252,143 +265,115 @@ async function sendMessage(
         assistantId,
         projectId,
         projectFiles: buildProjectFiles(),
-        streamMode: ['messages', 'values', 'updates'],  // Real-time updates for tool visibility
+        streamMode: ['messages', 'values', 'updates'],
       },
       {
         onToken: (token) => {
-          // Append token to streaming content
-          streamingContent += token;
+          state.streamingContent += token;
+          if (state.isInterrupted) {
+            state.isInterrupted = false;
+            updateThreadStatus(localThreadId);
+          }
         },
         
         onMessagesSync: (messages) => {
-          // Sync with server state - this is the source of truth.
-          // We only overwrite our local state if the server has at least as many 
-          // messages as we do, or if the server messages are definitely more up-to-date.
-          const localHasOptimistic = langGraphMessages.some(m => m.id?.startsWith('optimistic-'));
+          const localHasOptimistic = state.langGraphMessages.some(m => m.id?.startsWith('optimistic-'));
           
-          if (messages.length >= langGraphMessages.length || !localHasOptimistic) {
-            // Server has caught up to or surpassed our local state
-            langGraphMessages = [...messages];
+          if (messages.length >= state.langGraphMessages.length || !localHasOptimistic) {
+            state.langGraphMessages = [...messages];
           } else {
-            // Server might be sending a slightly stale snapshot during run startup.
-            // We keep our local state (which includes Turn 1 history + Turn 2 Human)
-            // but we update the existing messages if they changed.
-            const updatedLocal = [...langGraphMessages];
+            const updatedLocal = [...state.langGraphMessages];
             for (let i = 0; i < messages.length; i++) {
               if (messages[i].content !== updatedLocal[i]?.content) {
                 updatedLocal[i] = { ...updatedLocal[i], ...messages[i] };
               }
             }
-            langGraphMessages = updatedLocal;
+            state.langGraphMessages = updatedLocal;
           }
           
-          // Reset streaming content when we get a full message sync.
-          // IMPORTANT: We only sync content from the LATEST AI message if it
-          // actually follows the latest human message (to avoid duplicating history).
           const lastHumanIdx = messages.findLastIndex(m => m.type === 'human');
           const lastAi = messages.findLast((m, i) => m.type === 'ai' && i > lastHumanIdx);
           
           if (lastAi) {
             const serverContent = typeof lastAi.content === 'string' ? lastAi.content : '';
-            // Only update streaming content if server has more content
-            if (serverContent.length > streamingContent.length) {
-              streamingContent = serverContent;
+            if (serverContent.length > state.streamingContent.length) {
+              state.streamingContent = serverContent;
+            }
+
+            // If the latest message from AI doesn't have pending tool calls, 
+            // and we were in interrupted state, clear it.
+            const hasToolCalls = (lastAi as { tool_calls?: unknown[] }).tool_calls?.length > 0;
+            if (!hasToolCalls && state.isInterrupted) {
+              state.isInterrupted = false;
+              updateThreadStatus(localThreadId);
             }
           }
         },
         
         onToolCall: (toolCalls) => {
-          console.log('[Agent] Tool calls detected:', toolCalls.map(t => t.name));
-          isInterrupted = true;
-          setPendingToolCalls(toolCalls.map(tc => ({
+          state.isInterrupted = true;
+          state.pendingToolCalls = toolCalls.map(tc => ({
             ...tc,
             status: 'pending' as const
-          })));
+          }));
+          updateThreadStatus(localThreadId);
         },
         
         onToolExecuting: (toolCalls) => {
-          console.log('[Agent] Executing tools:', toolCalls.map(t => t.name));
-          setPendingToolCalls(toolCalls.map(tc => ({
+          state.pendingToolCalls = toolCalls.map(tc => ({
             ...tc,
             status: 'executing' as const
-          })));
+          }));
         },
         
         onToolComplete: (results) => {
-          console.log('[Agent] Tools completed:', results.map(r => ({ id: r.tool_call_id, hasError: !!r.error })));
-          // Update tool calls with results
-          setPendingToolCalls(pendingToolCalls.map(tc => {
+          state.pendingToolCalls = state.pendingToolCalls.map(tc => {
             const result = results.find(r => r.tool_call_id === tc.id);
             return {
               ...tc,
               status: result?.error ? 'error' as const : 'completed' as const,
               result: result
             };
-          }));
-          // Clear interrupt state - agent is resuming
-          isInterrupted = false;
+          });
+          state.isInterrupted = false;
+          updateThreadStatus(localThreadId);
         },
         
         onHITLInterrupt: (interrupt, interruptId) => {
-          console.log('[Agent] HITL interrupt received:', interrupt.action_requests.map(a => a.name));
-          hitlInterrupt = interrupt;
-          hitlInterruptId = interruptId;
-          awaitingHumanResponse = true;
-          isInterrupted = true;
-          // Keep streaming false since we're waiting for human input
-          isStreaming = false;
+          state.hitlInterrupt = interrupt;
+          state.hitlInterruptId = interruptId;
+          state.awaitingHumanResponse = true;
+          state.isInterrupted = true;
+          state.isStreaming = false;
+          updateThreadStatus(localThreadId);
         },
         
         onClientToolInterrupt: (interrupt, interruptId) => {
-          console.log('[Agent] Client tool interrupt received:', interrupt.tool_calls.map(tc => tc.name));
-          console.log('[Agent] Requires approval:', interrupt.requires_approval);
-          
-          // Store the interrupt for the UI to handle
-          clientToolInterrupt = interrupt;
-          hitlInterruptId = interruptId;  // Reuse hitlInterruptId for the resume
-          awaitingHumanResponse = true;
-          isInterrupted = true;
-          isStreaming = false;
+          state.clientToolInterrupt = interrupt;
+          state.hitlInterruptId = interruptId;
+          state.awaitingHumanResponse = true;
+          state.isInterrupted = true;
+          state.isStreaming = false;
+          updateThreadStatus(localThreadId);
         },
         
         onClarificationInterrupt: (interrupt, interruptId) => {
-          console.log('[Agent] Clarification interrupt received:', interrupt.tool, interrupt.question);
-          
-          // Store the interrupt for the UI to handle
-          clarificationInterrupt = interrupt;
-          hitlInterruptId = interruptId;  // Reuse hitlInterruptId for the resume
-          awaitingHumanResponse = true;
-          isInterrupted = true;
-          isStreaming = false;
+          state.clarificationInterrupt = interrupt;
+          state.hitlInterruptId = interruptId;
+          state.awaitingHumanResponse = true;
+          state.isInterrupted = true;
+          state.isStreaming = false;
+          updateThreadStatus(localThreadId);
         },
         
-        
         onTodosSync: (todoList) => {
-          console.log('[Agent] Todos synced:', todoList.length, 'items');
-          
-          // Add synthetic IDs for stable Svelte keys if not provided by backend
-          const listWithIds = todoList.map((t, i) => ({
+          state.todos = todoList.map((t, i) => ({
             ...t,
             id: t.id || `todo-${i}-${t.content.slice(0, 20)}`
           }));
-          
-          // Force reactivity by creating a new array
-          todos = listWithIds;
-          console.log('[Agent] Todos state updated, new length:', todos.length);
         },
         
         onNodeUpdate: (nodeName, update) => {
-          // Real-time node execution update
-          // This shows what's happening inside the graph as it runs
-          const keys = Object.keys(update);
-          console.log('[Agent] Node executed:', nodeName, 'keys:', keys);
-          
-          // Log if we see todos-related data
-          if (keys.includes('todos') || keys.includes('todo_list')) {
-            console.log('[Agent] Todos in node update!', nodeName, update.todos || update.todo_list);
-          }
-          
-          // If the update contains messages with tool calls, show them immediately
           const messages = update.messages as Array<{ type: string; tool_calls?: unknown[] }> | undefined;
           if (messages && Array.isArray(messages)) {
             const lastMsg = messages[messages.length - 1];
@@ -399,44 +384,43 @@ async function sendMessage(
                 args: tc.args || {},
                 status: 'pending' as const,
               }));
-              console.log('[Agent] Tool calls from node update:', toolCalls.map(tc => tc.name));
-              setPendingToolCalls(toolCalls);
+              state.pendingToolCalls = toolCalls;
+              state.isInterrupted = true;
+              updateThreadStatus(localThreadId);
             }
           }
         },
         
         onComplete: (finalMessages) => {
-          console.log('[Agent] Stream completed. Messages:', finalMessages.length);
-          
-          langGraphMessages = [...finalMessages];
-          
-          // Convert and sync ALL messages from LangGraph to local store
-          // This ensures we have the complete conversation history including
-          // multiple AI messages from tool call iterations
+          state.langGraphMessages = [...finalMessages];
           const convertedMessages = convertLangGraphMessages(finalMessages, localThreadId);
           threadStore.syncMessages(localThreadId, convertedMessages);
           
-          // Todos are synced via onTodosSync callback during stream processing
-          // No need for redundant fetch - values events are the source of truth
+          state.isStreaming = false;
+          state.isInterrupted = false;
+          state.pendingToolCalls = [];
+          state.streamingContent = '';
           
-          isStreaming = false;
-          isInterrupted = false;
-          setPendingToolCalls([]);
-          setStreamingContent('');
+          const lastAi = [...finalMessages].reverse().find(m => m.type === 'ai' && typeof m.content === 'string');
+          if (lastAi && typeof lastAi.content === 'string') {
+            threadStore.updateThread(localThreadId, { description: lastAi.content });
+          }
+          
+          updateThreadStatus(localThreadId);
         },
         
         onError: (err) => {
-          console.error('[Agent] Error:', err.message);
-          error = err.message;
-          isStreaming = false;
-          isInterrupted = false;
-          setPendingToolCalls([]);
-          setStreamingContent('');
+          state.error = err.message;
+          state.isStreaming = false;
+          state.isInterrupted = false;
+          state.pendingToolCalls = [];
+          state.streamingContent = '';
+          updateThreadStatus(localThreadId);
         },
         
         onThreadId: (id) => {
-          threadId = id;
-          console.log('[Agent] Thread ID assigned:', id);
+          state.langGraphThreadId = id;
+          threadStore.updateThread(localThreadId, { langGraphThreadId: id });
         }
       }
     );
@@ -445,12 +429,12 @@ async function sendMessage(
     
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-    console.error('[Agent] Error:', errorMessage);
-    error = errorMessage;
-    isStreaming = false;
-    isInterrupted = false;
-    setStreamingContent('');
-    setPendingToolCalls([]);
+    state.error = errorMessage;
+    state.isStreaming = false;
+    state.isInterrupted = false;
+    state.streamingContent = '';
+    state.pendingToolCalls = [];
+    updateThreadStatus(localThreadId);
     throw err;
   }
 }
@@ -459,157 +443,132 @@ async function sendMessage(
 // HUMAN-IN-THE-LOOP RESPONSE
 // =============================================================================
 
-/**
- * Resume the agent after a HITL interrupt with the user's decisions.
- * 
- * @param decisions - Array of decisions for each action_request
- */
 async function resumeWithDecisions(decisions: HITLDecision[]): Promise<void> {
-  if (!threadId || !awaitingHumanResponse || !hitlInterruptId) {
+  const localThreadId = currentLocalThreadId;
+  if (!localThreadId) return;
+  
+  const state = getThreadState(localThreadId);
+  if (!state.langGraphThreadId || !state.awaitingHumanResponse || !state.hitlInterruptId) {
     console.error('[Agent] Cannot resume: no active HITL interrupt');
     return;
   }
   
   const assistantId = assistantStore.selectedAssistantId || 'deeptutor';
-  const localThreadId = currentLocalThreadId;
-  const interruptId = hitlInterruptId;
+  const interruptId = state.hitlInterruptId;
   
-  // Reset HITL state
-  hitlInterrupt = null;
-  hitlInterruptId = null;
-  awaitingHumanResponse = false;
-  isStreaming = true;
-  isInterrupted = false;
-  setStreamingContent('');
+  state.hitlInterrupt = null;
+  state.hitlInterruptId = null;
+  state.awaitingHumanResponse = false;
+  state.isStreaming = true;
+  state.isInterrupted = false;
+  state.streamingContent = '';
+  
+  updateThreadStatus(localThreadId);
   
   const response: HITLResumeResponse = { decisions };
-  console.log('[Agent] Resuming with HITL decisions:', decisions);
   
   try {
     await resumeWithHITLDecisions(
-      threadId,
+      state.langGraphThreadId,
       interruptId,
       response,
       assistantId,
       {
         onToken: (token) => {
-          streamingContent += token;
+          state.streamingContent += token;
+          if (state.isInterrupted) {
+            state.isInterrupted = false;
+            updateThreadStatus(localThreadId);
+          }
         },
-        
         onMessagesSync: (messages) => {
-          langGraphMessages = [...messages];
+          state.langGraphMessages = [...messages];
         },
-        
         onToolCall: (toolCalls) => {
-          console.log('[Agent] Tool calls detected after resume:', toolCalls.map(t => t.name));
-          isInterrupted = true;
-          setPendingToolCalls(toolCalls.map(tc => ({
+          state.isInterrupted = true;
+          state.pendingToolCalls = toolCalls.map(tc => ({
             ...tc,
             status: 'pending' as const
-          })));
+          }));
+          updateThreadStatus(localThreadId);
         },
-        
         onHITLInterrupt: (interrupt, newInterruptId) => {
-          console.log('[Agent] Another HITL interrupt received:', interrupt.action_requests.map(a => a.name));
-          hitlInterrupt = interrupt;
-          hitlInterruptId = newInterruptId;
-          awaitingHumanResponse = true;
-          isInterrupted = true;
-          isStreaming = false;
+          state.hitlInterrupt = interrupt;
+          state.hitlInterruptId = newInterruptId;
+          state.awaitingHumanResponse = true;
+          state.isInterrupted = true;
+          state.isStreaming = false;
+          updateThreadStatus(localThreadId);
         },
-        
         onComplete: (finalMessages) => {
-          console.log('[Agent] Resumed stream completed. Messages:', finalMessages.length);
-          langGraphMessages = [...finalMessages];
-          
-          // Sync messages to local store
-          if (localThreadId) {
-            const convertedMessages = convertLangGraphMessages(finalMessages, localThreadId);
-            threadStore.syncMessages(localThreadId, convertedMessages);
-          }
-          
-          isStreaming = false;
-          isInterrupted = false;
-          setPendingToolCalls([]);
-          setStreamingContent('');
+          state.langGraphMessages = [...finalMessages];
+          const convertedMessages = convertLangGraphMessages(finalMessages, localThreadId);
+          threadStore.syncMessages(localThreadId, convertedMessages);
+          state.isStreaming = false;
+          state.isInterrupted = false;
+          state.pendingToolCalls = [];
+          state.streamingContent = '';
+          updateThreadStatus(localThreadId);
         },
-        
         onError: (err) => {
-          console.error('[Agent] Resume error:', err.message);
-          error = err.message;
-          isStreaming = false;
-          isInterrupted = false;
-          awaitingHumanResponse = false;
-          setPendingToolCalls([]);
-          setStreamingContent('');
+          state.error = err.message;
+          state.isStreaming = false;
+          state.isInterrupted = false;
+          state.awaitingHumanResponse = false;
+          state.pendingToolCalls = [];
+          state.streamingContent = '';
+          updateThreadStatus(localThreadId);
         }
       }
     );
-    
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-    console.error('[Agent] Resume error:', errorMessage);
-    error = errorMessage;
-    isStreaming = false;
-    isInterrupted = false;
-    awaitingHumanResponse = false;
-    setPendingToolCalls([]);
-    setStreamingContent('');
+    state.error = errorMessage;
+    state.isStreaming = false;
+    state.isInterrupted = false;
+    state.awaitingHumanResponse = false;
+    state.pendingToolCalls = [];
+    state.streamingContent = '';
+    updateThreadStatus(localThreadId);
     throw err;
   }
 }
 
-/**
- * Approve all actions in the current HITL interrupt.
- */
 async function approveAllActions(): Promise<void> {
-  if (!hitlInterrupt) return;
-  
-  const decisions: HITLDecision[] = hitlInterrupt.action_requests.map(() => ({
+  if (!currentState?.hitlInterrupt) return;
+  const decisions: HITLDecision[] = currentState.hitlInterrupt.action_requests.map(() => ({
     type: 'approve' as const
   }));
-  
   await resumeWithDecisions(decisions);
 }
 
-/**
- * Reject all actions in the current HITL interrupt.
- */
 async function rejectAllActions(): Promise<void> {
-  if (!hitlInterrupt) return;
-  
-  const decisions: HITLDecision[] = hitlInterrupt.action_requests.map(() => ({
+  if (!currentState?.hitlInterrupt) return;
+  const decisions: HITLDecision[] = currentState.hitlInterrupt.action_requests.map(() => ({
     type: 'reject' as const
   }));
-  
   await resumeWithDecisions(decisions);
 }
 
-/**
- * Dismiss the current HITL interrupt without responding.
- * This will leave the agent in an interrupted state.
- */
 function dismissHITLInterrupt(): void {
-  hitlInterrupt = null;
-  hitlInterruptId = null;
-  awaitingHumanResponse = false;
+  if (currentState) {
+    currentState.hitlInterrupt = null;
+    currentState.hitlInterruptId = null;
+    currentState.awaitingHumanResponse = false;
+    if (currentLocalThreadId) updateThreadStatus(currentLocalThreadId);
+  }
 }
 
 // =============================================================================
 // CASHU PAYMENT FUNCTIONS
 // =============================================================================
 
-/**
- * Check for unclaimed refunds when loading a thread.
- * This is part of session recovery - if the user closed the browser
- * while the agent was running, we detect the refund and offer to claim it.
- */
 async function checkThreadForRefunds(langGraphThreadId: string): Promise<StoredRefund | null> {
   try {
     const refund = await checkForUnclaimedRefund(langGraphThreadId);
-    if (refund) {
-      console.log('[Agent] Found unclaimed refund:', refund.amountSats, 'sats');
-      pendingRefund = refund;
+    if (refund && currentLocalThreadId) {
+      const state = getThreadState(currentLocalThreadId);
+      state.pendingRefund = refund;
       return refund;
     }
     return null;
@@ -619,16 +578,12 @@ async function checkThreadForRefunds(langGraphThreadId: string): Promise<StoredR
   }
 }
 
-/**
- * Load payment state for a thread.
- */
 async function loadPaymentState(langGraphThreadId: string): Promise<CashuPaymentState | null> {
   try {
     const state = await getPaymentState(langGraphThreadId);
-    if (state) {
-      paymentState = state;
-      console.log('[Agent] Payment state loaded:', state.payment_status, 
-        state.payment_balance_sats, 'sats remaining');
+    if (state && currentLocalThreadId) {
+      const threadRunState = getThreadState(currentLocalThreadId);
+      threadRunState.paymentState = state;
     }
     return state;
   } catch (error) {
@@ -637,113 +592,99 @@ async function loadPaymentState(langGraphThreadId: string): Promise<CashuPayment
   }
 }
 
-/**
- * Mark a refund as claimed.
- * This should be called after the client wallet has received the refund.
- */
 function markRefundClaimed(): void {
-  if (pendingRefund) {
-    pendingRefund = { ...pendingRefund, claimed: true, claimedAt: Date.now() };
-    console.log('[Agent] Refund marked as claimed');
+  if (currentState?.pendingRefund) {
+    currentState.pendingRefund = { ...currentState.pendingRefund, claimed: true, claimedAt: Date.now() };
   }
 }
 
-/**
- * Resume with additional payment after funds exhausted.
- */
 async function resumeWithAdditionalPayment(paymentToken: string): Promise<void> {
-  if (!threadId || !hitlInterruptId) {
+  const localThreadId = currentLocalThreadId;
+  if (!localThreadId) return;
+  const state = getThreadState(localThreadId);
+  
+  if (!state.langGraphThreadId || !state.hitlInterruptId) {
     console.error('[Agent] Cannot resume with payment: no active interrupt');
     return;
   }
   
-  const assistantId = assistantStore.selectedAssistantId || 'deeptutor';
-  const localThreadId = currentLocalThreadId;
-  const interruptId = hitlInterruptId;
+  const assistantId = assistantStore.selectedAssistantId || 'seminar_agent';
+  const interruptId = state.hitlInterruptId;
   
-  // Reset states
-  paymentInterrupt = null;
-  hitlInterrupt = null;
-  hitlInterruptId = null;
-  awaitingHumanResponse = false;
-  isStreaming = true;
-  isInterrupted = false;
-  setStreamingContent('');
-  
-  console.log('[Agent] Resuming with additional payment');
+  state.paymentInterrupt = null;
+  state.hitlInterrupt = null;
+  state.hitlInterruptId = null;
+  state.awaitingHumanResponse = false;
+  state.isStreaming = true;
+  state.isInterrupted = false;
+  state.streamingContent = '';
+  updateThreadStatus(localThreadId);
   
   try {
     await resumeWithPayment(
-      threadId,
+      state.langGraphThreadId,
       interruptId,
       paymentToken,
       assistantId,
       {
         onToken: (token) => {
-          streamingContent += token;
+          state.streamingContent += token;
+          if (state.isInterrupted) {
+            state.isInterrupted = false;
+            updateThreadStatus(localThreadId);
+          }
         },
-        
         onMessagesSync: (messages) => {
-          langGraphMessages = [...messages];
+          state.langGraphMessages = [...messages];
         },
-        
         onComplete: (finalMessages) => {
-          console.log('[Agent] Payment resume completed');
-          langGraphMessages = [...finalMessages];
-          
-          if (localThreadId) {
-            const convertedMessages = convertLangGraphMessages(finalMessages, localThreadId);
-            threadStore.syncMessages(localThreadId, convertedMessages);
-          }
-          
-          isStreaming = false;
-          isInterrupted = false;
-          setPendingToolCalls([]);
-          setStreamingContent('');
-          
-          // Reload payment state
-          if (threadId) {
-            loadPaymentState(threadId);
-          }
+          state.langGraphMessages = [...finalMessages];
+          const convertedMessages = convertLangGraphMessages(finalMessages, localThreadId);
+          threadStore.syncMessages(localThreadId, convertedMessages);
+          state.isStreaming = false;
+          state.isInterrupted = false;
+          state.pendingToolCalls = [];
+          state.streamingContent = '';
+          if (state.langGraphThreadId) loadPaymentState(state.langGraphThreadId);
+          updateThreadStatus(localThreadId);
         },
-        
         onError: (err) => {
-          console.error('[Agent] Payment resume error:', err.message);
-          error = err.message;
-          isStreaming = false;
-          isInterrupted = false;
-          awaitingHumanResponse = false;
-          setPendingToolCalls([]);
-          setStreamingContent('');
+          state.error = err.message;
+          state.isStreaming = false;
+          state.isInterrupted = false;
+          state.awaitingHumanResponse = false;
+          state.pendingToolCalls = [];
+          state.streamingContent = '';
+          updateThreadStatus(localThreadId);
         }
       }
     );
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-    console.error('[Agent] Payment resume error:', errorMessage);
-    error = errorMessage;
-    isStreaming = false;
-    isInterrupted = false;
-    awaitingHumanResponse = false;
+    state.error = errorMessage;
+    state.isStreaming = false;
+    state.isInterrupted = false;
+    state.awaitingHumanResponse = false;
+    updateThreadStatus(localThreadId);
     throw err;
   }
 }
 
-/**
- * Handle client tool execution interrupt.
- * Executes read-only tools automatically, or waits for approval on write tools.
- */
+// =============================================================================
+// CLIENT TOOL HANDLING
+// =============================================================================
+
 async function handleClientToolInterrupt(
   interrupt: ClientToolInterrupt,
   interruptId: string
 ): Promise<void> {
-  clientToolInterrupt = interrupt;
+  const localThreadId = currentLocalThreadId;
+  if (!localThreadId) return;
+  const state = getThreadState(localThreadId);
   
-  // If auto-approve (read-only tools), execute immediately
+  state.clientToolInterrupt = interrupt;
+  
   if (interrupt.auto_approve) {
-    console.log('[Agent] Auto-executing read-only tools:', 
-      interrupt.tool_calls.map(tc => tc.name));
-    
     const projectId = threadStore.currentThread?.projectId || '';
     const toolCalls = interrupt.tool_calls.map(tc => ({
       id: tc.id,
@@ -751,264 +692,239 @@ async function handleClientToolInterrupt(
       args: tc.args,
     }));
     
-    // Execute tools
     const results = await executeToolCalls(toolCalls, projectId);
     
-    // Resume with results
-    if (threadId) {
-      const assistantId = assistantStore.selectedAssistantId || 'deeptutor';
+    if (state.langGraphThreadId) {
+      const assistantId = assistantStore.selectedAssistantId || 'seminar_agent';
       await resumeWithToolResults(
-        threadId,
+        state.langGraphThreadId,
         interruptId,
         results,
         assistantId,
         {
-          onToken: (token) => {
-            streamingContent += token;
-          },
-          onMessagesSync: (messages) => {
-            langGraphMessages = [...messages];
-          },
+          onToken: (token) => { state.streamingContent += token; },
+          onMessagesSync: (messages) => { state.langGraphMessages = [...messages]; },
           onComplete: (finalMessages) => {
-            langGraphMessages = [...finalMessages];
-            clientToolInterrupt = null;
-            isStreaming = false;
-            isInterrupted = false;
+            state.langGraphMessages = [...finalMessages];
+            state.clientToolInterrupt = null;
+            state.isStreaming = false;
+            state.isInterrupted = false;
+            updateThreadStatus(localThreadId);
           },
           onHITLInterrupt: (newInterrupt, newInterruptId) => {
-            // Another interrupt - handle it
-            hitlInterrupt = newInterrupt;
-            hitlInterruptId = newInterruptId;
-            awaitingHumanResponse = true;
-            isInterrupted = true;
-            isStreaming = false;
+            state.hitlInterrupt = newInterrupt;
+            state.hitlInterruptId = newInterruptId;
+            state.awaitingHumanResponse = true;
+            state.isInterrupted = true;
+            state.isStreaming = false;
+            updateThreadStatus(localThreadId);
           },
           onClarificationInterrupt: (newInterrupt, newInterruptId) => {
-            clarificationInterrupt = newInterrupt;
-            hitlInterruptId = newInterruptId;
-            awaitingHumanResponse = true;
-            isInterrupted = true;
-            isStreaming = false;
+            state.clarificationInterrupt = newInterrupt;
+            state.hitlInterruptId = newInterruptId;
+            state.awaitingHumanResponse = true;
+            state.isInterrupted = true;
+            state.isStreaming = false;
+            updateThreadStatus(localThreadId);
           },
           onClientToolInterrupt: (newInterrupt, newInterruptId) => {
-            clientToolInterrupt = newInterrupt;
-            hitlInterruptId = newInterruptId;
-            awaitingHumanResponse = true;
-            isInterrupted = true;
-            isStreaming = false;
+            state.clientToolInterrupt = newInterrupt;
+            state.hitlInterruptId = newInterruptId;
+            state.awaitingHumanResponse = true;
+            state.isInterrupted = true;
+            state.isStreaming = false;
+            updateThreadStatus(localThreadId);
           },
           onError: (err) => {
-            error = err.message;
-            isStreaming = false;
-            clientToolInterrupt = null;
+            state.error = err.message;
+            state.isStreaming = false;
+            state.clientToolInterrupt = null;
+            updateThreadStatus(localThreadId);
           }
         }
       );
     }
   } else {
-    // Requires approval - show UI
-    console.log('[Agent] Write tools require approval:', 
-      interrupt.tool_calls.map(tc => tc.name));
-    
-    // Convert to HITL format for the UI
     if (interrupt.action_requests && interrupt.review_configs) {
-      hitlInterrupt = {
+      state.hitlInterrupt = {
         action_requests: interrupt.action_requests,
         review_configs: interrupt.review_configs,
       };
-      hitlInterruptId = interruptId;
-      awaitingHumanResponse = true;
-      isInterrupted = true;
-      isStreaming = false;
+      state.hitlInterruptId = interruptId;
+      state.awaitingHumanResponse = true;
+      state.isInterrupted = true;
+      state.isStreaming = false;
+      updateThreadStatus(localThreadId);
     }
   }
 }
 
-/**
- * Execute approved write tools and resume.
- */
 async function executeApprovedWriteTools(): Promise<void> {
-  if (!clientToolInterrupt || !threadId || !hitlInterruptId) {
+  const localThreadId = currentLocalThreadId;
+  if (!localThreadId) return;
+  const state = getThreadState(localThreadId);
+
+  if (!state.clientToolInterrupt || !state.langGraphThreadId || !state.hitlInterruptId) {
     console.error('[Agent] No pending write tools to execute');
     return;
   }
   
   const projectId = threadStore.currentThread?.projectId || '';
-  const toolCalls = clientToolInterrupt.tool_calls.map(tc => ({
+  const toolCalls = state.clientToolInterrupt.tool_calls.map(tc => ({
     id: tc.id,
     name: tc.name,
     args: tc.args,
   }));
   
-  console.log('[Agent] Executing approved write tools:', toolCalls.map(tc => tc.name));
-  
-  // Execute the tools
   const results = await executeToolCalls(toolCalls, projectId);
+  const assistantId = assistantStore.selectedAssistantId || 'seminar_agent';
+  const interruptId = state.hitlInterruptId;
   
-  // Resume with results
-  const assistantId = assistantStore.selectedAssistantId || 'deeptutor';
-  const interruptId = hitlInterruptId;
-  
-  // Reset states
-  clientToolInterrupt = null;
-  hitlInterrupt = null;
-  hitlInterruptId = null;
-  awaitingHumanResponse = false;
-  isStreaming = true;
-  isInterrupted = false;
+  state.clientToolInterrupt = null;
+  state.hitlInterrupt = null;
+  state.hitlInterruptId = null;
+  state.awaitingHumanResponse = false;
+  state.isStreaming = true;
+  state.isInterrupted = false;
+  updateThreadStatus(localThreadId);
   
   await resumeWithToolResults(
-    threadId,
+    state.langGraphThreadId,
     interruptId,
     results,
     assistantId,
     {
-      onToken: (token) => {
-        streamingContent += token;
-      },
-      onMessagesSync: (messages) => {
-        langGraphMessages = [...messages];
-      },
+      onToken: (token) => { state.streamingContent += token; },
+      onMessagesSync: (messages) => { state.langGraphMessages = [...messages]; },
       onComplete: (finalMessages) => {
-        langGraphMessages = [...finalMessages];
-        
-        if (currentLocalThreadId) {
-          const convertedMessages = convertLangGraphMessages(finalMessages, currentLocalThreadId);
-          threadStore.syncMessages(currentLocalThreadId, convertedMessages);
-        }
-        
-        isStreaming = false;
-        isInterrupted = false;
-        setPendingToolCalls([]);
-        setStreamingContent('');
+        state.langGraphMessages = [...finalMessages];
+        const convertedMessages = convertLangGraphMessages(finalMessages, localThreadId);
+        threadStore.syncMessages(localThreadId, convertedMessages);
+        state.isStreaming = false;
+        state.isInterrupted = false;
+        state.pendingToolCalls = [];
+        state.streamingContent = '';
+        updateThreadStatus(localThreadId);
       },
       onHITLInterrupt: (newInterrupt, newInterruptId) => {
-        hitlInterrupt = newInterrupt;
-        hitlInterruptId = newInterruptId;
-        awaitingHumanResponse = true;
-        isInterrupted = true;
-        isStreaming = false;
+        state.hitlInterrupt = newInterrupt;
+        state.hitlInterruptId = newInterruptId;
+        state.awaitingHumanResponse = true;
+        state.isInterrupted = true;
+        state.isStreaming = false;
+        updateThreadStatus(localThreadId);
       },
       onClarificationInterrupt: (newInterrupt, newInterruptId) => {
-        clarificationInterrupt = newInterrupt;
-        hitlInterruptId = newInterruptId;
-        awaitingHumanResponse = true;
-        isInterrupted = true;
-        isStreaming = false;
+        state.clarificationInterrupt = newInterrupt;
+        state.hitlInterruptId = newInterruptId;
+        state.awaitingHumanResponse = true;
+        state.isInterrupted = true;
+        state.isStreaming = false;
+        updateThreadStatus(localThreadId);
       },
       onClientToolInterrupt: (newInterrupt, newInterruptId) => {
-        clientToolInterrupt = newInterrupt;
-        hitlInterruptId = newInterruptId;
-        awaitingHumanResponse = true;
-        isInterrupted = true;
-        isStreaming = false;
+        state.clientToolInterrupt = newInterrupt;
+        state.hitlInterruptId = newInterruptId;
+        state.awaitingHumanResponse = true;
+        state.isInterrupted = true;
+        state.isStreaming = false;
+        updateThreadStatus(localThreadId);
       },
       onError: (err) => {
-        error = err.message;
-        isStreaming = false;
-        isInterrupted = false;
+        state.error = err.message;
+        state.isStreaming = false;
+        state.isInterrupted = false;
+        updateThreadStatus(localThreadId);
       }
     }
   );
 }
 
-// =============================================================================
-// CLIENT TOOL REJECTION
-// =============================================================================
-
-/**
- * Reject a client tool interrupt (user declined to execute the tool).
- */
 async function rejectClientToolInterrupt(): Promise<void> {
-  if (!clientToolInterrupt || !threadId || !hitlInterruptId) {
+  const localThreadId = currentLocalThreadId;
+  if (!localThreadId) return;
+  const state = getThreadState(localThreadId);
+
+  if (!state.clientToolInterrupt || !state.langGraphThreadId || !state.hitlInterruptId) {
     console.error('[Agent] No pending client tool interrupt to reject');
     return;
   }
   
-  console.log('[Agent] Rejecting client tool interrupt');
+  const toolCalls = state.clientToolInterrupt.tool_calls;
+  const assistantId = assistantStore.selectedAssistantId || 'seminar_agent';
+  const interruptId = state.hitlInterruptId;
   
-  const toolCalls = clientToolInterrupt.tool_calls;
-  const assistantId = assistantStore.selectedAssistantId || 'deeptutor';
-  const interruptId = hitlInterruptId;
+  state.clientToolInterrupt = null;
+  state.hitlInterrupt = null;
+  state.hitlInterruptId = null;
+  state.awaitingHumanResponse = false;
+  state.isStreaming = true;
+  state.isInterrupted = false;
+  updateThreadStatus(localThreadId);
   
-  // Reset states
-  clientToolInterrupt = null;
-  hitlInterrupt = null;
-  hitlInterruptId = null;
-  awaitingHumanResponse = false;
-  isStreaming = true;
-  isInterrupted = false;
-  
-  // Create rejection results
   const rejectionResults = toolCalls.map(tc => ({
     tool_call_id: tc.id,
-    content: JSON.stringify({ 
-      status: 'rejected', 
-      message: 'User declined to execute this action' 
-    })
+    content: JSON.stringify({ status: 'rejected', message: 'User declined to execute this action' })
   }));
   
   try {
     await resumeWithToolResults(
-      threadId,
+      state.langGraphThreadId,
       interruptId,
       rejectionResults,
       assistantId,
       {
-        onToken: (token) => {
-          streamingContent += token;
-        },
-        onMessagesSync: (messages) => {
-          langGraphMessages = [...messages];
-        },
+        onToken: (token) => { state.streamingContent += token; },
+        onMessagesSync: (messages) => { state.langGraphMessages = [...messages]; },
         onComplete: (finalMessages) => {
-          langGraphMessages = [...finalMessages];
-          
-          if (currentLocalThreadId) {
-            const convertedMessages = convertLangGraphMessages(finalMessages, currentLocalThreadId);
-            threadStore.syncMessages(currentLocalThreadId, convertedMessages);
-          }
-          
-          isStreaming = false;
-          isInterrupted = false;
-          setPendingToolCalls([]);
-          setStreamingContent('');
+          state.langGraphMessages = [...finalMessages];
+          const convertedMessages = convertLangGraphMessages(finalMessages, localThreadId);
+          threadStore.syncMessages(localThreadId, convertedMessages);
+          state.isStreaming = false;
+          state.isInterrupted = false;
+          state.pendingToolCalls = [];
+          state.streamingContent = '';
+          updateThreadStatus(localThreadId);
         },
         onHITLInterrupt: (newInterrupt, newInterruptId) => {
-          hitlInterrupt = newInterrupt;
-          hitlInterruptId = newInterruptId;
-          awaitingHumanResponse = true;
-          isInterrupted = true;
-          isStreaming = false;
+          state.hitlInterrupt = newInterrupt;
+          state.hitlInterruptId = newInterruptId;
+          state.awaitingHumanResponse = true;
+          state.isInterrupted = true;
+          state.isStreaming = false;
+          updateThreadStatus(localThreadId);
         },
         onClarificationInterrupt: (newInterrupt, newInterruptId) => {
-          clarificationInterrupt = newInterrupt;
-          hitlInterruptId = newInterruptId;
-          awaitingHumanResponse = true;
-          isInterrupted = true;
-          isStreaming = false;
+          state.clarificationInterrupt = newInterrupt;
+          state.hitlInterruptId = newInterruptId;
+          state.awaitingHumanResponse = true;
+          state.isInterrupted = true;
+          state.isStreaming = false;
+          updateThreadStatus(localThreadId);
         },
         onClientToolInterrupt: (newInterrupt, newInterruptId) => {
-          clientToolInterrupt = newInterrupt;
-          hitlInterruptId = newInterruptId;
-          awaitingHumanResponse = true;
-          isInterrupted = true;
-          isStreaming = false;
+          state.clientToolInterrupt = newInterrupt;
+          state.hitlInterruptId = newInterruptId;
+          state.awaitingHumanResponse = true;
+          state.isInterrupted = true;
+          state.isStreaming = false;
+          updateThreadStatus(localThreadId);
         },
         onError: (err) => {
-          error = err.message;
-          isStreaming = false;
-          isInterrupted = false;
+          state.error = err.message;
+          state.isStreaming = false;
+          state.isInterrupted = false;
+          updateThreadStatus(localThreadId);
         }
       }
     );
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-    console.error('[Agent] Reject error:', errorMessage);
-    error = errorMessage;
-    isStreaming = false;
-    isInterrupted = false;
-    awaitingHumanResponse = false;
+    state.error = errorMessage;
+    state.isStreaming = false;
+    state.isInterrupted = false;
+    state.awaitingHumanResponse = false;
+    updateThreadStatus(localThreadId);
   }
 }
 
@@ -1016,43 +932,38 @@ async function rejectClientToolInterrupt(): Promise<void> {
 // CLARIFICATION RESPONSE
 // =============================================================================
 
-/**
- * Resume the agent with a user's response to a clarification question.
- */
 async function resumeWithClarificationResponse(response: ClarificationResponse): Promise<void> {
-  if (!clarificationInterrupt || !threadId || !hitlInterruptId) {
+  const localThreadId = currentLocalThreadId;
+  if (!localThreadId) return;
+  const state = getThreadState(localThreadId);
+
+  if (!state.clarificationInterrupt || !state.langGraphThreadId || !state.hitlInterruptId) {
     console.error('[Agent] No pending clarification interrupt to respond to');
     return;
   }
   
-  console.log('[Agent] Resuming with clarification response:', response);
+  const interrupt = state.clarificationInterrupt;
+  const assistantId = assistantStore.selectedAssistantId || 'seminar_agent';
+  const interruptId = state.hitlInterruptId;
   
-  const interrupt = clarificationInterrupt;
-  const assistantId = assistantStore.selectedAssistantId || 'deeptutor';
-  const interruptId = hitlInterruptId;
+  state.clarificationInterrupt = null;
+  state.hitlInterrupt = null;
+  state.hitlInterruptId = null;
+  state.awaitingHumanResponse = false;
+  state.isStreaming = true;
+  state.isInterrupted = false;
+  updateThreadStatus(localThreadId);
   
-  // Reset states
-  clarificationInterrupt = null;
-  hitlInterrupt = null;
-  hitlInterruptId = null;
-  awaitingHumanResponse = false;
-  isStreaming = true;
-  isInterrupted = false;
-  
-  // Format the response content based on tool type
   let responseContent: string;
   if (interrupt.tool === 'ask_user') {
-    // Free-form response
     responseContent = response.response || '';
   } else {
-    // ask_choices - format as JSON with selected IDs and optional freeform
     responseContent = JSON.stringify({
       selected: response.selected || [],
       freeform: response.freeform
     });
   }
   
-  // Create tool result for the clarification
   const toolResult = [{
     tool_call_id: interrupt.tool_call_id,
     content: responseContent
@@ -1060,68 +971,85 @@ async function resumeWithClarificationResponse(response: ClarificationResponse):
   
   try {
     await resumeWithToolResults(
-      threadId,
+      state.langGraphThreadId,
       interruptId,
       toolResult,
       assistantId,
       {
-        onToken: (token) => {
-          streamingContent += token;
-        },
-        onMessagesSync: (messages) => {
-          langGraphMessages = [...messages];
-        },
+        onToken: (token) => { state.streamingContent += token; },
+        onMessagesSync: (messages) => { state.langGraphMessages = [...messages]; },
         onComplete: (finalMessages) => {
-          langGraphMessages = [...finalMessages];
-          
-          if (currentLocalThreadId) {
-            const convertedMessages = convertLangGraphMessages(finalMessages, currentLocalThreadId);
-            threadStore.syncMessages(currentLocalThreadId, convertedMessages);
-          }
-          
-          isStreaming = false;
-          isInterrupted = false;
-          setPendingToolCalls([]);
-          setStreamingContent('');
+          state.langGraphMessages = [...finalMessages];
+          const convertedMessages = convertLangGraphMessages(finalMessages, localThreadId);
+          threadStore.syncMessages(localThreadId, convertedMessages);
+          state.isStreaming = false;
+          state.isInterrupted = false;
+          state.pendingToolCalls = [];
+          state.streamingContent = '';
+          updateThreadStatus(localThreadId);
         },
         onHITLInterrupt: (newInterrupt, newInterruptId) => {
-          hitlInterrupt = newInterrupt;
-          hitlInterruptId = newInterruptId;
-          awaitingHumanResponse = true;
-          isInterrupted = true;
-          isStreaming = false;
+          state.hitlInterrupt = newInterrupt;
+          state.hitlInterruptId = newInterruptId;
+          state.awaitingHumanResponse = true;
+          state.isInterrupted = true;
+          state.isStreaming = false;
+          updateThreadStatus(localThreadId);
         },
         onClarificationInterrupt: (newInterrupt, newInterruptId) => {
-          clarificationInterrupt = newInterrupt;
-          hitlInterruptId = newInterruptId;
-          awaitingHumanResponse = true;
-          isInterrupted = true;
-          isStreaming = false;
+          state.clarificationInterrupt = newInterrupt;
+          state.hitlInterruptId = newInterruptId;
+          state.awaitingHumanResponse = true;
+          state.isInterrupted = true;
+          state.isStreaming = false;
+          updateThreadStatus(localThreadId);
         },
         onClientToolInterrupt: (interrupt, newInterruptId) => {
-          // Client tool interrupt after clarification - handle it
-          console.log('[Agent] Client tool interrupt after clarification:', interrupt.tool_calls.map(tc => tc.name));
-          clientToolInterrupt = interrupt;
-          hitlInterruptId = newInterruptId;
-          awaitingHumanResponse = true;
-          isInterrupted = true;
-          isStreaming = false;
+          state.clientToolInterrupt = interrupt;
+          state.hitlInterruptId = newInterruptId;
+          state.awaitingHumanResponse = true;
+          state.isInterrupted = true;
+          state.isStreaming = false;
+          updateThreadStatus(localThreadId);
         },
         onError: (err) => {
-          error = err.message;
-          isStreaming = false;
-          isInterrupted = false;
+          state.error = err.message;
+          state.isStreaming = false;
+          state.isInterrupted = false;
+          updateThreadStatus(localThreadId);
         }
       }
     );
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-    console.error('[Agent] Clarification response error:', errorMessage);
-    error = errorMessage;
-    isStreaming = false;
-    isInterrupted = false;
-    awaitingHumanResponse = false;
+    state.error = errorMessage;
+    state.isStreaming = false;
+    state.isInterrupted = false;
+    state.awaitingHumanResponse = false;
+    updateThreadStatus(localThreadId);
   }
+}
+
+// =============================================================================
+// STREAM CONTROL
+// =============================================================================
+
+async function stopStreaming(): Promise<void> {
+  const localThreadId = currentLocalThreadId;
+  if (!localThreadId) return;
+  const state = getThreadState(localThreadId);
+  
+  if (state.langGraphThreadId) {
+    try {
+      await cancelActiveRuns(state.langGraphThreadId);
+    } catch (err) {
+      console.error('[Agent] Failed to cancel runs:', err);
+    }
+  }
+  
+  state.isStreaming = false;
+  state.isInterrupted = false;
+  updateThreadStatus(localThreadId);
 }
 
 // =============================================================================
@@ -1129,126 +1057,121 @@ async function resumeWithClarificationResponse(response: ClarificationResponse):
 // =============================================================================
 
 function clearError(): void {
-  error = null;
+  if (currentState) currentState.error = null;
 }
 
 function resetStream(): void {
-  isStreaming = false;
-  isInterrupted = false;
-  threadId = null;
-  error = null;
-  hitlInterrupt = null;
-  hitlInterruptId = null;
-  awaitingHumanResponse = false;
-  currentLocalThreadId = null;
-  paymentState = null;
-  pendingRefund = null;
-  paymentInterrupt = null;
-  clientToolInterrupt = null;
-  clarificationInterrupt = null;
-  todos = [];
-  setPendingToolCalls([]);
-  setStreamingContent('');
-  langGraphMessages = [];
+  if (currentLocalThreadId) {
+    const state = getThreadState(currentLocalThreadId);
+    state.isStreaming = false;
+    state.isInterrupted = false;
+    state.langGraphThreadId = null;
+    state.error = null;
+    state.hitlInterrupt = null;
+    state.hitlInterruptId = null;
+    state.awaitingHumanResponse = false;
+    state.paymentState = null;
+    state.pendingRefund = null;
+    state.paymentInterrupt = null;
+    state.clientToolInterrupt = null;
+    state.clarificationInterrupt = null;
+    state.todos = [];
+    state.pendingToolCalls = [];
+    state.streamingContent = '';
+    state.langGraphMessages = [];
+    updateThreadStatus(currentLocalThreadId);
+  }
 }
 
-/**
- * Clear all state when switching projects.
- * This prevents stale thread references and clears any in-progress operations.
- */
 function clearProjectState(): void {
-  resetStream();
+  for (const tid in runStates) {
+    delete runStates[tid];
+  }
 }
 
 // =============================================================================
 // THREAD STATE RESTORATION
 // =============================================================================
 
-/**
- * Load and restore thread state from the LangGraph server.
- * This is called when selecting a thread that has a langGraphThreadId,
- * especially after page refresh to restore pending interrupts.
- * 
- * @param langGraphThreadId - The LangGraph thread ID to load
- * @param localThreadId - The local thread ID for message syncing
- * @returns True if state was loaded successfully
- */
 async function loadThreadState(
   langGraphThreadId: string,
   localThreadId: string
 ): Promise<boolean> {
-  console.log('[Agent] Loading thread state for:', langGraphThreadId);
-  
   try {
+    const state = getThreadState(localThreadId);
+    
+    // If we're already actively streaming this thread in this session,
+    // don't overwrite the states that are being managed by sendMessage.
+    if (state.isStreaming) {
+      return true;
+    }
+
     const stateInfo = await getThreadStateWithInterrupts(langGraphThreadId);
     
-    // Update the langGraphMessages for display
-    langGraphMessages = [...stateInfo.messages];
-    threadId = langGraphThreadId;
-    currentLocalThreadId = localThreadId;
+    state.langGraphMessages = [...stateInfo.messages];
+    state.langGraphThreadId = langGraphThreadId;
     
-    // Sync messages to local store
     if (stateInfo.messages.length > 0) {
       const convertedMessages = convertLangGraphMessages(stateInfo.messages, localThreadId);
       threadStore.syncMessages(localThreadId, convertedMessages);
-      console.log('[Agent] Synced', convertedMessages.length, 'messages from LangGraph');
     }
     
-    // Restore interrupt state if there's a pending interrupt
     if (stateInfo.hasInterrupt && stateInfo.interruptData && stateInfo.interruptId) {
-      console.log('[Agent] Restoring interrupt:', stateInfo.interruptType);
-      
-      hitlInterruptId = stateInfo.interruptId;
-      awaitingHumanResponse = true;
-      isInterrupted = true;
-      isStreaming = false;
+      state.hitlInterruptId = stateInfo.interruptId;
+      state.awaitingHumanResponse = true;
+      state.isInterrupted = true;
+      state.isStreaming = false;
       
       switch (stateInfo.interruptType) {
         case 'clarification':
-          clarificationInterrupt = stateInfo.interruptData as ClarificationInterrupt;
-          console.log('[Agent] Restored clarification interrupt:', clarificationInterrupt.tool);
+          state.clarificationInterrupt = stateInfo.interruptData as ClarificationInterrupt;
           break;
-          
         case 'client_tool':
-          clientToolInterrupt = stateInfo.interruptData as ClientToolInterrupt;
-          console.log('[Agent] Restored client tool interrupt');
+          state.clientToolInterrupt = stateInfo.interruptData as ClientToolInterrupt;
           break;
-          
         case 'hitl':
-          hitlInterrupt = stateInfo.interruptData as HITLInterrupt;
-          console.log('[Agent] Restored HITL interrupt');
+          state.hitlInterrupt = stateInfo.interruptData as HITLInterrupt;
           break;
-          
         case 'payment':
-          paymentInterrupt = stateInfo.interruptData as PaymentExhaustedInterrupt;
-          console.log('[Agent] Restored payment interrupt');
+          state.paymentInterrupt = stateInfo.interruptData as PaymentExhaustedInterrupt;
           break;
       }
     } else {
-      // No interrupt - ensure interrupt state is clear
-      hitlInterrupt = null;
-      hitlInterruptId = null;
-      clarificationInterrupt = null;
-      clientToolInterrupt = null;
-      paymentInterrupt = null;
-      awaitingHumanResponse = false;
-      isInterrupted = false;
+      state.hitlInterrupt = null;
+      state.hitlInterruptId = null;
+      state.clarificationInterrupt = null;
+      state.clientToolInterrupt = null;
+      state.paymentInterrupt = null;
+      state.awaitingHumanResponse = false;
+      state.isInterrupted = false;
+      
+      // Check if there's an active run on the server even if not interrupted.
+      // This helps show 'busy' status for background runs after page refresh.
+      try {
+        const client = getClient();
+        const runs = await client.runs.list(langGraphThreadId, { limit: 1 });
+        if (runs.length > 0 && (runs[0].status === 'pending' || runs[0].status === 'running')) {
+          console.log('[Agent] Detected active run on server for thread:', langGraphThreadId);
+          // We can't easily hook back into the stream here without re-submitting,
+          // but we can at least show it as busy.
+          state.isStreaming = true;
+        }
+      } catch (runErr) {
+        console.warn('[Agent] Could not check active runs:', runErr);
+      }
     }
     
-    // Load todos from thread state
     try {
       const stateTodos = await getThreadTodos(langGraphThreadId);
-      console.log('[Agent] Loaded todos from thread state:', stateTodos.length);
-      todos = [...stateTodos];
+      state.todos = [...stateTodos];
     } catch (todoErr) {
       console.warn('[Agent] Could not load todos from thread state:', todoErr);
     }
     
+    updateThreadStatus(localThreadId);
     return true;
-    
   } catch (err) {
     console.error('[Agent] Failed to load thread state:', err);
-    error = err instanceof Error ? err.message : 'Failed to load thread state';
     return false;
   }
 }
@@ -1259,32 +1182,33 @@ async function loadThreadState(
 
 export const agentStore = {
   // Reactive getters
-  get streamingContent() { return streamingContent; },
-  get isStreaming() { return isStreaming; },
-  get isInterrupted() { return isInterrupted; },
-  get pendingToolCalls() { return pendingToolCalls; },
-  get error() { return error; },
-  get threadId() { return threadId; },
-  get langGraphMessages() { return langGraphMessages; },
+  get streamingContent() { return currentState?.streamingContent || ''; },
+  get isStreaming() { return currentState?.isStreaming || false; },
+  get isInterrupted() { return currentState?.isInterrupted || false; },
+  get pendingToolCalls() { return currentState?.pendingToolCalls || []; },
+  get error() { return currentState?.error || null; },
+  get threadId() { return currentState?.langGraphThreadId || null; },
+  get langGraphMessages() { return currentState?.langGraphMessages || []; },
   
   // Human-in-the-loop getters
-  get hitlInterrupt() { return hitlInterrupt; },
-  get awaitingHumanResponse() { return awaitingHumanResponse; },
+  get hitlInterrupt() { return currentState?.hitlInterrupt || null; },
+  get awaitingHumanResponse() { return currentState?.awaitingHumanResponse || false; },
   
   // Payment getters
-  get paymentState() { return paymentState; },
-  get pendingRefund() { return pendingRefund; },
-  get paymentInterrupt() { return paymentInterrupt; },
-  get clientToolInterrupt() { return clientToolInterrupt; },
+  get paymentState() { return currentState?.paymentState || null; },
+  get pendingRefund() { return currentState?.pendingRefund || null; },
+  get paymentInterrupt() { return currentState?.paymentInterrupt || null; },
+  get clientToolInterrupt() { return currentState?.clientToolInterrupt || null; },
   
   // Clarification getter
-  get clarificationInterrupt() { return clarificationInterrupt; },
+  get clarificationInterrupt() { return currentState?.clarificationInterrupt || null; },
   
   // Todos from TodoListMiddleware
-  get todos() { return todos; },
+  get todos() { return currentState?.todos || []; },
   
   // Actions
   sendMessage,
+  stopStreaming,
   clearError,
   resetStream,
   checkHealth,
