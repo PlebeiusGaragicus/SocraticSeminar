@@ -32,16 +32,14 @@
   let isCreatingFile = $state(false);
   let newFileName = $state('');
   
+  // Section expansion state
+  let chatsExpanded = $state(true);
+  let filesExpanded = $state(true);
+  let sourcesExpanded = $state(true);
+  
   // Delete confirmation state
   let artifactToDelete = $state<string | null>(null);
   let threadToDelete = $state<string | null>(null);
-
-  // Resizable divider state
-  let threadSectionHeight = $state(200);
-  let isDraggingDivider = $state(false);
-  let dragStartY = $state(0);
-  let dragStartHeight = $state(0);
-  let containerRef: HTMLDivElement;
 
   const currentProjectId = $derived(projectStore.currentProjectId);
   const artifacts = $derived(
@@ -125,30 +123,6 @@
   function isFileOpen(artifactId: string): boolean {
     return openArtifactIds.includes(artifactId);
   }
-
-  // Divider drag handlers - use delta to prevent jumping
-  function handleDividerMouseDown(e: MouseEvent) {
-    e.preventDefault();
-    isDraggingDivider = true;
-    dragStartY = e.clientY;
-    dragStartHeight = threadSectionHeight;
-    document.addEventListener('mousemove', handleDividerMouseMove);
-    document.addEventListener('mouseup', handleDividerMouseUp);
-  }
-
-  function handleDividerMouseMove(e: MouseEvent) {
-    if (!isDraggingDivider || !containerRef) return;
-    const containerRect = containerRef.getBoundingClientRect();
-    const delta = e.clientY - dragStartY;
-    const newHeight = dragStartHeight + delta;
-    threadSectionHeight = Math.max(80, Math.min(containerRect.height - 150, newHeight));
-  }
-
-  function handleDividerMouseUp() {
-    isDraggingDivider = false;
-    document.removeEventListener('mousemove', handleDividerMouseMove);
-    document.removeEventListener('mouseup', handleDividerMouseUp);
-  }
 </script>
 
 {#if collapsed}
@@ -163,7 +137,7 @@
     </button>
   </div>
 {:else}
-  <div bind:this={containerRef} class="flex h-full flex-col border-r border-zinc-800 bg-zinc-950">
+  <div class="flex h-full flex-col border-r border-zinc-800 bg-zinc-950">
     <!-- Header with collapse button -->
     <div class="flex items-center justify-between border-b border-zinc-800 px-3 py-2">
       <span class="text-xs font-semibold uppercase tracking-wider text-zinc-500">
@@ -178,13 +152,16 @@
       </button>
     </div>
 
-    <!-- Threads Section -->
-    <div class="flex flex-col overflow-hidden border-b border-zinc-800" style="height: {threadSectionHeight}px">
-      <!-- Threads Header -->
-      <div class="flex items-center justify-between px-3 py-2">
-        <span class="text-xs font-semibold uppercase tracking-wider text-zinc-500">
-          Threads
-        </span>
+    <!-- Chats Section -->
+    <div class="flex flex-col border-b border-zinc-800 {chatsExpanded ? 'flex-1 min-h-0' : 'flex-shrink-0'}">
+      <div class="flex w-full items-center justify-between px-3 py-2">
+        <button 
+          onclick={() => chatsExpanded = !chatsExpanded}
+          class="flex items-center gap-2 text-zinc-500 transition-colors hover:text-zinc-300"
+        >
+          <ChevronRight class="h-4 w-4 transition-transform {chatsExpanded ? 'rotate-90' : ''}" />
+          <span class="text-xs font-semibold uppercase tracking-wider">Chats</span>
+        </button>
         <button
           onclick={handleCreateThread}
           class="rounded p-1 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-300"
@@ -194,32 +171,28 @@
         </button>
       </div>
 
-      <!-- Thread List Component -->
-      <div class="flex-1 overflow-hidden">
-        <ThreadList
-          {threads}
-          {currentThreadId}
-          onThreadSelect={(id) => handleSelectThread(threads.find(t => t.id === id)!)}
-          onThreadDelete={(id) => (threadToDelete = id)}
-        />
-      </div>
+      {#if chatsExpanded}
+        <div class="flex-1 overflow-y-auto pb-2">
+          <ThreadList
+            {threads}
+            {currentThreadId}
+            onThreadSelect={(id) => handleSelectThread(threads.find(t => t.id === id)!)}
+            onThreadDelete={(id) => (threadToDelete = id)}
+          />
+        </div>
+      {/if}
     </div>
 
-    <!-- Resizable Divider -->
-    <div
-      class="h-1 cursor-row-resize bg-zinc-800 hover:bg-amber-500/50 transition-colors {isDraggingDivider ? 'bg-amber-500' : ''}"
-      onmousedown={handleDividerMouseDown}
-      role="separator"
-      aria-orientation="horizontal"
-    ></div>
-
     <!-- Files Section -->
-    <div class="flex flex-1 flex-col overflow-hidden">
-      <!-- Files Header -->
-      <div class="flex items-center justify-between px-3 py-2">
-        <span class="text-xs font-semibold uppercase tracking-wider text-zinc-500">
-          Files
-        </span>
+    <div class="flex flex-col border-b border-zinc-800 {filesExpanded ? 'flex-1 min-h-0' : 'flex-shrink-0'}">
+      <div class="flex w-full items-center justify-between px-3 py-2">
+        <button 
+          onclick={() => filesExpanded = !filesExpanded}
+          class="flex items-center gap-2 text-zinc-500 transition-colors hover:text-zinc-300"
+        >
+          <ChevronRight class="h-4 w-4 transition-transform {filesExpanded ? 'rotate-90' : ''}" />
+          <span class="text-xs font-semibold uppercase tracking-wider">Files</span>
+        </button>
         <button
           onclick={() => (isCreatingFile = true)}
           class="rounded p-1 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-300"
@@ -229,77 +202,96 @@
         </button>
       </div>
 
-      <!-- New File Form -->
-      {#if isCreatingFile}
-        <div class="border-b border-zinc-800 px-3 pb-2">
-          <input
-            type="text"
-            bind:value={newFileName}
-            onkeydown={handleFileKeydown}
-            placeholder="document.md"
-            class="mb-2 w-full rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
-          />
-          <div class="flex gap-2">
-            <button
-              onclick={handleCreateFile}
-              disabled={!newFileName.trim()}
-              class="flex-1 rounded bg-amber-600 px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-amber-500 disabled:opacity-50"
-            >
-              Create
-            </button>
-            <button
-              onclick={() => {
-                isCreatingFile = false;
-                newFileName = '';
-              }}
-              class="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-400 transition-colors hover:bg-zinc-800"
-            >
-              Cancel
-            </button>
+      {#if filesExpanded}
+        <div class="flex flex-1 flex-col overflow-hidden pb-2">
+          <!-- New File Form -->
+          {#if isCreatingFile}
+            <div class="px-3 pb-2">
+              <input
+                type="text"
+                bind:value={newFileName}
+                onkeydown={handleFileKeydown}
+                placeholder="document.md"
+                class="mb-2 w-full rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
+              />
+              <div class="flex gap-2">
+                <button
+                  onclick={handleCreateFile}
+                  disabled={!newFileName.trim()}
+                  class="flex-1 rounded bg-amber-600 px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-amber-500 disabled:opacity-50"
+                >
+                  Create
+                </button>
+                <button
+                  onclick={() => {
+                    isCreatingFile = false;
+                    newFileName = '';
+                  }}
+                  class="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-400 transition-colors hover:bg-zinc-800"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          {/if}
+
+          <!-- File List -->
+          <div class="flex-1 overflow-y-auto py-1">
+            {#if artifacts.length === 0 && !isCreatingFile}
+              <div class="px-3 py-4 text-center text-xs text-zinc-600">
+                No files yet
+              </div>
+            {:else}
+              {#each artifacts as artifact (artifact.id)}
+                {@const currentVersion = artifact.versions[artifact.currentVersionIndex]}
+                <div class="group relative">
+                  <button
+                    onclick={() => onSelectFile(artifact)}
+                    class="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-zinc-800/50
+                      {isFileOpen(artifact.id) ? 'bg-zinc-800/70 border-l-2 border-amber-500' : ''}"
+                  >
+                    <FileText class="h-4 w-4 flex-shrink-0 text-amber-400" />
+                    <span class="flex-1 truncate text-sm text-zinc-300">
+                      {currentVersion?.title || 'Untitled'}
+                    </span>
+                  </button>
+
+                  <button
+                    onclick={() => (artifactToDelete = artifact.id)}
+                    class="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-zinc-600 opacity-0 transition-all hover:bg-red-500/10 hover:text-red-500 group-hover:opacity-100"
+                  >
+                    <Trash2 class="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              {/each}
+            {/if}
           </div>
         </div>
       {/if}
+    </div>
 
-      <!-- File List -->
-      <div class="flex-1 overflow-y-auto py-1">
-        {#if artifacts.length === 0 && !isCreatingFile}
-          <div class="px-3 py-4 text-center text-xs text-zinc-600">
-            No files yet
-          </div>
-        {:else}
-          {#each artifacts as artifact (artifact.id)}
-            {@const currentVersion = artifact.versions[artifact.currentVersionIndex]}
-            <div class="group relative">
-              <button
-                onclick={() => onSelectFile(artifact)}
-                class="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-zinc-800/50
-                  {isFileOpen(artifact.id) ? 'bg-zinc-800/70 border-l-2 border-amber-500' : ''}"
-              >
-                <ChevronRight
-                  class="h-3 w-3 text-zinc-600 transition-transform
-                    {isFileOpen(artifact.id) ? 'rotate-90' : ''}"
-                />
-                <FileText class="h-4 w-4 flex-shrink-0 text-amber-400" />
-                <span class="flex-1 truncate text-sm text-zinc-300">
-                  {currentVersion?.title || 'Untitled'}
-                </span>
-              </button>
-
-              <button
-                onclick={() => (artifactToDelete = artifact.id)}
-                class="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-zinc-600 opacity-0 transition-all hover:bg-red-500/10 hover:text-red-500 group-hover:opacity-100"
-              >
-                <Trash2 class="h-3.5 w-3.5" />
-              </button>
-            </div>
-          {/each}
-        {/if}
+    <!-- Sources Section -->
+    <div class="flex flex-col border-b border-zinc-800 {sourcesExpanded ? 'flex-1 min-h-0' : 'flex-shrink-0'}">
+      <div class="flex w-full items-center justify-between px-3 py-2">
+        <button 
+          onclick={() => sourcesExpanded = !sourcesExpanded}
+          class="flex items-center gap-2 text-zinc-500 transition-colors hover:text-zinc-300"
+        >
+          <ChevronRight class="h-4 w-4 transition-transform {sourcesExpanded ? 'rotate-90' : ''}" />
+          <span class="text-xs font-semibold uppercase tracking-wider">Sources</span>
+        </button>
       </div>
 
-      <!-- Footer -->
-      <div class="border-t border-zinc-800 px-3 py-2 text-xs text-zinc-600">
-        {threads.length} thread{threads.length !== 1 ? 's' : ''} · {artifacts.length} file{artifacts.length !== 1 ? 's' : ''}
-      </div>
+      {#if sourcesExpanded}
+        <div class="flex-1 overflow-y-auto px-3 py-4 text-center text-xs text-zinc-600">
+          No sources yet
+        </div>
+      {/if}
+    </div>
+
+    <!-- Footer -->
+    <div class="mt-auto border-t border-zinc-800 px-3 py-2 text-xs text-zinc-600">
+      {threads.length} thread{threads.length !== 1 ? 's' : ''} · {artifacts.length} file{artifacts.length !== 1 ? 's' : ''}
     </div>
   </div>
 {/if}

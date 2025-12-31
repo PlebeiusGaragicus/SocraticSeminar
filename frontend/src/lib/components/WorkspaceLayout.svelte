@@ -128,7 +128,7 @@
   });
 </script>
 
-<div class="flex h-[calc(100vh-3.5rem)] w-full bg-zinc-950">
+<div class="flex h-[calc(100vh-3.5rem)] w-full overflow-hidden bg-zinc-950">
   <!-- Sidebar: Threads + Files picker -->
   <div class="flex-shrink-0" style="width: {sidebarCollapsed ? '48px' : sidebarWidth + 'px'}">
     <Sidebar
