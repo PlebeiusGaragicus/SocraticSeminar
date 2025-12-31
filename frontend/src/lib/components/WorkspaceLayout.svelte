@@ -15,7 +15,7 @@
   // Panel state
   let sidebarCollapsed = $state(false);
   let sidebarWidth = $state(240);
-  let chatWidth = $state(400);
+  let chatWidth = $state(0); // Will be set on mount
   let isDraggingSidebar = $state(false);
   let isDraggingChat = $state(false);
 
@@ -85,7 +85,8 @@
   function handleChatMouseMove(e: MouseEvent) {
     if (!isDraggingChat) return;
     const offset = sidebarCollapsed ? 48 : sidebarWidth;
-    const newWidth = Math.max(300, Math.min(600, e.clientX - offset));
+    const availableWidth = window.innerWidth - offset;
+    const newWidth = Math.max(300, Math.min(availableWidth - 100, e.clientX - offset));
     chatWidth = newWidth;
   }
 
@@ -98,8 +99,12 @@
   // Track previous project ID to detect project changes
   let previousProjectId: string | null = null;
 
-  // Load artifacts and threads when project changes
+  // Initial proportions
   onMount(() => {
+    // Set initial chat width to 50% of available space
+    const offset = sidebarCollapsed ? 48 : sidebarWidth;
+    chatWidth = (window.innerWidth - offset) / 2;
+
     if (currentProjectId) {
       artifactStore.loadProjectArtifacts(currentProjectId);
       threadStore.loadProjectThreads(currentProjectId);
