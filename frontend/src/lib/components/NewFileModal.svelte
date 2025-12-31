@@ -5,6 +5,7 @@
   import Upload from '@lucide/svelte/icons/upload';
   import { Button } from './ui/index.js';
   import { artifactStore, projectStore, workspaceStore } from '$lib/stores/index.js';
+  import { FILE_TEMPLATES } from '$lib/templates.js';
   import { cn } from '$lib/utils.js';
   import { onMount } from 'svelte';
 
@@ -19,12 +20,6 @@
   let isDragging = $state(false);
   let inputRef: HTMLInputElement;
 
-  const TEMPLATES = [
-    { title: 'Project Plan', content: '# Project Plan\n\n## Goals\n- \n\n## Timeline\n- ' },
-    { title: 'Research Notes', content: '# Research Notes\n\n## Summary\n\n## Findings\n' },
-    { title: 'Meeting Transcript', content: '# Meeting Notes\n\n**Date:** \n**Participants:** \n\n## Agenda\n\n## Action Items\n' }
-  ];
-
   function handleCreateEmpty() {
     if (!fileName.trim()) return;
     let name = fileName.trim();
@@ -38,7 +33,7 @@
     onClose();
   }
 
-  function handleTemplateSelect(template: typeof TEMPLATES[0]) {
+  function handleTemplateSelect(template: typeof FILE_TEMPLATES[0]) {
     const projectId = projectStore.currentProjectId;
     if (!projectId) return;
 
@@ -124,7 +119,7 @@
       <section>
         <label class="block text-xs font-bold uppercase tracking-wider text-zinc-500 mb-3">Templates</label>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {#each TEMPLATES as template}
+          {#each FILE_TEMPLATES as template}
             <button
               onclick={() => handleTemplateSelect(template)}
               class="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-800/30 p-3 text-left hover:border-zinc-700 hover:bg-zinc-800 transition-all group"

@@ -50,6 +50,7 @@ export const projectStore = {
 
 ### Artifacts
 - `ArtifactPanel` - Document editor with versioning
+- `NewFileModal` - Unified file creation with [Templates](templates.md) and drag-drop support
 
 ## Agent Communication
 
