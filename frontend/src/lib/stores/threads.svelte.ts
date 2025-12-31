@@ -94,9 +94,18 @@ function createThread(projectId: string, title?: string): Thread {
 
 function updateThread(id: string, updates: Partial<Pick<Thread, 'title' | 'description' | 'status' | 'metadata' | 'langGraphThreadId'>>): void {
   let updatedThread: Thread | null = null;
+  let didChange = false;
   
   threads = threads.map((t) => {
     if (t.id === id) {
+      // Check if anything actually changed before updating updatedAt
+      const hasChanges = Object.entries(updates).some(([key, value]) => {
+        return t[key as keyof Thread] !== value;
+      });
+
+      if (!hasChanges) return t;
+
+      didChange = true;
       updatedThread = { ...t, ...updates, updatedAt: Date.now() };
       return updatedThread;
     }
@@ -104,7 +113,7 @@ function updateThread(id: string, updates: Partial<Pick<Thread, 'title' | 'descr
   });
   
   // Persist asynchronously
-  if (updatedThread) {
+  if (didChange && updatedThread) {
     persistThread(updatedThread);
   }
 }
@@ -197,6 +206,14 @@ function clearMessages(threadId: string): void {
  * Used to sync with LangGraph server state after a conversation completes.
  */
 function syncMessages(threadId: string, messages: Omit<Message, 'createdAt'>[]): void {
+  const currentMsgs = messagesByThread[threadId] || [];
+  
+  // Check if messages are actually different (simplified check)
+  const isDifferent = messages.length !== currentMsgs.length || 
+    messages.some((msg, i) => msg.content !== currentMsgs[i]?.content || msg.role !== currentMsgs[i]?.role);
+
+  if (!isDifferent) return;
+
   const now = Date.now();
   const newMessages: Message[] = messages.map((msg, index) => ({
     ...msg,

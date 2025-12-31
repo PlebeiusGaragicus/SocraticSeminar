@@ -7,8 +7,7 @@ file contents when the agent needs them.
 Key Patterns:
 - ALL file operations interrupt (reads AND writes)
 - Client executes tools locally and returns results
-- Write operations require explicit human approval
-- Read operations can be auto-approved by client
+- Operations are typically auto-approved but client can still show UI
 """
 
 from collections.abc import Awaitable, Callable
@@ -50,16 +49,15 @@ stored locally on the user's device (browser) and will be provided when you requ
 ### Available Tools
 
 **Discovery & Reading:**
-- `list_files(tag?, file_type?)` - List files, optionally filtered by tag or type
+- `list_files(file_type?)` - List files, optionally filtered by type
 - `read_file(file_id)` - Read the full content of a file by ID
 - `search_files(query, top_k?)` - Semantic search across file contents
 - `grep_files(pattern, glob_pattern?, case_sensitive?)` - Pattern search in file contents
 - `glob_files(pattern)` - Find files by title/name pattern (e.g., "*.md", "*bitcoin*")
 
-**Writing (requires approval):**
+**Writing:**
 - `write_file(title, content, file_type)` - Create a new file
 - `edit_file(file_id, new_content, description)` - Edit an existing file
-- `tag_file(file_id, tags, replace?)` - Add or update tags on a file
 
 ### Guidelines
 
@@ -67,8 +65,7 @@ stored locally on the user's device (browser) and will be provided when you requ
 2. **Use grep_files** when searching for specific text patterns across files
 3. **Use glob_files** when looking for files by name pattern
 4. **Read files before editing** to understand current content
-5. **Write operations require approval** - explain your changes clearly
-6. **Tag files** to help organize research materials, drafts, and sources"""
+5. **Explain your changes** clearly when writing or editing files"""
 
 
 # =============================================================================
@@ -79,7 +76,6 @@ def _create_list_files_tool() -> StructuredTool:
     """Create the list_files tool."""
     
     def list_files(
-        tag: str | None = None,
         file_type: Literal["artifact", "document", "code"] | None = None,
         runtime: ToolRuntime = None,
     ) -> str:
@@ -89,12 +85,10 @@ def _create_list_files_tool() -> StructuredTool:
         - id: Unique file identifier
         - title: File display name
         - file_type: Type ('artifact', 'document', 'code')
-        - tags: List of tags (if any)
         
         Use this to discover files before reading them.
         
         Args:
-            tag: Optional tag to filter by (e.g., "research", "draft")
             file_type: Optional file type filter
         """
         # This will be handled by the middleware's wrap_tool_call
@@ -107,10 +101,9 @@ def _create_list_files_tool() -> StructuredTool:
         description="""List all files in the current project, optionally filtered.
 
 Args:
-    tag: Optional tag to filter by (e.g., "research", "draft")
     file_type: Optional filter by type ('artifact', 'document', 'code')
 
-Returns JSON array of file metadata with id, title, file_type, and tags.
+Returns JSON array of file metadata with id, title, and file_type.
 Use this first to discover what files are available.""",
     )
 
@@ -185,7 +178,7 @@ def _create_write_file_tool() -> StructuredTool:
     ) -> str:
         """Create a new file in the project.
         
-        This action requires user approval before the file is created.
+        This action executes on the client-side.
         
         Args:
             title: Title/name for the new file
@@ -195,19 +188,19 @@ def _create_write_file_tool() -> StructuredTool:
         Returns:
             Success message with new file ID, or error
         """
-        return "Tool execution pending - awaiting user approval"
+        return "Tool execution pending - awaiting client response"
     
     return StructuredTool.from_function(
         name="write_file",
         func=write_file,
-        description="""Create a new file (requires user approval).
+        description="""Create a new file.
 
 Args:
     title: File name/title
     content: File content
     file_type: 'artifact', 'document', or 'code'
 
-User will see the content and must approve creation.""",
+Returns success message with new file ID.""",
     )
 
 
@@ -222,8 +215,7 @@ def _create_edit_file_tool() -> StructuredTool:
     ) -> str:
         """Edit an existing file's content.
         
-        This action requires user approval. The user will see a diff
-        of the proposed changes before approving.
+        This action executes on the client-side.
         
         Args:
             file_id: ID of the file to edit
@@ -233,19 +225,19 @@ def _create_edit_file_tool() -> StructuredTool:
         Returns:
             Success message, or error if file not found
         """
-        return "Tool execution pending - awaiting user approval"
+        return "Tool execution pending - awaiting client response"
     
     return StructuredTool.from_function(
         name="edit_file",
         func=edit_file,
-        description="""Edit a file's content (requires user approval).
+        description="""Edit a file's content.
 
 Args:
     file_id: File ID from list_files()
     new_content: Complete new content
     description: What changed (optional but helpful)
 
-User will see a diff and must approve changes.""",
+Returns success message.""",
     )
 
 
@@ -318,48 +310,19 @@ Returns array of matching files with id, title, file_type.""",
     )
 
 
-def _create_tag_file_tool() -> StructuredTool:
-    """Create the tag_file tool for adding/updating file tags."""
-    
-    def tag_file(
-        file_id: str,
-        tags: list[str],
-        replace: bool = False,
-        runtime: ToolRuntime = None,
-    ) -> str:
-        """Add or update tags on a file.
-        
-        Tags help organize files and enable filtering with list_files(tag=...).
-        
-        Args:
-            file_id: ID of the file to tag
-            tags: List of tags to add (e.g., ["research", "bitcoin", "draft"])
-            replace: If True, replace all tags; if False, merge with existing
-        
-        Returns:
-            Success message with updated tags
-        """
-        return "Tool execution pending - awaiting client response"
-    
-    return StructuredTool.from_function(
-        name="tag_file",
-        func=tag_file,
-        description="""Add or update tags on a file.
+# Tools that can be auto-approved by the client
+AUTO_APPROVE_TOOLS = {
+    "list_files", 
+    "read_file", 
+    "search_files", 
+    "grep_files", 
+    "glob_files",
+    "write_file",
+    "edit_file",
+}
 
-Args:
-    file_id: File ID from list_files()
-    tags: Tags to add (e.g., ["research", "bitcoin"])
-    replace: Replace all tags (True) or merge (False, default)
-
-Returns success message with updated tags.""",
-    )
-
-
-# Tools that can be auto-approved by the client (read-only)
-AUTO_APPROVE_TOOLS = {"list_files", "read_file", "search_files", "grep_files", "glob_files"}
-
-# Tools that require explicit human approval (write operations)
-REQUIRE_APPROVAL_TOOLS = {"write_file", "edit_file", "tag_file"}
+# Tools that require explicit human approval
+REQUIRE_APPROVAL_TOOLS = set()
 
 
 # =============================================================================
@@ -372,8 +335,6 @@ class ClientToolsMiddleware(AgentMiddleware[ClientToolsState, None]):
     All file tools interrupt execution and wait for the client to:
     1. Execute the operation locally (files in browser storage)
     2. Return the result
-    
-    For write operations, the client also shows approval UI.
     
     Example:
         ```python
@@ -393,7 +354,7 @@ class ClientToolsMiddleware(AgentMiddleware[ClientToolsState, None]):
             "tool_calls": [
                 {"id": "...", "name": "read_file", "args": {"file_id": "..."}}
             ],
-            "auto_approve": true  // false for write operations
+            "auto_approve": true
         }
         ```
         
@@ -420,7 +381,6 @@ class ClientToolsMiddleware(AgentMiddleware[ClientToolsState, None]):
             _create_edit_file_tool(),
             _create_grep_files_tool(),
             _create_glob_files_tool(),
-            _create_tag_file_tool(),
         ]
     
     async def awrap_model_call(

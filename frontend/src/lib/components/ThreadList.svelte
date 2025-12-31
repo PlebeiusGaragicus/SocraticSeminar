@@ -28,7 +28,6 @@
   };
 
   const GROUP_LABELS = {
-    interrupted: "Requiring Attention",
     today: "Today",
     yesterday: "Yesterday",
     week: "This Week",
@@ -64,11 +63,6 @@
     };
 
     filteredThreads.forEach((thread) => {
-      if (thread.status === "interrupted") {
-        groups.interrupted.push(thread);
-        return;
-      }
-
       const date = new Date(thread.updatedAt);
       if (isToday(date)) {
         groups.today.push(thread);
@@ -147,27 +141,32 @@
             <div class="space-y-0.5">
               {#each groupThreads as thread (thread.id)}
                 <div class="group relative px-2">
-                  <button
-                    onclick={() => onThreadSelect(thread.id)}
-                    class={cn(
-                      "flex w-full flex-col gap-1 rounded-lg p-2 text-left transition-all duration-200",
-                      thread.id === currentThreadId
-                        ? "bg-zinc-800/80 ring-1 ring-zinc-700"
-                        : "hover:bg-zinc-800/40"
-                    )}
-                  >
-                    <div class="flex items-center justify-between gap-2">
-                      <div class="flex items-center gap-2 min-w-0">
-                        <span class={cn("size-2 flex-shrink-0 rounded-full", STATUS_COLORS[thread.status])}></span>
-                        <h3 class="truncate text-sm font-medium text-zinc-200">
-                          {thread.title}
-                        </h3>
-                      </div>
-                      <span class="flex-shrink-0 text-[10px] text-zinc-500">
-                        {formatTime(thread.updatedAt)}
-                      </span>
-                    </div>
-                    
+                      <button
+                        onclick={() => onThreadSelect(thread.id)}
+                        class={cn(
+                          "flex w-full flex-col gap-1 rounded-lg p-2 text-left transition-all duration-200",
+                          thread.id === currentThreadId
+                            ? "bg-zinc-800/80 ring-1 ring-zinc-700"
+                            : "hover:bg-zinc-800/40"
+                        )}
+                      >
+                        <div class="flex items-center justify-between gap-2">
+                          <div class="flex items-center gap-2 min-w-0">
+                            <span class={cn("size-2 flex-shrink-0 rounded-full", STATUS_COLORS[thread.status])}></span>
+                            <h3 class="truncate text-sm font-medium text-zinc-200">
+                              {thread.title}
+                            </h3>
+                            {#if thread.status === 'interrupted'}
+                              <span class="flex-shrink-0 rounded-full bg-orange-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-orange-500 ring-1 ring-inset ring-orange-500/20">
+                                Action
+                              </span>
+                            {/if}
+                          </div>
+                          <span class="flex-shrink-0 text-[10px] text-zinc-500">
+                            {formatTime(thread.updatedAt)}
+                          </span>
+                        </div>
+
                     {#if thread.description}
                       <p class="line-clamp-1 text-xs text-zinc-500 pl-4">
                         {thread.description}

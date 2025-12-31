@@ -11,8 +11,7 @@
  * 4. This service executes tools against local IndexedDB
  * 5. Frontend resumes the graph with tool results
  * 
- * Read operations (list_files, read_file, search_files, grep_files, glob_files) are auto-approved.
- * Write operations (write_file, edit_file, tag_file) require human approval first.
+ * Read operations (list_files, read_file, search_files, grep_files, glob_files) and write operations (write_file, edit_file) are typically auto-approved.
  */
 
 import { db } from './indexeddb.js';
@@ -35,7 +34,6 @@ export async function executeToolCall(
           toolCallId, 
           name, 
           projectId,
-          args.tag as string | undefined,
           args.file_type as 'artifact' | 'document' | 'code' | undefined
         );
 
@@ -94,15 +92,6 @@ export async function executeToolCall(
           args.pattern as string
         );
 
-      case 'tag_file':
-        return await executeTagFile(
-          toolCallId,
-          name,
-          args.file_id as string,
-          args.tags as string[],
-          (args.replace as boolean) || false
-        );
-
       default:
         return {
           tool_call_id: toolCallId,
@@ -136,24 +125,15 @@ export async function executeToolCalls(
 }
 
 /**
- * list_files(tag?, file_type?) - List files in the project, optionally filtered
+ * list_files(file_type?) - List files in the project, optionally filtered
  */
 async function executeListFiles(
   toolCallId: string,
   toolName: string,
   projectId: string,
-  filterTag?: string,
   filterFileType?: 'artifact' | 'document' | 'code'
 ): Promise<ToolResult> {
   let artifacts = await db.artifacts.getByProject(projectId);
-  
-  // Filter by tag if provided
-  if (filterTag) {
-    const tagLower = filterTag.toLowerCase();
-    artifacts = artifacts.filter(a => 
-      a.tags?.some(t => t.toLowerCase() === tagLower)
-    );
-  }
   
   // Filter by file_type if provided (for now all are 'artifact')
   // This filter is a placeholder for when we support different types
@@ -162,7 +142,6 @@ async function executeListFiles(
     id: artifact.id,
     title: artifact.versions[artifact.currentVersionIndex]?.title || 'Untitled',
     file_type: 'artifact' as const,
-    tags: artifact.tags || []
   }));
 
   return {
@@ -230,8 +209,6 @@ async function executeReadFile(
 
 /**
  * write_file(title, content, file_type) - Create a new file
- * 
- * This should only be called after human approval.
  */
 async function executeWriteFile(
   toolCallId: string,
@@ -296,7 +273,7 @@ async function executeWriteFile(
 /**
  * edit_file(file_id, new_content, description) - Edit an existing file
  * 
- * Creates a new version of the file. Should only be called after human approval.
+ * Creates a new version of the file.
  */
 async function executeEditFile(
   toolCallId: string,
@@ -577,7 +554,6 @@ async function executeGlobFiles(
         id: artifact.id,
         title: title,
         file_type: 'artifact',
-        tags: artifact.tags || []
       });
     }
   }
@@ -586,82 +562,6 @@ async function executeGlobFiles(
     tool_call_id: toolCallId,
     name: toolName,
     content: JSON.stringify(matchingFiles, null, 2)
-  };
-}
-
-/**
- * tag_file(file_id, tags, replace?) - Add or update tags on a file
- */
-async function executeTagFile(
-  toolCallId: string,
-  toolName: string,
-  fileId: string,
-  tags: string[],
-  replace: boolean = false
-): Promise<ToolResult> {
-  if (!fileId) {
-    return {
-      tool_call_id: toolCallId,
-      name: toolName,
-      content: '',
-      error: 'file_id is required'
-    };
-  }
-
-  if (!tags || !Array.isArray(tags)) {
-    return {
-      tool_call_id: toolCallId,
-      name: toolName,
-      content: '',
-      error: 'tags must be an array of strings'
-    };
-  }
-
-  const artifact = await db.artifacts.get(fileId);
-  
-  if (!artifact) {
-    return {
-      tool_call_id: toolCallId,
-      name: toolName,
-      content: '',
-      error: `File not found: ${fileId}`
-    };
-  }
-
-  // Normalize tags (lowercase, trim, dedupe)
-  const normalizedNewTags = tags.map(t => t.toLowerCase().trim()).filter(t => t.length > 0);
-  
-  let updatedTags: string[];
-  if (replace) {
-    updatedTags = normalizedNewTags;
-  } else {
-    // Merge with existing, avoiding duplicates
-    const existingTags = artifact.tags || [];
-    const combined = new Set([...existingTags.map(t => t.toLowerCase()), ...normalizedNewTags]);
-    updatedTags = Array.from(combined);
-  }
-
-  // Update artifact
-  const updatedArtifact: Artifact = {
-    ...artifact,
-    tags: updatedTags,
-    updatedAt: Date.now()
-  };
-
-  await db.artifacts.save(updatedArtifact);
-
-  const title = artifact.versions[artifact.currentVersionIndex]?.title || 'Untitled';
-  console.log(`[ToolExecutor] Tagged file "${title}": ${updatedTags.join(', ')}`);
-
-  return {
-    tool_call_id: toolCallId,
-    name: toolName,
-    content: JSON.stringify({
-      success: true,
-      message: `Tags updated for "${title}"`,
-      file_id: fileId,
-      tags: updatedTags
-    })
   };
 }
 

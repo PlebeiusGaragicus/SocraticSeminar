@@ -93,7 +93,6 @@ export interface ProjectFile {
   title: string;
   file_type: 'artifact' | 'document' | 'code';
   content?: string;  // Optional: included for file reading via get_file tool
-  tags?: string[];   // Optional: tags for organization and filtering
 }
 
 export interface ArtifactVersion {
@@ -108,7 +107,6 @@ export interface Artifact {
   projectId: string;
   currentVersionIndex: number;
   versions: ArtifactVersion[];
-  tags?: string[];     // Tags for organization and filtering
   createdAt: number;
   updatedAt: number;
 }
@@ -187,11 +185,11 @@ export interface HITLResumeResponse {
   decisions: HITLDecision[];
 }
 
-// Read-only tools that should be auto-approved (client-side execution)
-export const AUTO_APPROVE_TOOLS = ['list_files', 'read_file', 'search_files', 'grep_files', 'glob_files'];
+// Read and write tools that should be auto-approved (client-side execution)
+export const AUTO_APPROVE_TOOLS = ['list_files', 'read_file', 'search_files', 'grep_files', 'glob_files', 'write_file', 'edit_file'];
 
-// Write tools that require human approval
-export const WRITE_TOOLS = ['write_file', 'edit_file', 'tag_file'];
+// Tools that require human approval (currently empty, but reserved for safety-critical tools)
+export const WRITE_TOOLS = [];
 
 // =============================================================================
 // CASHU PAYMENT TYPES

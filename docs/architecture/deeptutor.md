@@ -89,17 +89,14 @@ Files persist within a thread but not across threads.
 
 Provides access to user's project files stored in the browser.
 
-**Read tools (auto-approved):**
-- `list_files(tag?, file_type?)` - List files with optional filters
+**Read & Write tools (auto-approved):**
+- `list_files(file_type?)` - List files with optional filters
 - `read_file(file_id)` - Read file content
 - `search_files(query, top_k?)` - Semantic search
 - `grep_files(pattern, glob_pattern?, case_sensitive?)` - Pattern search
 - `glob_files(pattern)` - Find files by name pattern
-
-**Write tools (require approval):**
 - `write_file(title, content, file_type)` - Create new file
 - `edit_file(file_id, new_content, description)` - Edit file
-- `tag_file(file_id, tags, replace?)` - Add/update tags
 
 ### 6. HumanInTheLoopMiddleware
 

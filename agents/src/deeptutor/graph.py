@@ -7,12 +7,12 @@ Architecture:
 - ClarifyWithHumanMiddleware: Ask user for intent clarification
 - FilesystemMiddleware: Server-side ephemeral storage for agent working memory
 - ClientToolsMiddleware: Client-side file operations via interrupts
-- HumanInTheLoopMiddleware: Approval for write operations
+- HumanInTheLoopMiddleware: Approval for funding requests
 
 The agent operates with:
 1. Two file systems: User's project files (client) and agent working memory (server)
 2. Streaming Cashu payments (deducted per LLM iteration)
-3. Human approval for write operations and funding requests
+3. Human approval for funding requests
 4. Clarification tools when user intent is unclear
 """
 
@@ -134,14 +134,13 @@ You have access to TWO separate file systems:
 
 ### 1. User's Project Files (Client-side)
 These are the user's actual documents stored in their browser. Use these tools:
-- `list_files(tag?, file_type?)` - List user's files, optionally filtered
+- `list_files(file_type?)` - List user's files, optionally filtered
 - `read_file(file_id)` - Read a user file
 - `search_files(query)` - Semantic search across user files
 - `grep_files(pattern)` - Pattern search in file contents
 - `glob_files(pattern)` - Find files by name pattern
-- `write_file(title, content)` - Create new file (requires approval)
-- `edit_file(file_id, new_content)` - Edit file (requires approval)
-- `tag_file(file_id, tags)` - Tag a file (requires approval)
+- `write_file(title, content)` - Create new file
+- `edit_file(file_id, new_content)` - Edit file
 
 ### 2. Your Working Memory (Server-side)
 Ephemeral storage for your notes, analysis, and drafts. Use these tools:
@@ -163,7 +162,6 @@ Use working memory at paths like `/scratch/`, `/summaries/`, `/analysis/` to:
 - When editing user files, explain your changes clearly
 - Use `list_files()` first to discover available files
 - Read files before attempting to edit them
-- Tag user files to help organize research materials
 
 ## Citation Format
 
@@ -223,13 +221,8 @@ def create_deeptutor_agent(
     
     # Build middleware stack
     #
-    # NOTE: ClientToolsMiddleware handles ALL file tool interrupts including approval.
-    # Write operations (write_file, edit_file) have requires_approval=True which the
-    # frontend uses to show approval UI before executing locally.
+    # NOTE: ClientToolsMiddleware handles ALL file tool interrupts.
     # 
-    # DO NOT add write_file/edit_file to HumanInTheLoopMiddleware - it would cause
-    # double interrupts (one for HITL approval, another for client execution).
-    #
     middleware: list[AgentMiddleware] = [
         # 1. Payment middleware - validates token, tracks balance, deducts per iteration
         CashuPaymentMiddleware(cost_per_iteration=cost_per_iteration),
@@ -248,7 +241,6 @@ def create_deeptutor_agent(
         FilesystemMiddleware(backend=StateBackend),
         
         # 5. Client tools - ALL file operations interrupt for client-side execution
-        #    Write tools include requires_approval=True for frontend approval UI
         ClientToolsMiddleware(),
 
         # 6. Thinking - Strategic reflection

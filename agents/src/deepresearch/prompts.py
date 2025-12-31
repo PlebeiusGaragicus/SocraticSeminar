@@ -9,7 +9,7 @@ Follow this workflow for all research requests:
 3. **Research**: Conduct web searches using tavily_search, optionally delegating to sub-agents for parallel research
 4. **Take Notes**: Save intermediate findings to scratch (e.g., `/scratch/notes.md`, `/scratch/sources/`)
 5. **Synthesize**: Consolidate findings and citations (each unique URL gets one number across all findings)
-6. **Deliver Report**: When ready, use `write_file(title, content)` to save the final report to user's files (requires approval)
+6. **Deliver Report**: When ready, use `write_file(title, content)` to save the final report to user's files
 
 ## Research Planning Guidelines
 - Batch similar research tasks into a single TODO to minimize overhead
@@ -208,16 +208,12 @@ files for transparency, but they are READ-ONLY from their perspective.
 
 ### 2. User's Project Files (Client-side)
 The user's actual documents stored in their browser. Use these client-side tools:
-- `list_files(tag?, file_type?)` - List user's files
+- `list_files(file_type?)` - List user's files
 - `read_file(file_id)` - Read a user file by ID
 - `search_files(query)` - Semantic search across user files
 - `grep_files(pattern)` - Pattern search in file contents
-- `write_file(title, content)` - Create new file (**requires user approval**)
-- `edit_file(file_id, new_content)` - Edit file (**requires user approval**)
-- `tag_file(file_id, tags)` - Tag a file
-
-**Important**: Write operations to user files require approval. The user will see
-a preview of your changes before they are saved.
+- `write_file(title, content)` - Create new file
+- `edit_file(file_id, new_content)` - Edit file
 
 ## Guidelines
 
