@@ -343,8 +343,16 @@
                   </button>
 
                   <button
-                    onclick={() => (artifactToDelete = artifact.id)}
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      if (e.shiftKey) {
+                        artifactStore.deleteArtifact(artifact.id);
+                      } else {
+                        artifactToDelete = artifact.id;
+                      }
+                    }}
                     class="absolute right-4 top-1/2 -translate-y-1/2 rounded bg-zinc-900/80 p-1.5 text-zinc-500 opacity-0 backdrop-blur-sm transition-all hover:text-red-500 group-hover:opacity-100"
+                    title="Delete file (Shift + click to skip confirmation)"
                   >
                     <Trash2 class="h-3.5 w-3.5" />
                   </button>
@@ -412,8 +420,16 @@
                 </button>
 
                 <button
-                  onclick={() => (sourceToDelete = source.id)}
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    if (e.shiftKey) {
+                      sourceStore.deleteSource(source.id);
+                    } else {
+                      sourceToDelete = source.id;
+                    }
+                  }}
                   class="absolute right-4 top-1/2 -translate-y-1/2 rounded bg-zinc-900/80 p-1.5 text-zinc-500 opacity-0 backdrop-blur-sm transition-all hover:text-red-500 group-hover:opacity-100"
+                  title="Delete source (Shift + click to skip confirmation)"
                 >
                   <Trash2 class="h-3.5 w-3.5" />
                 </button>
