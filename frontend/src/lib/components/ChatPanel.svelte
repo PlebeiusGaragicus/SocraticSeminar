@@ -21,6 +21,7 @@
   import AgentPicker from './AgentPicker.svelte';
   import ToolCallDisplay from './ToolCallDisplay.svelte';
   import TodoStatusPopover from './TodoStatusPopover.svelte';
+  import Markdown from './Markdown.svelte';
   import { threadStore, agentStore, projectStore } from '$lib/stores/index.js';
   import { cyphertap } from 'cyphertap';
   import type { ToolCallWithStatus, ToolCall, ClarificationResponse, HITLActionRequest, HITLReviewConfig } from '$lib/stores/types.js';
@@ -578,7 +579,11 @@
                 ? 'bg-amber-600 text-white'
                 : 'bg-zinc-800 text-zinc-200'}"
             >
-              <p class="whitespace-pre-wrap text-sm">{message.content}</p>
+              {#if isUser}
+                <p class="whitespace-pre-wrap text-sm">{message.content}</p>
+              {:else}
+                <Markdown content={message.content} />
+              {/if}
             </div>
           </div>
         {/if}
@@ -596,7 +601,7 @@
       {#if showStreamingBubble}
           <div class="flex justify-start">
             <div class="max-w-[85%] rounded-xl bg-zinc-800 px-4 py-2 text-zinc-200">
-              <p class="whitespace-pre-wrap text-sm">{streamingContent}</p>
+              <Markdown content={streamingContent} />
             </div>
           </div>
         {/if}
