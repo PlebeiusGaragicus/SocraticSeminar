@@ -148,7 +148,7 @@
           ? 'Or type your own response...' 
           : 'Select an option above...';
       default:
-        return currentThread ? 'Type your message...' : 'Create a new thread to start chatting...';
+        return 'Type your message...';
     }
   });
 
@@ -164,7 +164,7 @@
       case 'choices':
         return selectedChoices.length > 0 || (clarificationInterrupt?.allow_freeform && messageInput.trim().length > 0);
       default:
-        return messageInput.trim().length > 0 && currentThread !== null;
+        return messageInput.trim().length > 0 && (currentThread !== null || currentProjectId !== null);
     }
   });
 
@@ -547,8 +547,8 @@
       <div class="flex h-full items-center justify-center text-zinc-600">
         <div class="text-center">
           <Bot class="mx-auto h-12 w-12 mb-3 opacity-30" />
-          <p class="text-sm">Select or create a thread to start chatting</p>
-          <p class="text-xs text-zinc-700 mt-1">Use the sidebar on the left</p>
+          <p class="text-sm">Send a message to start a new thread</p>
+          <p class="text-xs text-zinc-700 mt-1">Or select an existing one from the sidebar</p>
         </div>
       </div>
     {:else if isLoadingThreadState}
@@ -748,7 +748,7 @@
           placeholder={inputPlaceholder}
         bind:value={messageInput}
         onkeydown={handleKeydown}
-          disabled={isStreaming || !currentThread || !isWalletReady || backendAvailable === false}
+          disabled={isStreaming || (!currentThread && !currentProjectId) || !isWalletReady || backendAvailable === false}
         rows={2}
           class="flex-1 resize-none bg-zinc-800 border-zinc-700 text-zinc-100 placeholder-zinc-500
             {inputMode === 'hitl' ? 'border-amber-500/30' : ''}

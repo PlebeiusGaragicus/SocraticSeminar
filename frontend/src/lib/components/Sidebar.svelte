@@ -34,8 +34,24 @@
   
   // Section expansion state
   let chatsExpanded = $state(true);
-  let filesExpanded = $state(true);
-  let sourcesExpanded = $state(true);
+  let filesExpanded = $state(false);
+  let sourcesExpanded = $state(false);
+  
+  // Auto-manage expansion state based on content and project selection
+  let lastProjectId = $state<string | null>(null);
+  $effect(() => {
+    if (currentProjectId !== lastProjectId) {
+      // Reset when project changes
+      filesExpanded = false;
+      sourcesExpanded = false;
+      lastProjectId = currentProjectId;
+    }
+
+    // Auto-expand Files if artifacts are loaded
+    if (artifacts.length > 0) {
+      filesExpanded = true;
+    }
+  });
   
   // Delete confirmation state
   let artifactToDelete = $state<string | null>(null);
