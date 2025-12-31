@@ -114,7 +114,19 @@ export interface Artifact {
   viewed?: boolean;
 }
 
-export type TabType = 'artifact' | 'thread';
+export interface Source {
+  id: string;
+  projectId: string;
+  title: string;
+  url: string;
+  content: string; // Markdown conversion
+  metadata?: Record<string, unknown>;
+  createdAt: number;
+  updatedAt: number;
+  viewed?: boolean;
+}
+
+export type TabType = 'artifact' | 'thread' | 'source';
 
 export interface TabItem {
   id: string;

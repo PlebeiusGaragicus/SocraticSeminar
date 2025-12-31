@@ -6,3 +6,4 @@ export { artifactStore } from './artifacts.svelte.js';
 export { workspaceStore } from './workspace.svelte.js';
 export { agentStore } from './agent.svelte.js';
 export { assistantStore } from './assistants.svelte.js';
+export { sourceStore } from './sources.svelte.js';

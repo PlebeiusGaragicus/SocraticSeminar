@@ -1,8 +1,8 @@
 <script lang="ts">
   import Sidebar from './Sidebar.svelte';
   import TabbedPanel from './TabbedPanel.svelte';
-  import { artifactStore, threadStore, projectStore, agentStore, workspaceStore } from '$lib/stores/index.js';
-  import type { Artifact, Thread } from '$lib/stores/types.js';
+  import { artifactStore, threadStore, projectStore, agentStore, workspaceStore, sourceStore } from '$lib/stores/index.js';
+  import type { Artifact, Thread, Source } from '$lib/stores/types.js';
   import { onMount } from 'svelte';
 
   interface Props {
@@ -26,6 +26,10 @@
 
   function handleSelectThread(thread: Thread) {
     workspaceStore.openItem(thread.id, 'thread');
+  }
+
+  function handleSelectSource(source: Source) {
+    workspaceStore.openItem(source.id, 'source');
   }
 
   function handleTabSelect(id: string, column: 'left' | 'right') {
@@ -95,6 +99,7 @@
     if (currentProjectId) {
       artifactStore.loadProjectArtifacts(currentProjectId);
       threadStore.loadProjectThreads(currentProjectId);
+      sourceStore.loadProjectSources(currentProjectId);
       previousProjectId = currentProjectId;
     }
   });
@@ -104,12 +109,14 @@
       if (previousProjectId && previousProjectId !== currentProjectId) {
         artifactStore.clearProjectState();
         threadStore.clearProjectState();
+        sourceStore.clearProjectState();
         workspaceStore.clearProjectState();
         agentStore.clearProjectState();
       }
       
       artifactStore.loadProjectArtifacts(currentProjectId);
       threadStore.loadProjectThreads(currentProjectId);
+      sourceStore.loadProjectSources(currentProjectId);
       previousProjectId = currentProjectId;
     }
   });
@@ -121,6 +128,7 @@
     <Sidebar
       onSelectFile={handleSelectFile}
       onSelectThread={handleSelectThread}
+      onSelectSource={handleSelectSource}
       collapsed={sidebarCollapsed}
       onToggleCollapse={handleToggleSidebar}
     />

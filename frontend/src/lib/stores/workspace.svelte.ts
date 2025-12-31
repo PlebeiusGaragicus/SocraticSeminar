@@ -2,6 +2,7 @@
 import type { TabItem, TabType } from './types.js';
 import { artifactStore } from './artifacts.svelte.js';
 import { threadStore } from './threads.svelte.js';
+import { sourceStore } from './sources.svelte.js';
 import { projectStore } from './projects.svelte.js';
 import { agentStore } from './agent.svelte.js';
 
@@ -52,7 +53,8 @@ function openItem(id: string, type: TabType, targetColumn?: 'left' | 'right') {
   }
 
   if (type === 'artifact') artifactStore.selectArtifact(id);
-  else threadStore.selectThread(id);
+  else if (type === 'thread') threadStore.selectThread(id);
+  else if (type === 'source') sourceStore.selectSource(id);
 }
 
 function createNewFile(column: 'left' | 'right' = 'left') {
@@ -86,11 +88,13 @@ function selectTab(id: string, column: 'left' | 'right') {
     const tab = leftTabs.find(t => t.id === id);
     if (tab?.type === 'artifact') artifactStore.selectArtifact(id);
     else if (tab?.type === 'thread') threadStore.selectThread(id);
+    else if (tab?.type === 'source') sourceStore.selectSource(id);
   } else {
     activeRightTabId = id;
     const tab = rightTabs.find(t => t.id === id);
     if (tab?.type === 'artifact') artifactStore.selectArtifact(id);
     else if (tab?.type === 'thread') threadStore.selectThread(id);
+    else if (tab?.type === 'source') sourceStore.selectSource(id);
   }
 }
 

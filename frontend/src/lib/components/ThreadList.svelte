@@ -1,9 +1,7 @@
 <script lang="ts">
-  import { format, differenceInDays, isYesterday, isToday, isThisWeek } from "date-fns";
-  import MessageCircle from '@lucide/svelte/icons/message-circle';
+  import { format, isYesterday, isToday, isThisWeek } from "date-fns";
   import Trash2 from '@lucide/svelte/icons/trash-2';
-  import ChevronDown from '@lucide/svelte/icons/chevron-down';
-  import { threadStore, agentStore, workspaceStore } from '$lib/stores/index.js';
+  import { workspaceStore } from '$lib/stores/index.js';
   import type { Thread, ThreadStatus } from '$lib/stores/types.js';
   import { cn } from '$lib/utils.js';
 
@@ -14,10 +12,6 @@
   }
 
   let { threads, onThreadSelect, onThreadDelete }: Props = $props();
-
-  type StatusFilter = "all" | ThreadStatus;
-  let statusFilter = $state<StatusFilter>("all");
-  let isFilterOpen = $state(false);
 
   const STATUS_COLORS: Record<ThreadStatus, string> = {
     idle: "bg-green-500",
@@ -41,27 +35,15 @@
     return format(date, "MM/dd");
   }
 
-  const filteredThreads = $derived(
-    statusFilter === "all" 
-      ? threads 
-      : threads.filter(t => t.status === statusFilter)
-  );
-
-  const interruptedCount = $derived(
-    threads.filter(t => t.status === 'interrupted').length
-  );
-
   const groupedThreads = $derived.by(() => {
-    const now = new Date();
     const groups: Record<keyof typeof GROUP_LABELS, Thread[]> = {
-      interrupted: [],
       today: [],
       yesterday: [],
       week: [],
       older: [],
     };
 
-    filteredThreads.forEach((thread) => {
+    threads.forEach((thread) => {
       const date = new Date(thread.updatedAt);
       if (isToday(date)) {
         groups.today.push(thread);
@@ -76,56 +58,12 @@
 
     return groups;
   });
-
-  function handleStatusChange(status: StatusFilter) {
-    statusFilter = status;
-    isFilterOpen = false;
-  }
 </script>
 
 <div class="flex h-full flex-col">
-  <!-- Filter Header -->
-  <div class="flex items-center justify-between border-b border-zinc-800 px-3 py-2">
-    <div class="relative">
-      <button
-        onclick={() => isFilterOpen = !isFilterOpen}
-        class="flex items-center gap-1.5 rounded px-2 py-1 text-xs font-medium text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200"
-      >
-        <span>{statusFilter === 'all' ? 'All Statuses' : statusFilter.charAt(0).toUpperCase() + statusFilter.slice(1)}</span>
-        <ChevronDown class="h-3 w-3" />
-      </button>
-
-      {#if isFilterOpen}
-        <div class="absolute left-0 top-full z-50 mt-1 w-40 rounded-lg border border-zinc-800 bg-zinc-900 p-1 shadow-xl">
-          <button
-            onclick={() => handleStatusChange('all')}
-            class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800"
-          >
-            All Statuses
-          </button>
-          <div class="my-1 border-t border-zinc-800"></div>
-          {#each ['idle', 'busy', 'interrupted', 'error'] as status}
-            <button
-              onclick={() => handleStatusChange(status as ThreadStatus)}
-              class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800"
-            >
-              <span class={cn("size-1.5 rounded-full", STATUS_COLORS[status as ThreadStatus])}></span>
-              <span class="capitalize">{status}</span>
-              {#if status === 'interrupted' && interruptedCount > 0}
-                <span class="ml-auto flex size-4 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white">
-                  {interruptedCount}
-                </span>
-              {/if}
-            </button>
-          {/each}
-        </div>
-      {/if}
-    </div>
-  </div>
-
   <!-- Scrollable List -->
   <div class="flex-1 overflow-y-auto py-2">
-    {#if filteredThreads.length === 0}
+    {#if threads.length === 0}
       <div class="px-3 py-8 text-center text-xs text-zinc-600">
         No threads found
       </div>
@@ -193,15 +131,3 @@
     {/if}
   </div>
 </div>
-
-{#if isFilterOpen}
-  <div 
-    class="fixed inset-0 z-40" 
-    onclick={() => isFilterOpen = false}
-    onkeydown={(e) => e.key === 'Escape' && (isFilterOpen = false)}
-    role="button"
-    tabindex="-1"
-    aria-label="Close filter menu"
-  ></div>
-{/if}
-

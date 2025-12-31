@@ -2,21 +2,25 @@
   import X from '@lucide/svelte/icons/x';
   import ChevronLeft from '@lucide/svelte/icons/chevron-left';
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
+  import Globe from '@lucide/svelte/icons/globe';
   import Plus from '@lucide/svelte/icons/plus';
   import FilePlus from '@lucide/svelte/icons/file-plus';
   import MessageSquarePlus from '@lucide/svelte/icons/message-square-plus';
+  import Globe2 from '@lucide/svelte/icons/globe-2';
   import Search from '@lucide/svelte/icons/search';
   import Command from '@lucide/svelte/icons/command';
+  import ExternalLink from '@lucide/svelte/icons/external-link';
   import PanelRightOpen from '@lucide/svelte/icons/panel-right-open';
   import PanelRightClose from '@lucide/svelte/icons/panel-right-close';
-  import { artifactStore, threadStore, workspaceStore, projectStore } from '$lib/stores/index.js';
-  import type { TabItem, Artifact, Thread } from '$lib/stores/types.js';
+  import { artifactStore, threadStore, workspaceStore, projectStore, sourceStore } from '$lib/stores/index.js';
+  import type { TabItem, Artifact, Thread, Source } from '$lib/stores/types.js';
   import { getFileIcon } from '$lib/icons.js';
   import { cn } from '$lib/utils.js';
   import { onMount, onDestroy } from 'svelte';
   import { browser } from '$app/environment';
   import ChatPanel from './ChatPanel.svelte';
   import NewFileModal from './NewFileModal.svelte';
+  import NewSourcesModal from './NewSourcesModal.svelte';
   import { Button } from './ui/index.js';
   import MessageCircle from '@lucide/svelte/icons/message-circle';
 
@@ -72,6 +76,11 @@
   // Thread specific derivations
   const activeThread = $derived(
     activeTab?.type === 'thread' ? threadStore.threads.find(t => t.id === activeTabId) : null
+  );
+
+  // Source specific derivations
+  const activeSource = $derived(
+    activeTab?.type === 'source' ? sourceStore.sources.find(s => s.id === activeTabId) : null
   );
 
   const STATUS_COLORS = {
@@ -213,17 +222,22 @@
     if (tab.type === 'artifact') {
       const art = artifactStore.artifacts.find(a => a.id === tab.id);
       return art?.versions[art.currentVersionIndex]?.title || 'Untitled';
-    } else {
+    } else if (tab.type === 'thread') {
       const thread = threadStore.threads.find(t => t.id === tab.id);
       return thread?.title || 'Untitled Thread';
+    } else {
+      const source = sourceStore.sources.find(s => s.id === tab.id);
+      return source?.title || 'Untitled Source';
     }
   }
 
   function getTabIcon(tab: TabItem) {
     if (tab.type === 'artifact') {
       return getFileIcon(getTabTitle(tab));
-    } else {
+    } else if (tab.type === 'thread') {
       return MessageCircle;
+    } else {
+      return Globe;
     }
   }
 
@@ -235,8 +249,13 @@
     return threadStore.threads.find(t => t.id === id);
   }
 
+  function getSource(id: string) {
+    return sourceStore.sources.find(s => s.id === id);
+  }
+
   let showNewMenu = $state(false);
   let showNewFileModal = $state(false);
+  let showNewSourcesModal = $state(false);
 
   function handleCreateFile() {
     showNewFileModal = true;
@@ -245,6 +264,11 @@
 
   function handleCreateThread() {
     workspaceStore.createNewThread(column);
+    showNewMenu = false;
+  }
+
+  function handleAddSources() {
+    showNewSourcesModal = true;
     showNewMenu = false;
   }
 
@@ -257,6 +281,7 @@
     
     const projectFiles = artifactStore.getProjectArtifacts(projectId);
     const projectThreads = threadStore.getProjectThreads(projectId);
+    const projectSources = sourceStore.getProjectSources(projectId);
     
     const filteredFiles = projectFiles.filter(f => {
       const title = f.versions[f.currentVersionIndex]?.title?.toLowerCase() || '';
@@ -276,11 +301,20 @@
       title: t.title,
       icon: MessageCircle
     }));
+
+    const filteredSources = projectSources.filter(s => {
+      return s.title.toLowerCase().includes(term) || s.url.toLowerCase().includes(term);
+    }).map(s => ({
+      id: s.id,
+      type: 'source' as const,
+      title: s.title,
+      icon: Globe
+    }));
     
-    return [...filteredFiles, ...filteredThreads];
+    return [...filteredFiles, ...filteredThreads, ...filteredSources];
   });
 
-  function handleOpenItem(id: string, type: 'artifact' | 'thread') {
+  function handleOpenItem(id: string, type: 'artifact' | 'thread' | 'source') {
     workspaceStore.openItem(id, type, column);
     showNewMenu = false;
     isSearching = false;
@@ -318,6 +352,13 @@
         >
           <MessageSquarePlus class="h-4 w-4" />
           New Chat
+        </button>
+        <button
+          onclick={handleAddSources}
+          class="flex w-full items-center gap-2 rounded px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
+        >
+          <Globe2 class="h-4 w-4" />
+          Add Sources
         </button>
         <div class="my-1 border-t border-zinc-800"></div>
         <button
@@ -378,7 +419,8 @@
           {@const Icon = getTabIcon(tab)}
           {@const art = tab.type === 'artifact' ? getArtifact(tab.id) : null}
           {@const thread = tab.type === 'thread' ? getThread(tab.id) : null}
-          {@const isUnviewed = (art && !art.viewed) || (thread && !thread.viewed)}
+          {@const source = tab.type === 'source' ? getSource(tab.id) : null}
+          {@const isUnviewed = (art && !art.viewed) || (thread && !thread.viewed) || (source && !source.viewed)}
           
           <div
             class={cn(
@@ -459,6 +501,32 @@
         <div class="absolute inset-0">
           <ChatPanel threadId={activeTabId} />
         </div>
+      {:else if activeTab?.type === 'source'}
+        <div class="absolute inset-0 flex flex-col bg-zinc-950 overflow-hidden">
+          {#if activeSource}
+            <div class="flex items-center justify-between border-b border-zinc-800 bg-zinc-900/30 px-4 py-2">
+              <div class="flex items-center gap-2 min-w-0">
+                <Globe class="h-4 w-4 text-blue-500" />
+                <span class="text-sm font-medium text-zinc-300 truncate">{activeSource.title}</span>
+              </div>
+              <a 
+                href={activeSource.url} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                class="flex items-center gap-1.5 rounded-md bg-zinc-800 px-2.5 py-1 text-xs font-medium text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200 transition-colors"
+              >
+                <span>View Original</span>
+                <ExternalLink class="h-3 w-3" />
+              </a>
+            </div>
+            <div class="flex-1 overflow-y-auto p-8 prose prose-invert max-w-none prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-800">
+              <!-- Simple markdown-like rendering for source content -->
+              <div class="text-zinc-300 leading-relaxed whitespace-pre-wrap font-sans">
+                {activeSource.content}
+              </div>
+            </div>
+          {/if}
+        </div>
       {:else if activeTab?.type === 'artifact'}
         {#if !isEditorReady}
           <div class="absolute inset-0 flex items-center justify-center text-zinc-500">
@@ -488,6 +556,10 @@
 
 {#if showNewFileModal}
   <NewFileModal {column} onClose={() => (showNewFileModal = false)} />
+{/if}
+
+{#if showNewSourcesModal}
+  <NewSourcesModal {column} onClose={() => (showNewSourcesModal = false)} />
 {/if}
 
 <style>

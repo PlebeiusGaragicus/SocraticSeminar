@@ -2,10 +2,10 @@
 // Provides persistence for projects, artifacts, threads, and messages
 
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import type { Project, Artifact, Thread, Message } from '../stores/types.js';
+import type { Project, Artifact, Thread, Message, Source } from '../stores/types.js';
 
 const DB_NAME = 'socratic-seminar';
-const DB_VERSION = 2; // Bumped for threads/messages
+const DB_VERSION = 3; // Bumped for sources
 
 interface SocraticDB extends DBSchema {
   projects: {
@@ -16,6 +16,11 @@ interface SocraticDB extends DBSchema {
   artifacts: {
     key: string;
     value: Artifact;
+    indexes: { 'by-project': string; 'by-updated': number };
+  };
+  sources: {
+    key: string;
+    value: Source;
     indexes: { 'by-project': string; 'by-updated': number };
   };
   threads: {
@@ -50,14 +55,21 @@ function getDB(): Promise<IDBPDatabase<SocraticDB>> {
           artifactStore.createIndex('by-updated', 'updatedAt');
         }
 
-        // Threads store (added in version 2)
+        // Sources store (added in version 3)
+        if (!db.objectStoreNames.contains('sources')) {
+          const sourceStore = db.createObjectStore('sources', { keyPath: 'id' });
+          sourceStore.createIndex('by-project', 'projectId');
+          sourceStore.createIndex('by-updated', 'updatedAt');
+        }
+
+        // Threads store
         if (!db.objectStoreNames.contains('threads')) {
           const threadStore = db.createObjectStore('threads', { keyPath: 'id' });
           threadStore.createIndex('by-project', 'projectId');
           threadStore.createIndex('by-updated', 'updatedAt');
         }
 
-        // Messages store (added in version 2)
+        // Messages store
         if (!db.objectStoreNames.contains('messages')) {
           const messageStore = db.createObjectStore('messages', { keyPath: 'id' });
           messageStore.createIndex('by-thread', 'threadId');
@@ -147,6 +159,27 @@ export async function saveArtifact(artifact: Artifact): Promise<void> {
 export async function deleteArtifact(id: string): Promise<void> {
   const db = await getDB();
   await db.delete('artifacts', id);
+}
+
+// Source operations
+export async function getProjectSources(projectId: string): Promise<Source[]> {
+  const db = await getDB();
+  return db.getAllFromIndex('sources', 'by-project', projectId);
+}
+
+export async function getSource(id: string): Promise<Source | undefined> {
+  const db = await getDB();
+  return db.get('sources', id);
+}
+
+export async function saveSource(source: Source): Promise<void> {
+  const db = await getDB();
+  await db.put('sources', source);
+}
+
+export async function deleteSource(id: string): Promise<void> {
+  const db = await getDB();
+  await db.delete('sources', id);
 }
 
 // Thread operations
@@ -289,6 +322,12 @@ export const db = {
     save: saveArtifact,
     delete: deleteArtifact,
     saveMany: saveArtifacts
+  },
+  sources: {
+    getByProject: getProjectSources,
+    get: getSource,
+    save: saveSource,
+    delete: deleteSource
   },
   threads: {
     getByProject: getProjectThreads,
