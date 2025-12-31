@@ -18,6 +18,10 @@ def think_tool(reflection: str) -> str:
     Use this tool to create a deliberate pause in your workflow for quality decision-making.
     Analyze your current findings, assess gaps, and plan next steps systematically.
 
+    IMPORTANT:
+     - Do not provide chat dialogue when calling this tool.
+     - Do not provide any other text than the reflection.
+
     Reflection should address:
     1. Analysis of current findings - What concrete information have I gathered?
     2. Gap assessment - What crucial information is still missing?
@@ -49,7 +53,7 @@ class ThinkingMiddleware(AgentMiddleware[AgentState, None]):
     ) -> ModelResponse:
         """Add thinking tool instructions to system prompt."""
         thinking_instructions = "## Thinking Tool\n\nUse the `think_tool` after significant steps to analyze your progress and plan next moves. This helps ensure high quality and systematic progress."
-        
+
         new_system_prompt = (
             request.system_prompt + "\n\n" + thinking_instructions
             if request.system_prompt

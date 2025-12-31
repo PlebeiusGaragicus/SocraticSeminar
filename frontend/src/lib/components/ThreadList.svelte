@@ -3,18 +3,17 @@
   import MessageCircle from '@lucide/svelte/icons/message-circle';
   import Trash2 from '@lucide/svelte/icons/trash-2';
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
-  import { threadStore, agentStore } from '$lib/stores/index.js';
+  import { threadStore, agentStore, workspaceStore } from '$lib/stores/index.js';
   import type { Thread, ThreadStatus } from '$lib/stores/types.js';
   import { cn } from '$lib/utils.js';
 
   interface Props {
     threads: Thread[];
-    currentThreadId: string | null;
     onThreadSelect: (threadId: string) => void;
-    onThreadDelete: (threadId: string) => void;
+    onThreadDelete: (threadId: string, immediate?: boolean) => void;
   }
 
-  let { threads, currentThreadId, onThreadSelect, onThreadDelete }: Props = $props();
+  let { threads, onThreadSelect, onThreadDelete }: Props = $props();
 
   type StatusFilter = "all" | ThreadStatus;
   let statusFilter = $state<StatusFilter>("all");
@@ -140,12 +139,13 @@
             </h4>
             <div class="space-y-0.5">
               {#each groupThreads as thread (thread.id)}
-                <div class="group relative px-2">
+                  {@const isOpen = workspaceStore.leftTabs.some(t => t.id === thread.id) || workspaceStore.rightTabs.some(t => t.id === thread.id)}
+                  <div class="group relative px-2">
                       <button
                         onclick={() => onThreadSelect(thread.id)}
                         class={cn(
                           "flex w-full flex-col gap-1 rounded-lg p-2 text-left transition-all duration-200",
-                          thread.id === currentThreadId
+                          isOpen
                             ? "bg-zinc-800/80 ring-1 ring-zinc-700"
                             : "hover:bg-zinc-800/40"
                         )}
@@ -177,10 +177,10 @@
                   <button
                     onclick={(e) => {
                       e.stopPropagation();
-                      onThreadDelete(thread.id);
+                      onThreadDelete(thread.id, e.shiftKey);
                     }}
                     class="absolute right-4 top-1/2 -translate-y-1/2 rounded bg-zinc-900/80 p-1.5 text-zinc-500 opacity-0 backdrop-blur-sm transition-all hover:text-red-500 group-hover:opacity-100"
-                    title="Delete thread"
+                    title="Delete thread (Shift + click to skip confirmation)"
                   >
                     <Trash2 class="h-3.5 w-3.5" />
                   </button>

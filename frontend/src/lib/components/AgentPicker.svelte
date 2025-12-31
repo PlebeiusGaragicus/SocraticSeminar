@@ -4,18 +4,34 @@
   import Loader2 from '@lucide/svelte/icons/loader-2';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import AlertCircle from '@lucide/svelte/icons/alert-circle';
-  import { assistantStore } from '$lib/stores/assistants.svelte.js';
+  import { assistantStore, threadStore } from '$lib/stores/index.js';
   import { onMount } from 'svelte';
+
+  interface Props {
+    threadId?: string | null;
+  }
+
+  let { threadId = null }: Props = $props();
 
   let isOpen = $state(false);
   let dropdownRef: HTMLDivElement;
 
+  const currentThread = $derived(
+    threadId ? threadStore.threads.find(t => t.id === threadId) : null
+  );
+
+  const selectedAssistantId = $derived(
+    currentThread?.assistantId || assistantStore.selectedAssistantId
+  );
+
   const assistants = $derived(assistantStore.assistants);
-  const selectedAssistant = $derived(assistantStore.selectedAssistant);
+  const selectedAssistant = $derived(
+    assistants.find(a => a.assistant_id === selectedAssistantId) || assistantStore.selectedAssistant
+  );
   const isLoading = $derived(assistantStore.isLoading);
   const hasError = $derived(!!assistantStore.error);
 
-  function getAssistantName(assistant: typeof selectedAssistant): string {
+  function getAssistantName(assistant: any): string {
     if (!assistant) {
       return isLoading ? 'Loading...' : 'Select Agent';
     }
@@ -23,14 +39,18 @@
     return (metadata?.name as string) || assistant.name || assistant.assistant_id.slice(0, 8);
   }
 
-  function getAssistantDescription(assistant: typeof selectedAssistant): string {
+  function getAssistantDescription(assistant: any): string {
     if (!assistant) return '';
     const metadata = assistant.metadata as Record<string, unknown> | undefined;
     return (metadata?.description as string) || '';
   }
 
-  function handleSelect(assistantId: string) {
-    assistantStore.selectAssistant(assistantId);
+  function handleSelect(id: string) {
+    if (threadId) {
+      threadStore.updateThread(threadId, { assistantId: id });
+    } else {
+      assistantStore.selectAssistant(id);
+    }
     isOpen = false;
   }
 
@@ -115,7 +135,7 @@
           </div>
         {:else}
           {#each assistants as assistant (assistant.assistant_id)}
-            {@const isSelected = assistant.assistant_id === assistantStore.selectedAssistantId}
+            {@const isSelected = assistant.assistant_id === selectedAssistantId}
             <button
               onclick={() => handleSelect(assistant.assistant_id)}
               class="flex w-full items-start gap-3 px-3 py-2 text-left transition-colors hover:bg-zinc-700/50

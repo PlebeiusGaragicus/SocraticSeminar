@@ -114,7 +114,7 @@
           class="flex items-center gap-2 px-1 py-1.5 text-sm text-zinc-400 font-medium hover:text-zinc-300 transition-colors group"
         >
           <Brain class="h-4 w-4 text-purple-500/50 group-hover:text-purple-400/70" />
-          <span>{toolCall.status === 'completed' ? 'Reflected on progress' : 'Thinking...'}</span>
+          <span>{toolCall.status === 'completed' ? 'Thoughts' : 'Thinking...'}</span>
           {#if toolCall.status === 'executing'}
             <Loader2 class="h-3.5 w-3.5 animate-spin text-purple-500/50" />
           {/if}

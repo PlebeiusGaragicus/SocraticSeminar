@@ -29,12 +29,12 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Checkpointer
 
 from deepagents.middleware.subagents import SubAgentMiddleware
+from .behaviour import BehaviouralMiddleware
 
 from src.middleware import (
     CashuPaymentMiddleware, 
     ClarifyWithHumanMiddleware,
     ClientToolsMiddleware,
-    # ScratchFilesMiddleware,
     WebsearchMiddleware,
     ThinkingMiddleware,
     ToolValidationMiddleware,
@@ -186,12 +186,14 @@ def create_deepresearch_agent(
     # 2. Tool Validation - catch and correct malformed tool calls immediately
     middleware.append(ToolValidationMiddleware())
     
+    # 2. Behavioural - control the agent's character and personality
+    middleware.append(BehaviouralMiddleware())
+    
     # 3. Todo list - task tracking for complex multi-step research
     middleware.append(TodoListMiddleware())
     
     # 3. Clarification tools - ask user for intent clarification
     middleware.append(ClarifyWithHumanMiddleware())
-    
 
     # 5. Client tools - ALL client file operations interrupt for client-side execution
     #    Write tools include requires_approval=True for frontend approval UI

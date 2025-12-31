@@ -192,6 +192,13 @@ function updateThreadStatus(localThreadId: string) {
 const currentLocalThreadId = $derived(threadStore.currentThreadId);
 const currentState = $derived(currentLocalThreadId ? getThreadState(currentLocalThreadId) : null);
 
+/**
+ * Get the run state for a specific thread.
+ */
+function getRunState(threadId: string): ThreadRunState {
+  return getThreadState(threadId);
+}
+
 // =============================================================================
 // HELPERS
 // =============================================================================
@@ -223,8 +230,8 @@ async function sendMessage(
 ): Promise<{ langGraphThreadId: string }> {
   const state = getThreadState(localThreadId);
   
-  const assistantId = assistantStore.selectedAssistantId || 'seminar_agent';
   const thread = threadStore.threads.find(t => t.id === localThreadId);
+  const assistantId = thread?.assistantId || assistantStore.selectedAssistantId || 'seminar_agent';
   const projectId = thread?.projectId || '';
   
   if (langGraphThreadId !== state.langGraphThreadId) {
@@ -443,8 +450,8 @@ async function sendMessage(
 // HUMAN-IN-THE-LOOP RESPONSE
 // =============================================================================
 
-async function resumeWithDecisions(decisions: HITLDecision[]): Promise<void> {
-  const localThreadId = currentLocalThreadId;
+async function resumeWithDecisions(decisions: HITLDecision[], threadId?: string): Promise<void> {
+  const localThreadId = threadId || currentLocalThreadId;
   if (!localThreadId) return;
   
   const state = getThreadState(localThreadId);
@@ -453,7 +460,8 @@ async function resumeWithDecisions(decisions: HITLDecision[]): Promise<void> {
     return;
   }
   
-  const assistantId = assistantStore.selectedAssistantId || 'deeptutor';
+  const thread = threadStore.threads.find(t => t.id === localThreadId);
+  const assistantId = thread?.assistantId || assistantStore.selectedAssistantId || 'seminar_agent';
   const interruptId = state.hitlInterruptId;
   
   state.hitlInterrupt = null;
@@ -534,20 +542,26 @@ async function resumeWithDecisions(decisions: HITLDecision[]): Promise<void> {
   }
 }
 
-async function approveAllActions(): Promise<void> {
-  if (!currentState?.hitlInterrupt) return;
-  const decisions: HITLDecision[] = currentState.hitlInterrupt.action_requests.map(() => ({
+async function approveAllActions(threadId?: string): Promise<void> {
+  const localThreadId = threadId || currentLocalThreadId;
+  if (!localThreadId) return;
+  const state = getThreadState(localThreadId);
+  if (!state.hitlInterrupt) return;
+  const decisions: HITLDecision[] = state.hitlInterrupt.action_requests.map(() => ({
     type: 'approve' as const
   }));
-  await resumeWithDecisions(decisions);
+  await resumeWithDecisions(decisions, localThreadId);
 }
 
-async function rejectAllActions(): Promise<void> {
-  if (!currentState?.hitlInterrupt) return;
-  const decisions: HITLDecision[] = currentState.hitlInterrupt.action_requests.map(() => ({
+async function rejectAllActions(threadId?: string): Promise<void> {
+  const localThreadId = threadId || currentLocalThreadId;
+  if (!localThreadId) return;
+  const state = getThreadState(localThreadId);
+  if (!state.hitlInterrupt) return;
+  const decisions: HITLDecision[] = state.hitlInterrupt.action_requests.map(() => ({
     type: 'reject' as const
   }));
-  await resumeWithDecisions(decisions);
+  await resumeWithDecisions(decisions, localThreadId);
 }
 
 function dismissHITLInterrupt(): void {
@@ -759,8 +773,8 @@ async function handleClientToolInterrupt(
   }
 }
 
-async function executeApprovedWriteTools(): Promise<void> {
-  const localThreadId = currentLocalThreadId;
+async function executeApprovedWriteTools(threadId?: string): Promise<void> {
+  const localThreadId = threadId || currentLocalThreadId;
   if (!localThreadId) return;
   const state = getThreadState(localThreadId);
 
@@ -777,7 +791,8 @@ async function executeApprovedWriteTools(): Promise<void> {
   }));
   
   const results = await executeToolCalls(toolCalls, projectId);
-  const assistantId = assistantStore.selectedAssistantId || 'seminar_agent';
+  const thread = threadStore.threads.find(t => t.id === localThreadId);
+  const assistantId = thread?.assistantId || assistantStore.selectedAssistantId || 'seminar_agent';
   const interruptId = state.hitlInterruptId;
   
   state.clientToolInterrupt = null;
@@ -840,8 +855,8 @@ async function executeApprovedWriteTools(): Promise<void> {
   );
 }
 
-async function rejectClientToolInterrupt(): Promise<void> {
-  const localThreadId = currentLocalThreadId;
+async function rejectClientToolInterrupt(threadId?: string): Promise<void> {
+  const localThreadId = threadId || currentLocalThreadId;
   if (!localThreadId) return;
   const state = getThreadState(localThreadId);
 
@@ -851,7 +866,8 @@ async function rejectClientToolInterrupt(): Promise<void> {
   }
   
   const toolCalls = state.clientToolInterrupt.tool_calls;
-  const assistantId = assistantStore.selectedAssistantId || 'seminar_agent';
+  const thread = threadStore.threads.find(t => t.id === localThreadId);
+  const assistantId = thread?.assistantId || assistantStore.selectedAssistantId || 'seminar_agent';
   const interruptId = state.hitlInterruptId;
   
   state.clientToolInterrupt = null;
@@ -932,8 +948,8 @@ async function rejectClientToolInterrupt(): Promise<void> {
 // CLARIFICATION RESPONSE
 // =============================================================================
 
-async function resumeWithClarificationResponse(response: ClarificationResponse): Promise<void> {
-  const localThreadId = currentLocalThreadId;
+async function resumeWithClarificationResponse(response: ClarificationResponse, threadId?: string): Promise<void> {
+  const localThreadId = threadId || currentLocalThreadId;
   if (!localThreadId) return;
   const state = getThreadState(localThreadId);
 
@@ -943,7 +959,8 @@ async function resumeWithClarificationResponse(response: ClarificationResponse):
   }
   
   const interrupt = state.clarificationInterrupt;
-  const assistantId = assistantStore.selectedAssistantId || 'seminar_agent';
+  const thread = threadStore.threads.find(t => t.id === localThreadId);
+  const assistantId = thread?.assistantId || assistantStore.selectedAssistantId || 'seminar_agent';
   const interruptId = state.hitlInterruptId;
   
   state.clarificationInterrupt = null;
@@ -1034,8 +1051,8 @@ async function resumeWithClarificationResponse(response: ClarificationResponse):
 // STREAM CONTROL
 // =============================================================================
 
-async function stopStreaming(): Promise<void> {
-  const localThreadId = currentLocalThreadId;
+async function stopStreaming(threadId?: string): Promise<void> {
+  const localThreadId = threadId || currentLocalThreadId;
   if (!localThreadId) return;
   const state = getThreadState(localThreadId);
   
@@ -1181,13 +1198,14 @@ async function loadThreadState(
 // =============================================================================
 
 export const agentStore = {
-  // Reactive getters
+  // Reactive getters (referencing current thread in threadStore)
   get streamingContent() { return currentState?.streamingContent || ''; },
   get isStreaming() { return currentState?.isStreaming || false; },
   get isInterrupted() { return currentState?.isInterrupted || false; },
   get pendingToolCalls() { return currentState?.pendingToolCalls || []; },
   get error() { return currentState?.error || null; },
   get threadId() { return currentState?.langGraphThreadId || null; },
+  get localThreadId() { return currentLocalThreadId; },
   get langGraphMessages() { return currentState?.langGraphMessages || []; },
   
   // Human-in-the-loop getters
@@ -1202,6 +1220,9 @@ export const agentStore = {
   
   // Clarification getter
   get clarificationInterrupt() { return currentState?.clarificationInterrupt || null; },
+  
+  // Get reactive state for any thread
+  getRunState,
   
   // Todos from TodoListMiddleware
   get todos() { return currentState?.todos || []; },

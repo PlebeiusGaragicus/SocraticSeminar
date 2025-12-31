@@ -87,3 +87,9 @@ cd agents
 source ../venv_agents/bin/activate
 langgraph dev --no-browser
 ```
+
+---
+
+```sh
+./fetch_trace.sh --latest | jq '.runs[-1].inputs.messages' > ./traces/messages.json
+```

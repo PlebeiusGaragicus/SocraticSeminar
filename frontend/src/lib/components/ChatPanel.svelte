@@ -17,6 +17,7 @@
   import ChevronUp from '@lucide/svelte/icons/chevron-up';
   import Maximize2 from '@lucide/svelte/icons/maximize-2';
   import Square from '@lucide/svelte/icons/square';
+  import ArrowUp from '@lucide/svelte/icons/arrow-up';
   import { Button, Textarea } from './ui/index.js';
   import AgentPicker from './AgentPicker.svelte';
   import ToolCallDisplay from './ToolCallDisplay.svelte';
@@ -27,7 +28,7 @@
   import type { ToolCallWithStatus, ToolCall, ClarificationResponse, HITLActionRequest, HITLReviewConfig } from '$lib/stores/types.js';
   import { tick, onMount } from 'svelte';
   import { checkHealth, type Message as LangGraphMessage } from '$lib/services/langgraph.js';
-  import { extractStringFromMessageContent } from '$lib/utils.js';
+  import { extractStringFromMessageContent, cn } from '$lib/utils.js';
 
   // =============================================================================
   // TYPES
@@ -42,6 +43,12 @@
   }
 
   type InputMode = 'normal' | 'hitl' | 'clarification' | 'choices';
+
+  interface Props {
+    threadId?: string | null;
+  }
+
+  let { threadId = null }: Props = $props();
 
   // =============================================================================
   // LOCAL STATE
@@ -77,22 +84,28 @@
   // =============================================================================
 
   // Core store derivations
-  const currentThread = $derived(threadStore.currentThread);
+  const effectiveThreadId = $derived(threadId ?? threadStore.currentThreadId);
+  const currentThread = $derived(
+    effectiveThreadId ? threadStore.threads.find(t => t.id === effectiveThreadId) : null
+  );
   const currentProjectId = $derived(projectStore.currentProjectId);
   const isWalletReady = $derived(cyphertap.isReady);
-  const persistedMessages = $derived(threadStore.currentMessages);
+  const persistedMessages = $derived(
+    effectiveThreadId ? threadStore.getMessages(effectiveThreadId) : []
+  );
   
-  // Agent store derivations
-  const isStreaming = $derived(agentStore.isStreaming);
-  const isInterrupted = $derived(agentStore.isInterrupted);
-  const streamingContent = $derived(agentStore.streamingContent);
-  const awaitingHumanResponse = $derived(agentStore.awaitingHumanResponse);
-  const langGraphMessages = $derived(agentStore.langGraphMessages);
+  // Agent store derivations - now thread-specific for side-by-side support
+  const runState = $derived(effectiveThreadId ? agentStore.getRunState(effectiveThreadId) : null);
+  const isStreaming = $derived(runState?.isStreaming || false);
+  const isInterrupted = $derived(runState?.isInterrupted || false);
+  const streamingContent = $derived(runState?.streamingContent || '');
+  const awaitingHumanResponse = $derived(runState?.awaitingHumanResponse || false);
+  const langGraphMessages = $derived(runState?.langGraphMessages || []);
   
   // Interrupt state
-  const hitlInterrupt = $derived(agentStore.hitlInterrupt);
-  const clientToolInterrupt = $derived(agentStore.clientToolInterrupt);
-  const clarificationInterrupt = $derived(agentStore.clarificationInterrupt);
+  const hitlInterrupt = $derived(runState?.hitlInterrupt || null);
+  const clientToolInterrupt = $derived(runState?.clientToolInterrupt || null);
+  const clarificationInterrupt = $derived(runState?.clarificationInterrupt || null);
 
   // =============================================================================
   // INPUT MODE LOGIC - Unified input area adapts to current context
@@ -144,11 +157,9 @@
       case 'clarification':
         return 'Type your response...';
       case 'choices':
-        return clarificationInterrupt?.allow_freeform 
-          ? 'Or type your own response...' 
-          : 'Select an option above...';
+        return 'Select an option above or type your own response...';
       default:
-        return 'Type your message...';
+        return 'What do you want to know?';
     }
   });
 
@@ -162,7 +173,7 @@
       case 'clarification':
         return messageInput.trim().length > 0;
       case 'choices':
-        return selectedChoices.length > 0 || (clarificationInterrupt?.allow_freeform && messageInput.trim().length > 0);
+        return selectedChoices.length > 0 || messageInput.trim().length > 0;
       default:
         return messageInput.trim().length > 0 && (currentThread !== null || currentProjectId !== null);
     }
@@ -207,7 +218,7 @@
         const msgWithKwargs = message as { additional_kwargs?: { tool_calls?: unknown[] }; tool_calls?: unknown[]; content?: unknown };
         
         if (msgWithKwargs.additional_kwargs?.tool_calls && Array.isArray(msgWithKwargs.additional_kwargs.tool_calls)) {
-          toolCallsInMessage.push(...msgWithKwargs.additional_kwargs.tool_calls);
+          toolCallsInMessage.push(...(msgWithKwargs.additional_kwargs.tool_calls as any[]));
         } else if (msgWithKwargs.tool_calls && Array.isArray(msgWithKwargs.tool_calls)) {
           toolCallsInMessage.push(
             ...(msgWithKwargs.tool_calls as Array<{ name?: string }>).filter(tc => tc.name !== '')
@@ -418,7 +429,11 @@
         selectedChoices = [...selectedChoices, optionId];
       }
     } else {
-      selectedChoices = [optionId];
+      if (selectedChoices.includes(optionId)) {
+        selectedChoices = [];
+      } else {
+        selectedChoices = [optionId];
+      }
     }
   }
 
@@ -428,29 +443,29 @@
     const message = messageInput.trim();
     messageInput = '';
 
-    let localThreadId = threadStore.currentThreadId;
-    if (!localThreadId && currentProjectId) {
+    let targetThreadId = effectiveThreadId;
+    if (!targetThreadId && currentProjectId) {
       // Use first 25 chars of message as initial thread title
       const initialTitle = message.length > 25 ? message.slice(0, 25) + '...' : message;
       const thread = threadStore.createThread(currentProjectId, initialTitle);
-      localThreadId = thread.id;
+      targetThreadId = thread.id;
     }
 
-    if (!localThreadId) return;
+    if (!targetThreadId) return;
 
-    const thread = threadStore.threads.find(t => t.id === localThreadId);
+    const thread = threadStore.threads.find(t => t.id === targetThreadId);
     const langGraphThreadId = thread?.langGraphThreadId ?? null;
 
     // Update thread title if it's a generic title and this is effectively the first real message
-    if (currentThread?.title === 'New Chat' || currentThread?.title === 'New Thread') {
+    if (thread?.title === 'New Chat' || thread?.title === 'New Thread') {
       const titlePreview = message.length > 25 ? message.slice(0, 25) + '...' : message;
-      threadStore.updateThread(localThreadId, { title: titlePreview });
+      threadStore.updateThread(targetThreadId, { title: titlePreview });
     }
 
     try {
-      const result = await agentStore.sendMessage(message, langGraphThreadId, localThreadId);
+      const result = await agentStore.sendMessage(message, langGraphThreadId, targetThreadId);
       if (!langGraphThreadId && result.langGraphThreadId) {
-        threadStore.updateThread(localThreadId, { langGraphThreadId: result.langGraphThreadId });
+        threadStore.updateThread(targetThreadId, { langGraphThreadId: result.langGraphThreadId });
       }
     } catch (error) {
       console.error('Failed to send message:', error);
@@ -458,19 +473,19 @@
   }
 
   async function handleClarificationSubmit() {
-    if (!clarificationInterrupt) return;
+    if (!clarificationInterrupt || !effectiveThreadId) return;
     isSubmitting = true;
 
     try {
       if (clarificationInterrupt.tool === 'ask_user') {
         const response: ClarificationResponse = { response: messageInput.trim() };
-        await agentStore.resumeWithClarificationResponse(response);
+        await agentStore.resumeWithClarificationResponse(response, effectiveThreadId);
       } else {
         const response: ClarificationResponse = {
           selected: selectedChoices.length > 0 ? selectedChoices : undefined,
           freeform: messageInput.trim() || undefined
         };
-        await agentStore.resumeWithClarificationResponse(response);
+        await agentStore.resumeWithClarificationResponse(response, effectiveThreadId);
       }
       messageInput = '';
       selectedChoices = [];
@@ -480,13 +495,14 @@
   }
 
   async function handleApprove() {
+    if (!effectiveThreadId) return;
     isSubmitting = true;
     showDetailsModal = false;
     try {
       if (isClientTool) {
-        await agentStore.executeApprovedWriteTools();
+        await agentStore.executeApprovedWriteTools(effectiveThreadId);
       } else {
-        await agentStore.approveAllActions();
+        await agentStore.approveAllActions(effectiveThreadId);
       }
       messageInput = '';
     } finally {
@@ -495,13 +511,14 @@
   }
 
   async function handleReject() {
+    if (!effectiveThreadId) return;
     isSubmitting = true;
     showDetailsModal = false;
     try {
       if (isClientTool) {
-        await agentStore.rejectClientToolInterrupt();
+        await agentStore.rejectClientToolInterrupt(effectiveThreadId);
       } else {
-        await agentStore.rejectAllActions();
+        await agentStore.rejectAllActions(effectiveThreadId);
       }
       messageInput = '';
     } finally {
@@ -529,12 +546,22 @@
         handleSendMessage();
     }
   }
+  function handleContainerClick() {
+    if (effectiveThreadId && threadStore.currentThreadId !== effectiveThreadId) {
+      threadStore.selectThread(effectiveThreadId);
+    }
+  }
 </script>
 
-<div class="flex h-full flex-col bg-zinc-900/30">
+<div 
+  class="flex h-full flex-col bg-zinc-900/30"
+  onclick={handleContainerClick}
+  onkeydown={handleContainerClick}
+  role="presentation"
+>
   <!-- Header with Agent Picker and Todo Status -->
   <div class="flex items-center justify-between border-b border-zinc-800 px-4 py-2">
-    <AgentPicker />
+    <AgentPicker threadId={effectiveThreadId} />
     <TodoStatusPopover />
   </div>
 
@@ -617,198 +644,213 @@
   </div>
 
   <!-- Unified Input Area -->
-  <div class="border-t border-zinc-800">
-    <!-- HITL Info Card with collapsible details -->
-    {#if inputMode === 'hitl' && activeHitlInterrupt}
-      <div class="mx-3 mt-3 rounded-lg border border-amber-500/30 bg-gradient-to-r from-amber-900/20 to-zinc-900/80 overflow-hidden">
-        <div class="flex items-center justify-between border-b border-amber-500/20 bg-amber-900/30 px-3 py-2">
-          <div class="flex items-center gap-2">
-            <MessageCircle class="h-4 w-4 text-amber-400" />
-            <span class="text-sm font-medium text-amber-200">Agent Needs Approval</span>
-            <span class="text-xs text-amber-300/60">
-              ({activeHitlInterrupt.action_requests.length} action{activeHitlInterrupt.action_requests.length !== 1 ? 's' : ''})
+  <div class="flex-shrink-0 bg-background pt-2">
+    <div class="relative mx-auto w-[calc(100%-32px)] max-w-[1024px] mb-6 group">
+      <!-- Rainbow perimeter effect -->
+      <div class="absolute -inset-[1px] rounded-xl opacity-100 blur-[35px] pointer-events-none overflow-hidden">
+        <div class="absolute top-1/2 left-1/2 w-[200%] h-[1000%] bg-[conic-gradient(from_0deg,#ff0000,#ffff00,#00ff00,#00ffff,#0000ff,#ff00ff,#ff0000)] animate-rainbow-spin"></div>
+      </div>
+
+      <!-- Pulsing yellow glow border -->
+      <div class="absolute -inset-[1px] rounded-xl border border-amber-400/50 pointer-events-none z-0 animate-border-pulse shadow-[0_0_15px_rgba(251,191,36,0.2)]"></div>
+
+      <div
+        class="flex flex-shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-background transition-colors duration-200 ease-in-out relative z-10"
+      >
+      <!-- HITL Info Card with collapsible details -->
+      {#if inputMode === 'hitl' && activeHitlInterrupt}
+        <div class="flex flex-col border-b border-border bg-amber-500/5 overflow-hidden">
+          <div class="flex items-center justify-between bg-amber-500/10 px-[18px] py-2">
+            <div class="flex items-center gap-2">
+              <MessageCircle class="h-4 w-4 text-amber-600 dark:text-amber-400" />
+              <span class="text-sm font-semibold text-amber-900 dark:text-amber-200">Agent Needs Approval</span>
+              <span class="text-xs text-amber-700/60 dark:text-amber-300/60">
+                ({activeHitlInterrupt.action_requests.length} action{activeHitlInterrupt.action_requests.length !== 1 ? 's' : ''})
               </span>
             </div>
-          <div class="flex items-center gap-1">
-            <!-- Expand/Collapse button -->
-            <button
-              onclick={() => hitlDetailsExpanded = !hitlDetailsExpanded}
-              class="p-1 rounded text-amber-300/70 hover:text-amber-200 hover:bg-amber-500/10"
-              title={hitlDetailsExpanded ? 'Collapse details' : 'Expand details'}
-            >
-              {#if hitlDetailsExpanded}
-                <ChevronUp class="h-4 w-4" />
-              {:else}
-                <ChevronDown class="h-4 w-4" />
-              {/if}
-            </button>
-            <!-- Modal button -->
-            <button
-              onclick={() => showDetailsModal = true}
-              class="p-1 rounded text-amber-300/70 hover:text-amber-200 hover:bg-amber-500/10"
-              title="View full details"
-            >
-              <Maximize2 class="h-4 w-4" />
-            </button>
-          </div>
-        </div>
-        
-        <!-- Collapsed summary -->
-        {#if !hitlDetailsExpanded}
-          <div class="p-3">
-            {#each activeHitlInterrupt.action_requests as action}
-              {@const ActionIcon = getToolIcon(action.name)}
-              <div class="flex items-center gap-2">
-            <ActionIcon class="h-4 w-4 text-zinc-400 shrink-0" />
-                <span class="text-sm font-medium text-zinc-200">{action.name}</span>
-                <span class="text-xs text-zinc-400 truncate">{getActionDescription(action)}</span>
-              </div>
-            {/each}
-          </div>
-        {:else}
-          <!-- Expanded details -->
-          <div class="p-3 space-y-3 max-h-64 overflow-y-auto">
-            {#each activeHitlInterrupt.action_requests as action}
-              {@const ActionIcon = getToolIcon(action.name)}
-              <div class="rounded bg-zinc-800/50 p-3">
-                <div class="flex items-center gap-2 mb-2">
-              <ActionIcon class="h-4 w-4 text-zinc-400 shrink-0" />
-                  <span class="text-sm font-medium text-zinc-200">{action.name}</span>
-                </div>
-                <p class="text-xs text-zinc-400 mb-2">{getActionDescription(action)}</p>
-                {#if Object.keys(action.args || {}).length > 0}
-                  <div class="text-xs space-y-1 border-t border-zinc-700/50 pt-2">
-                    {#each Object.entries(action.args || {}) as [key, value]}
-                      <div class="grid grid-cols-[80px_1fr] gap-2">
-                        <span class="font-mono text-zinc-500">{key}:</span>
-                        <span class="text-zinc-300 break-all">{formatArgValue(value)}</span>
-                      </div>
-                    {/each}
-                  </div>
+            <div class="flex items-center gap-1">
+              <!-- Expand/Collapse button -->
+              <button
+                onclick={() => hitlDetailsExpanded = !hitlDetailsExpanded}
+                class="p-1 rounded text-amber-700/70 hover:text-amber-900 hover:bg-amber-500/10 dark:text-amber-300/70 dark:hover:text-amber-200"
+                title={hitlDetailsExpanded ? 'Collapse details' : 'Expand details'}
+              >
+                {#if hitlDetailsExpanded}
+                  <ChevronUp class="h-4 w-4" />
+                {:else}
+                  <ChevronDown class="h-4 w-4" />
                 {/if}
+              </button>
+              <!-- Modal button -->
+              <button
+                onclick={() => showDetailsModal = true}
+                class="p-1 rounded text-amber-700/70 hover:text-amber-900 hover:bg-amber-500/10 dark:text-amber-300/70 dark:hover:text-amber-200"
+                title="View full details"
+              >
+                <Maximize2 class="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+          
+          <div class="px-[18px] py-3 max-h-48 overflow-y-auto">
+            {#if !hitlDetailsExpanded}
+              {#each activeHitlInterrupt.action_requests as action}
+                {@const ActionIcon = getToolIcon(action.name)}
+                <div class="flex items-center gap-2 py-0.5">
+                  <ActionIcon class="h-3.5 w-3.5 text-zinc-500 shrink-0" />
+                  <span class="text-sm font-medium text-foreground/80">{action.name}</span>
+                  <span class="text-xs text-muted-foreground truncate">{getActionDescription(action)}</span>
+                </div>
+              {/each}
+            {:else}
+              <div class="space-y-3">
+                {#each activeHitlInterrupt.action_requests as action}
+                  {@const ActionIcon = getToolIcon(action.name)}
+                  <div class="rounded-lg bg-background/50 border border-border/50 p-3">
+                    <div class="flex items-center gap-2 mb-2">
+                      <ActionIcon class="h-4 w-4 text-zinc-500 shrink-0" />
+                      <span class="text-sm font-semibold">{action.name}</span>
+                    </div>
+                    <p class="text-xs text-muted-foreground mb-2">{getActionDescription(action)}</p>
+                    {#if Object.keys(action.args || {}).length > 0}
+                      <div class="text-[10px] space-y-1 border-t border-border pt-2">
+                        {#each Object.entries(action.args || {}) as [key, value]}
+                          <div class="grid grid-cols-[80px_1fr] gap-2">
+                            <span class="font-mono text-muted-foreground uppercase tracking-wider">{key}:</span>
+                            <span class="text-foreground/80 break-all font-mono">{formatArgValue(value)}</span>
+                          </div>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+                {/each}
               </div>
-            {/each}
+            {/if}
+          </div>
         </div>
       {/if}
-      </div>
-    {/if}
 
-    <!-- Clarification Info Card -->
-    {#if (inputMode === 'clarification' || inputMode === 'choices') && clarificationInterrupt}
-      <div class="mx-3 mt-3 rounded-lg border border-blue-500/30 bg-gradient-to-r from-blue-900/20 to-zinc-900/80 overflow-hidden">
-        <div class="flex items-center gap-2 border-b border-blue-500/20 bg-blue-900/30 px-3 py-2">
-          <HelpCircle class="h-4 w-4 text-blue-400" />
-          <span class="text-sm font-medium text-blue-200">Agent Needs Clarification</span>
-  </div>
-        <div class="p-3">
-          <p class="text-sm text-zinc-200 leading-relaxed">{clarificationInterrupt.question}</p>
-          
-          {#if inputMode === 'choices' && Array.isArray(clarificationInterrupt.options)}
-            <div class="mt-3 flex flex-wrap gap-2">
-              {#each clarificationInterrupt.options as option}
-                <button
-                  type="button"
-                  onclick={() => toggleChoice(option.id)}
-                  disabled={isSubmitting}
-                  class="px-3 py-1.5 text-sm rounded-lg border transition-colors
-                    {selectedChoices.includes(option.id)
-                      ? 'border-blue-500 bg-blue-500/20 text-blue-200'
-                      : 'border-zinc-600 bg-zinc-800/50 text-zinc-300 hover:border-zinc-500'}"
-                >
-                  {#if selectedChoices.includes(option.id)}
-                    <Check class="h-3 w-3 inline mr-1" />
-                  {/if}
-                  {option.label || option.id || 'Option'}
-                </button>
-              {/each}
-            </div>
-          {/if}
+      <!-- Clarification Info Card -->
+      {#if (inputMode === 'clarification' || inputMode === 'choices') && clarificationInterrupt}
+        <div class="flex flex-col border-b border-border bg-blue-500/5 overflow-hidden">
+          <div class="flex items-center gap-2 bg-blue-500/10 px-[18px] py-2">
+            <HelpCircle class="h-4 w-4 text-blue-600 dark:text-blue-400" />
+            <span class="text-sm font-semibold text-blue-900 dark:text-blue-200">Agent Needs Clarification</span>
+          </div>
+          <div class="px-[18px] py-3">
+            <p class="text-sm text-foreground/90 leading-relaxed mb-3">{clarificationInterrupt.question}</p>
+            
+            {#if inputMode === 'choices' && Array.isArray(clarificationInterrupt.options)}
+              <div class="flex flex-wrap gap-2">
+                {#each clarificationInterrupt.options as option}
+                  <button
+                    type="button"
+                    onclick={() => toggleChoice(option.id)}
+                    disabled={isSubmitting}
+                    class="px-3 py-1.5 text-xs rounded-full border transition-colors
+                      {selectedChoices.includes(option.id)
+                        ? 'border-blue-500 bg-blue-500/20 text-blue-700 dark:text-blue-200'
+                        : 'border-border bg-background hover:border-blue-400 text-muted-foreground'}"
+                  >
+                    {#if selectedChoices.includes(option.id)}
+                      <Check class="h-3 w-3 inline mr-1" />
+                    {/if}
+                    {option.label || option.id || 'Option'}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
         </div>
-      </div>
-    {/if}
+      {/if}
 
-    <!-- Main Input -->
-    <div class="p-3">
-    {#if backendAvailable === false}
-      <div class="mb-2 flex items-center gap-2 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-400">
-        <AlertCircle class="h-3 w-3" />
-        <span>LangGraph server unavailable. Start the server to enable AI chat.</span>
-      </div>
-    {/if}
-    
-    {#if !isWalletReady}
-      <div class="mb-2 flex items-center gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-400">
-        <Loader2 class="h-3 w-3 animate-spin" />
-        <span>Initializing wallet...</span>
-      </div>
-    {/if}
-    
-    <div class="flex gap-2">
-      <Textarea
-          placeholder={inputPlaceholder}
-        bind:value={messageInput}
-        onkeydown={handleKeydown}
-          disabled={isStreaming || (!currentThread && !currentProjectId) || !isWalletReady || backendAvailable === false}
-        rows={2}
-          class="flex-1 resize-none bg-zinc-800 border-zinc-700 text-zinc-100 placeholder-zinc-500
-            {inputMode === 'hitl' ? 'border-amber-500/30' : ''}
-            {inputMode === 'clarification' || inputMode === 'choices' ? 'border-blue-500/30' : ''}"
-        />
-        
-        <!-- Action buttons based on mode -->
-        <div class="flex flex-col gap-1 self-end">
-          {#if inputMode === 'hitl'}
-            <!-- HITL: Approve and Reject buttons -->
-            <Button
-              onclick={handleApprove}
-              disabled={isSubmitting || isStreaming}
-              size="icon"
-              class="bg-emerald-600 hover:bg-emerald-500"
-              title="Approve"
-            >
-              <Check class="h-4 w-4" />
-            </Button>
-            <Button
-              onclick={handleReject}
-              disabled={isSubmitting || isStreaming}
-              size="icon"
-              class="bg-red-600 hover:bg-red-500 text-white"
-              title="Reject"
-            >
-              <X class="h-4 w-4" />
-            </Button>
-          {:else}
-            <!-- Normal/Clarification/Streaming: Action button -->
-            {#if isStreaming}
+      <!-- Main Input -->
+      <form onsubmit={(e) => { e.preventDefault(); handleSubmit(); }} class="flex flex-col">
+        {#if backendAvailable === false || !isWalletReady || agentStore.error}
+          <div class="px-[18px] pt-3 flex flex-col gap-2">
+            {#if backendAvailable === false}
+              <div class="flex items-center gap-2 rounded-lg bg-red-500/10 px-3 py-1.5 text-xs text-red-600 dark:text-red-400">
+                <AlertCircle class="h-3 w-3" />
+                <span>LangGraph server unavailable. Start the server to enable AI chat.</span>
+              </div>
+            {/if}
+            
+            {#if !isWalletReady}
+              <div class="flex items-center gap-2 rounded-lg bg-amber-500/10 px-3 py-1.5 text-xs text-amber-600 dark:text-amber-400">
+                <Loader2 class="h-3 w-3 animate-spin" />
+                <span>Initializing wallet...</span>
+              </div>
+            {/if}
+
+            {#if agentStore.error}
+              <p class="text-[10px] text-destructive font-medium uppercase tracking-wider px-1">{agentStore.error}</p>
+            {/if}
+          </div>
+        {/if}
+
+        <div class="flex items-end gap-2 p-2 px-3">
+          <textarea
+            bind:value={messageInput}
+            onkeydown={handleKeydown}
+            onfocus={handleContainerClick}
+            placeholder={inputPlaceholder}
+            disabled={isStreaming || (!currentThread && !currentProjectId) || !isWalletReady || backendAvailable === false}
+            class="font-inherit [field-sizing:content] flex-1 resize-none border-0 bg-transparent px-3 py-2 text-sm leading-5 text-foreground outline-none placeholder:text-muted-foreground/60 min-h-[36px] max-h-[200px] overflow-y-auto"
+            rows={1}
+          ></textarea>
+          
+          <div class="flex shrink-0 gap-2 pb-0.5">
+            {#if inputMode === 'hitl'}
               <Button
-                onclick={() => agentStore.stopStreaming()}
-                size="icon"
-                class="self-end bg-red-600 hover:bg-red-500 text-white"
-                title="Stop"
+                onclick={handleReject}
+                disabled={isSubmitting || isStreaming}
+                variant="ghost"
+                size="sm"
+                class="text-destructive hover:text-destructive hover:bg-destructive/10"
               >
-                <Square class="h-4 w-4" />
+                <X class="h-4 w-4" />
+              </Button>
+              <Button
+                onclick={handleApprove}
+                disabled={isSubmitting || isStreaming}
+                size="sm"
+                class="bg-emerald-600 hover:bg-emerald-500 text-white"
+              >
+                <Check class="h-4 w-4" />
+              </Button>
+            {:else if isStreaming}
+              <Button
+                onclick={() => agentStore.stopStreaming(effectiveThreadId)}
+                disabled={!effectiveThreadId}
+                variant="destructive"
+                size="sm"
+                class="px-3"
+              >
+                <Square class="h-4 w-4 mr-2 fill-current" />
+                <span>Stop</span>
               </Button>
             {:else}
               <Button
-                onclick={handleSubmit}
+                type="submit"
                 disabled={!canSubmit || isSubmitting}
-                size="icon"
-                class="self-end {inputMode === 'clarification' || inputMode === 'choices' 
-                  ? 'bg-blue-600 hover:bg-blue-500' 
-                  : 'bg-amber-600 hover:bg-amber-500'}"
+                size="sm"
+                class={cn(
+                  'px-3',
+                  inputMode === 'clarification' || inputMode === 'choices' 
+                    ? 'bg-blue-600 hover:bg-blue-500 text-white' 
+                    : 'bg-foreground text-background hover:opacity-90'
+                )}
               >
-                <Send class="h-4 w-4" />
+                <ArrowUp class="h-4 w-4 mr-2" />
+                <span>Send</span>
               </Button>
             {/if}
-          {/if}
+          </div>
         </div>
-    </div>
-      
-    {#if agentStore.error}
-      <p class="mt-2 text-xs text-red-500">{agentStore.error}</p>
-    {/if}
+      </form>
     </div>
   </div>
+</div>
 </div>
 
 <!-- HITL Details Modal -->
@@ -846,7 +888,7 @@
               <div class="p-4 space-y-3">
                 {#each Object.entries(action.args || {}) as [key, value]}
                   <div>
-                    <label class="block text-xs font-medium text-zinc-500 mb-1">{key}</label>
+                    <span class="block text-xs font-medium text-zinc-500 mb-1">{key}</span>
                     <div class="rounded bg-zinc-900 p-2 text-sm text-zinc-200 max-h-48 overflow-y-auto">
                       <pre class="whitespace-pre-wrap break-all font-mono text-xs">{typeof value === 'string' ? value : JSON.stringify(value, null, 2)}</pre>
                     </div>
@@ -859,14 +901,15 @@
         
         <!-- Edit feedback input -->
         <div>
-          <label class="block text-sm font-medium text-zinc-300 mb-2">Feedback (optional)</label>
+          <label for="hitl-feedback" class="block text-sm font-medium text-zinc-300 mb-2">Feedback (optional)</label>
           <textarea
+            id="hitl-feedback"
             bind:value={messageInput}
             placeholder="Provide feedback or suggest edits..."
             rows="3"
             class="w-full rounded-lg border border-zinc-600 bg-zinc-800 px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-500 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 resize-none"
           ></textarea>
-  </div>
+        </div>
 </div>
       
       <!-- Modal Footer -->
@@ -892,3 +935,35 @@
     </div>
   </div>
 {/if}
+
+<style>
+  @keyframes rainbow-spin {
+    from {
+      transform: translate(-50%, -50%) rotate(0deg);
+    }
+    to {
+      transform: translate(-50%, -50%) rotate(360deg);
+    }
+  }
+
+  :global(.animate-rainbow-spin) {
+    animation: rainbow-spin 8s linear infinite;
+  }
+
+  @keyframes border-pulse {
+    0%, 100% {
+      opacity: 0.3;
+      box-shadow: 0 0 5px rgba(251, 191, 36, 0.1);
+      border-color: rgba(251, 191, 36, 0.3);
+    }
+    50% {
+      opacity: 1;
+      box-shadow: 0 0 20px rgba(251, 191, 36, 0.4);
+      border-color: rgba(251, 191, 36, 0.8);
+    }
+  }
+
+  :global(.animate-border-pulse) {
+    animation: border-pulse 4s ease-in-out infinite;
+  }
+</style>

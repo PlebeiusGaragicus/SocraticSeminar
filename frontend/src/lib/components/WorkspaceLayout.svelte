@@ -1,8 +1,7 @@
 <script lang="ts">
   import Sidebar from './Sidebar.svelte';
-  import ChatPanel from './ChatPanel.svelte';
-  import TabbedEditor from './TabbedEditor.svelte';
-  import { artifactStore, threadStore, projectStore, agentStore } from '$lib/stores/index.js';
+  import TabbedPanel from './TabbedPanel.svelte';
+  import { artifactStore, threadStore, projectStore, agentStore, workspaceStore } from '$lib/stores/index.js';
   import type { Artifact, Thread } from '$lib/stores/types.js';
   import { onMount } from 'svelte';
 
@@ -15,38 +14,26 @@
   // Panel state
   let sidebarCollapsed = $state(false);
   let sidebarWidth = $state(240);
-  let chatWidth = $state(0); // Will be set on mount
+  let leftColumnWidth = $state(0); // Will be set on mount
   let isDraggingSidebar = $state(false);
-  let isDraggingChat = $state(false);
+  let isDraggingDivider = $state(false);
 
-  const openArtifacts = $derived(artifactStore.openArtifacts);
-  const activeArtifactId = $derived(artifactStore.currentArtifactId);
-  const pendingChanges = $derived(artifactStore.pendingChanges);
   const currentProjectId = $derived(projectStore.currentProjectId);
-  const currentThreadId = $derived(threadStore.currentThreadId);
 
   function handleSelectFile(artifact: Artifact) {
-    artifactStore.selectArtifact(artifact.id);
+    workspaceStore.openItem(artifact.id, 'artifact');
   }
 
   function handleSelectThread(thread: Thread) {
-    threadStore.selectThread(thread.id);
+    workspaceStore.openItem(thread.id, 'thread');
   }
 
-  function handleTabSelect(id: string) {
-    artifactStore.selectArtifact(id);
+  function handleTabSelect(id: string, column: 'left' | 'right') {
+    workspaceStore.selectTab(id, column);
   }
 
-  function handleTabClose(id: string) {
-    artifactStore.closeArtifact(id);
-  }
-
-  function handleAcceptChanges() {
-    artifactStore.acceptPendingChanges();
-  }
-
-  function handleRejectChanges() {
-    artifactStore.rejectPendingChanges();
+  function handleTabClose(id: string, column: 'left' | 'right') {
+    workspaceStore.closeTab(id, column);
   }
 
   function handleToggleSidebar() {
@@ -74,26 +61,27 @@
     document.removeEventListener('mouseup', handleSidebarMouseUp);
   }
 
-  // Handle chat resize
-  function handleChatMouseDown(e: MouseEvent) {
+  // Handle middle divider resize
+  function handleDividerMouseDown(e: MouseEvent) {
+    if (workspaceStore.rightPanelCollapsed) return;
     e.preventDefault();
-    isDraggingChat = true;
-    document.addEventListener('mousemove', handleChatMouseMove);
-    document.addEventListener('mouseup', handleChatMouseUp);
+    isDraggingDivider = true;
+    document.addEventListener('mousemove', handleDividerMouseMove);
+    document.addEventListener('mouseup', handleDividerMouseUp);
   }
 
-  function handleChatMouseMove(e: MouseEvent) {
-    if (!isDraggingChat) return;
+  function handleDividerMouseMove(e: MouseEvent) {
+    if (!isDraggingDivider) return;
     const offset = sidebarCollapsed ? 48 : sidebarWidth;
     const availableWidth = window.innerWidth - offset;
-    const newWidth = Math.max(300, Math.min(availableWidth - 100, e.clientX - offset));
-    chatWidth = newWidth;
+    const newWidth = Math.max(300, Math.min(availableWidth - 300, e.clientX - offset));
+    leftColumnWidth = newWidth;
   }
 
-  function handleChatMouseUp() {
-    isDraggingChat = false;
-    document.removeEventListener('mousemove', handleChatMouseMove);
-    document.removeEventListener('mouseup', handleChatMouseUp);
+  function handleDividerMouseUp() {
+    isDraggingDivider = false;
+    document.removeEventListener('mousemove', handleDividerMouseMove);
+    document.removeEventListener('mouseup', handleDividerMouseUp);
   }
 
   // Track previous project ID to detect project changes
@@ -101,9 +89,8 @@
 
   // Initial proportions
   onMount(() => {
-    // Set initial chat width to 50% of available space
     const offset = sidebarCollapsed ? 48 : sidebarWidth;
-    chatWidth = (window.innerWidth - offset) / 2;
+    leftColumnWidth = (window.innerWidth - offset) / 2;
 
     if (currentProjectId) {
       artifactStore.loadProjectArtifacts(currentProjectId);
@@ -114,10 +101,10 @@
 
   $effect(() => {
     if (currentProjectId) {
-      // If project changed, clear project-scoped state first
       if (previousProjectId && previousProjectId !== currentProjectId) {
         artifactStore.clearProjectState();
         threadStore.clearProjectState();
+        workspaceStore.clearProjectState();
         agentStore.clearProjectState();
       }
       
@@ -129,19 +116,17 @@
 </script>
 
 <div class="flex h-[calc(100vh-3.5rem)] w-full overflow-hidden bg-zinc-950">
-  <!-- Sidebar: Threads + Files picker -->
+  <!-- Sidebar -->
   <div class="flex-shrink-0" style="width: {sidebarCollapsed ? '48px' : sidebarWidth + 'px'}">
     <Sidebar
       onSelectFile={handleSelectFile}
       onSelectThread={handleSelectThread}
-      openArtifactIds={artifactStore.openArtifactIds}
-      {currentThreadId}
       collapsed={sidebarCollapsed}
       onToggleCollapse={handleToggleSidebar}
     />
   </div>
 
-  <!-- Sidebar resize handle (only when not collapsed) -->
+  <!-- Sidebar resize handle -->
   {#if !sidebarCollapsed}
     <div
       class="w-1 cursor-col-resize bg-zinc-800 hover:bg-amber-500/50 transition-colors {isDraggingSidebar ? 'bg-amber-500' : ''}"
@@ -151,32 +136,40 @@
     ></div>
   {/if}
 
-  <!-- Main Content Area: Chat + Editor side by side -->
+  <!-- Main Workspace Area -->
   <div class="flex flex-1 overflow-hidden">
-    <!-- Chat Panel -->
-    <div class="flex-shrink-0 overflow-hidden" style="width: {chatWidth}px">
-      <ChatPanel />
-    </div>
-
-    <!-- Chat resize handle -->
-    <div
-      class="w-1 cursor-col-resize bg-zinc-800 hover:bg-amber-500/50 transition-colors {isDraggingChat ? 'bg-amber-500' : ''}"
-      onmousedown={handleChatMouseDown}
-      role="separator"
-      aria-orientation="vertical"
-    ></div>
-
-    <!-- Editor Panel -->
-    <div class="flex flex-1 flex-col overflow-hidden">
-      <TabbedEditor
-        {openArtifacts}
-        {activeArtifactId}
-        onTabSelect={handleTabSelect}
-        onTabClose={handleTabClose}
-        {pendingChanges}
-        onAcceptChanges={handleAcceptChanges}
-        onRejectChanges={handleRejectChanges}
+    <!-- Left Column -->
+    <div class="flex flex-col overflow-hidden" style="width: {workspaceStore.rightPanelCollapsed ? '100%' : leftColumnWidth + 'px'}">
+      <TabbedPanel
+        column="left"
+        tabs={workspaceStore.leftTabs}
+        activeTabId={workspaceStore.activeLeftTabId}
+        onTabSelect={(id) => handleTabSelect(id, 'left')}
+        onTabClose={(id) => handleTabClose(id, 'left')}
       />
     </div>
+
+    <!-- Middle Divider (only when right panel is open) -->
+    {#if !workspaceStore.rightPanelCollapsed}
+      <div
+        class="w-1 cursor-col-resize bg-zinc-800 hover:bg-amber-500/50 transition-colors {isDraggingDivider ? 'bg-amber-500' : ''}"
+        onmousedown={handleDividerMouseDown}
+        role="separator"
+        aria-orientation="vertical"
+      ></div>
+
+      <!-- Right Column -->
+      <div class="flex flex-1 flex-col overflow-hidden">
+        <TabbedPanel
+          column="right"
+          tabs={workspaceStore.rightTabs}
+          activeTabId={workspaceStore.activeRightTabId}
+          onTabSelect={(id) => handleTabSelect(id, 'right')}
+          onTabClose={(id) => handleTabClose(id, 'right')}
+          showClosePanel={true}
+          onClosePanel={() => workspaceStore.collapseRightPanel()}
+        />
+      </div>
+    {/if}
   </div>
 </div>

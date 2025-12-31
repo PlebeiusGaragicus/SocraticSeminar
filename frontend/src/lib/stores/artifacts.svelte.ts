@@ -44,7 +44,8 @@ async function persistArtifact(artifact: Artifact): Promise<void> {
         createdAt: v.createdAt
       })),
       createdAt: artifact.createdAt,
-      updatedAt: artifact.updatedAt
+      updatedAt: artifact.updatedAt,
+      viewed: artifact.viewed ?? false
     };
     await db.artifacts.save(plainArtifact);
   } catch (error) {
@@ -91,7 +92,8 @@ function createArtifact(
     currentVersionIndex: 0,
     versions: [version],
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
+    viewed: false
   };
   
   artifacts = [...artifacts, artifact];
@@ -174,9 +176,18 @@ async function deleteArtifact(id: string): Promise<void> {
 function selectArtifact(id: string | null): void {
   currentArtifactId = id;
   
-  // Add to open tabs if not already there
-  if (id && !openArtifactIds.includes(id)) {
-    openArtifactIds = [...openArtifactIds, id];
+  if (id) {
+    // Mark as viewed
+    const artifact = artifacts.find(a => a.id === id);
+    if (artifact && !artifact.viewed) {
+      artifacts = artifacts.map(a => a.id === id ? { ...a, viewed: true } : a);
+      persistArtifact(artifacts.find(a => a.id === id)!);
+    }
+
+    // Add to open tabs if not already there
+    if (!openArtifactIds.includes(id)) {
+      openArtifactIds = [...openArtifactIds, id];
+    }
   }
 }
 

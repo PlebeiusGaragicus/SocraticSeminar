@@ -46,9 +46,11 @@ export interface Thread {
   description?: string; // Last message preview or summary
   status: ThreadStatus;
   langGraphThreadId?: string; // LangGraph server's thread ID (different from local id)
+  assistantId?: string; // ID of the agent assigned to this thread
   metadata?: Record<string, unknown>;
   createdAt: number;
   updatedAt: number;
+  viewed?: boolean;
 }
 
 export interface Message {
@@ -109,6 +111,22 @@ export interface Artifact {
   versions: ArtifactVersion[];
   createdAt: number;
   updatedAt: number;
+  viewed?: boolean;
+}
+
+export type TabType = 'artifact' | 'thread';
+
+export interface TabItem {
+  id: string;
+  type: TabType;
+}
+
+export interface WorkspaceState {
+  leftTabs: TabItem[];
+  rightTabs: TabItem[];
+  activeLeftTabId: string | null;
+  activeRightTabId: string | null;
+  rightPanelCollapsed: boolean;
 }
 
 // Payment types for agent requests

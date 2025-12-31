@@ -10,6 +10,7 @@ let threads = $state<Thread[]>([]);
 // Use a plain object instead of Map for better Svelte 5 reactivity
 let messagesByThread = $state<Record<string, Message[]>>({});
 let currentThreadId = $state<string | null>(null);
+let openThreadIds = $state<string[]>([]);
 let isLoaded = $state(false);
 
 // Version counter to force reactivity updates
@@ -18,6 +19,10 @@ let messagesVersion = $state(0);
 // Derived state
 const currentThread = $derived(
   threads.find((t) => t.id === currentThreadId) ?? null
+);
+
+const openThreads = $derived(
+  openThreadIds.map(id => threads.find(t => t.id === id)).filter(Boolean) as Thread[]
 );
 
 // Use messagesVersion as a dependency to force re-computation
@@ -78,7 +83,8 @@ function createThread(projectId: string, title?: string): Thread {
     title: title ?? 'New Thread',
     status: 'idle',
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
+    viewed: false
   };
   
   threads = [...threads, thread];
@@ -86,13 +92,17 @@ function createThread(projectId: string, title?: string): Thread {
   messagesVersion++;
   currentThreadId = thread.id;
   
+  if (!openThreadIds.includes(thread.id)) {
+    openThreadIds = [...openThreadIds, thread.id];
+  }
+  
   // Persist asynchronously
   persistThread(thread);
   
   return thread;
 }
 
-function updateThread(id: string, updates: Partial<Pick<Thread, 'title' | 'description' | 'status' | 'metadata' | 'langGraphThreadId'>>): void {
+function updateThread(id: string, updates: Partial<Pick<Thread, 'title' | 'description' | 'status' | 'metadata' | 'langGraphThreadId' | 'assistantId'>>): void {
   let updatedThread: Thread | null = null;
   let didChange = false;
   
@@ -134,6 +144,25 @@ function deleteThread(id: string): void {
 
 function selectThread(id: string | null): void {
   currentThreadId = id;
+  if (id) {
+    // Mark as viewed
+    const thread = threads.find(t => t.id === id);
+    if (thread && !thread.viewed) {
+      threads = threads.map(t => t.id === id ? { ...t, viewed: true } : t);
+      persistThread(threads.find(t => t.id === id)!);
+    }
+
+    if (!openThreadIds.includes(id)) {
+      openThreadIds = [...openThreadIds, id];
+    }
+  }
+}
+
+function closeThread(id: string): void {
+  openThreadIds = openThreadIds.filter(openId => openId !== id);
+  if (currentThreadId === id) {
+    currentThreadId = openThreadIds[openThreadIds.length - 1] ?? null;
+  }
 }
 
 function addMessage(threadId: string, message: Omit<Message, 'id' | 'threadId' | 'createdAt'>): Message {
@@ -318,6 +347,7 @@ function reset(): void {
   messagesByThread = {};
   messagesVersion++;
   currentThreadId = null;
+  openThreadIds = [];
   isLoaded = false;
 }
 
@@ -327,6 +357,7 @@ function reset(): void {
  */
 function clearProjectState(): void {
   currentThreadId = null;
+  openThreadIds = [];
 }
 
 // Export reactive getters and actions
@@ -335,6 +366,8 @@ export const threadStore = {
   get currentThread() { return currentThread; },
   get currentThreadId() { return currentThreadId; },
   get currentMessages() { return currentMessages; },
+  get openThreads() { return openThreads; },
+  get openThreadIds() { return openThreadIds; },
   get isLoaded() { return isLoaded; },
   
   getProjectThreads,
@@ -346,6 +379,7 @@ export const threadStore = {
   updateThread,
   deleteThread,
   selectThread,
+  closeThread,
   addMessage,
   updateMessage,
   clearMessages,

@@ -1,20 +1,19 @@
 <script lang="ts">
-  import FileText from '@lucide/svelte/icons/file-text';
   import MessageCircle from '@lucide/svelte/icons/message-circle';
   import Plus from '@lucide/svelte/icons/plus';
   import Trash2 from '@lucide/svelte/icons/trash-2';
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import PanelLeftClose from '@lucide/svelte/icons/panel-left-close';
   import PanelLeft from '@lucide/svelte/icons/panel-left';
-  import { artifactStore, threadStore, projectStore, agentStore } from '$lib/stores/index.js';
+  import { artifactStore, threadStore, projectStore, agentStore, workspaceStore } from '$lib/stores/index.js';
   import type { Artifact, Thread } from '$lib/stores/types.js';
+  import { getFileIcon } from '$lib/icons.js';
+  import { cn } from '$lib/utils.js';
   import ThreadList from './ThreadList.svelte';
 
   interface Props {
     onSelectFile: (artifact: Artifact) => void;
     onSelectThread: (thread: Thread) => void;
-    openArtifactIds: string[];
-    currentThreadId: string | null;
     collapsed?: boolean;
     onToggleCollapse?: () => void;
   }
@@ -22,8 +21,6 @@
   let { 
     onSelectFile, 
     onSelectThread, 
-    openArtifactIds = [], 
-    currentThreadId = null,
     collapsed = false,
     onToggleCollapse
   }: Props = $props();
@@ -137,7 +134,13 @@
   }
 
   function isFileOpen(artifactId: string): boolean {
-    return openArtifactIds.includes(artifactId);
+    return workspaceStore.leftTabs.some(t => t.id === artifactId) || 
+           workspaceStore.rightTabs.some(t => t.id === artifactId);
+  }
+
+  function isThreadOpen(threadId: string): boolean {
+    return workspaceStore.leftTabs.some(t => t.id === threadId) || 
+           workspaceStore.rightTabs.some(t => t.id === threadId);
   }
 </script>
 
@@ -191,9 +194,14 @@
         <div class="flex-1 overflow-y-auto pb-2">
           <ThreadList
             {threads}
-            {currentThreadId}
             onThreadSelect={(id) => handleSelectThread(threads.find(t => t.id === id)!)}
-            onThreadDelete={(id) => (threadToDelete = id)}
+            onThreadDelete={(id, immediate) => {
+              if (immediate) {
+                threadStore.deleteThread(id);
+              } else {
+                threadToDelete = id;
+              }
+            }}
           />
         </div>
       {/if}
@@ -260,21 +268,39 @@
             {:else}
               {#each artifacts as artifact (artifact.id)}
                 {@const currentVersion = artifact.versions[artifact.currentVersionIndex]}
-                <div class="group relative">
+                {@const title = currentVersion?.title || 'Untitled'}
+                {@const Icon = getFileIcon(title)}
+                {@const isOpen = isFileOpen(artifact.id)}
+                <div class="group relative px-2">
                   <button
                     onclick={() => onSelectFile(artifact)}
-                    class="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-zinc-800/50
-                      {isFileOpen(artifact.id) ? 'bg-zinc-800/70 border-l-2 border-amber-500' : ''}"
+                    class={cn(
+                      "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-all duration-200",
+                      isOpen 
+                        ? "bg-zinc-800/80 ring-1 ring-zinc-700" 
+                        : "hover:bg-zinc-800/40"
+                    )}
                   >
-                    <FileText class="h-4 w-4 flex-shrink-0 text-amber-400" />
-                    <span class="flex-1 truncate text-sm text-zinc-300">
-                      {currentVersion?.title || 'Untitled'}
-                    </span>
+                    <div class="flex items-center gap-2 min-w-0 flex-1">
+                      {#if !artifact.viewed}
+                        <span class="size-1.5 flex-shrink-0 rounded-full bg-blue-500"></span>
+                      {/if}
+                      <Icon class={cn(
+                        "h-4 w-4 flex-shrink-0",
+                        isOpen ? "text-amber-400" : (!artifact.viewed ? "text-blue-500" : "text-zinc-500")
+                      )} />
+                      <span class={cn(
+                        "truncate text-sm font-medium transition-colors",
+                        isOpen ? "text-zinc-100" : "text-zinc-400 group-hover:text-zinc-300"
+                      )}>
+                        {title}
+                      </span>
+                    </div>
                   </button>
 
                   <button
                     onclick={() => (artifactToDelete = artifact.id)}
-                    class="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-zinc-600 opacity-0 transition-all hover:bg-red-500/10 hover:text-red-500 group-hover:opacity-100"
+                    class="absolute right-4 top-1/2 -translate-y-1/2 rounded bg-zinc-900/80 p-1.5 text-zinc-500 opacity-0 backdrop-blur-sm transition-all hover:text-red-500 group-hover:opacity-100"
                   >
                     <Trash2 class="h-3.5 w-3.5" />
                   </button>

@@ -1,9 +1,10 @@
 <script lang="ts">
   import Plus from '@lucide/svelte/icons/plus';
-  import FileText from '@lucide/svelte/icons/file-text';
   import MessageSquare from '@lucide/svelte/icons/message-square';
   import { Button } from './ui/index.js';
   import { projectStore, threadStore, artifactStore, agentStore } from '$lib/stores/index.js';
+  import { getFileIcon } from '$lib/icons.js';
+  import { cn } from '$lib/utils.js';
 
   interface Props {
     userNpub?: string | null;
@@ -122,23 +123,34 @@
         {/each}
       </div>
 
-      <!-- Artifacts -->
       <div class="p-2">
         <div class="mb-2 flex items-center justify-between px-2">
           <span class="text-xs font-medium text-muted-foreground">ARTIFACTS</span>
         </div>
         {#each projectArtifacts as artifact}
+          {@const title = artifact.versions[artifact.currentVersionIndex]?.title ?? 'Untitled'}
+          {@const Icon = getFileIcon(title)}
           <button
             onclick={() => artifactStore.selectArtifact(artifact.id)}
-            class="mb-1 flex w-full items-center gap-2 rounded-md p-2 text-left text-sm
-              {artifact.id === artifactStore.currentArtifactId
-                ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                : 'text-sidebar-foreground hover:bg-sidebar-accent/50'}"
+            class={cn(
+              "mb-1 flex w-full items-center gap-2 rounded-md p-2 text-left text-sm transition-colors",
+              artifact.id === artifactStore.currentArtifactId
+                ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+            )}
           >
-            <FileText class="h-3 w-3" />
-            <span class="truncate">
-              {artifact.versions[artifact.currentVersionIndex]?.title ?? 'Untitled'}
-            </span>
+            <div class="flex items-center gap-2 min-w-0 flex-1">
+              {#if !artifact.viewed}
+                <span class="size-2 flex-shrink-0 rounded-full bg-blue-500"></span>
+              {/if}
+              <Icon class={cn(
+                "h-3.5 w-3.5 flex-shrink-0",
+                artifact.id === artifactStore.currentArtifactId 
+                  ? "text-sidebar-accent-foreground" 
+                  : (!artifact.viewed ? "text-blue-500" : "text-muted-foreground")
+              )} />
+              <span class="truncate">{title}</span>
+            </div>
           </button>
         {/each}
       </div>
