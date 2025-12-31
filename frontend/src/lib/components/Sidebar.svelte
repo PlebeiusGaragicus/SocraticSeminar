@@ -137,6 +137,7 @@
   function handleDeleteArtifact() {
     if (artifactToDelete) {
       artifactStore.deleteArtifact(artifactToDelete);
+      workspaceStore.closeItemGlobally(artifactToDelete);
       artifactToDelete = null;
     }
   }
@@ -144,6 +145,7 @@
   function handleDeleteThread() {
     if (threadToDelete) {
       threadStore.deleteThread(threadToDelete);
+      workspaceStore.closeItemGlobally(threadToDelete);
       threadToDelete = null;
     }
   }
@@ -151,6 +153,7 @@
   function handleDeleteSource() {
     if (sourceToDelete) {
       sourceStore.deleteSource(sourceToDelete);
+      workspaceStore.closeItemGlobally(sourceToDelete);
       sourceToDelete = null;
     }
   }
@@ -273,6 +276,7 @@
             onThreadDelete={(id, immediate) => {
               if (immediate) {
                 threadStore.deleteThread(id);
+                workspaceStore.closeItemGlobally(id);
               } else {
                 threadToDelete = id;
               }
@@ -347,6 +351,7 @@
                       e.stopPropagation();
                       if (e.shiftKey) {
                         artifactStore.deleteArtifact(artifact.id);
+                        workspaceStore.closeItemGlobally(artifact.id);
                       } else {
                         artifactToDelete = artifact.id;
                       }
@@ -424,6 +429,7 @@
                     e.stopPropagation();
                     if (e.shiftKey) {
                       sourceStore.deleteSource(source.id);
+                      workspaceStore.closeItemGlobally(source.id);
                     } else {
                       sourceToDelete = source.id;
                     }

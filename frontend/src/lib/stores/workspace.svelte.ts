@@ -116,6 +116,21 @@ function closeTab(id: string, column: 'left' | 'right') {
 }
 
 /**
+ * Close an item from all columns it might be in.
+ * Useful when an item is deleted.
+ */
+function closeItemGlobally(id: string) {
+  // Check both columns as an item might (theoretically) be in both 
+  // or we don't know which one it's in.
+  if (leftTabs.some(t => t.id === id)) {
+    closeTab(id, 'left');
+  }
+  if (rightTabs.some(t => t.id === id)) {
+    closeTab(id, 'right');
+  }
+}
+
+/**
  * Close the right panel and move all its tabs to the left.
  */
 function collapseRightPanel() {
@@ -158,6 +173,7 @@ export const workspaceStore = {
   createNewThread,
   selectTab,
   closeTab,
+  closeItemGlobally,
   collapseRightPanel,
   toggleRightPanel,
   clearProjectState
