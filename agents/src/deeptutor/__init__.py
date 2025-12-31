@@ -1,6 +1,6 @@
 # Deeptutor Agent - using create_agent() with middleware
-from .graph import graph, create_deeptutor_agent
-from .state import DeeptutorState, COST_PER_ITERATION_SATS
+from src.deeptutor.graph import graph, create_deeptutor_agent
+from src.deeptutor.state import DeeptutorState, COST_PER_ITERATION_SATS
 
 __all__ = [
     "graph",

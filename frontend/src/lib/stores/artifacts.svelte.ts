@@ -4,6 +4,7 @@
 import { nanoid } from 'nanoid';
 import type { Artifact, ArtifactVersion } from './types.js';
 import { db } from '$lib/services/indexeddb.js';
+import { projectStore } from './projects.svelte.js';
 
 // Reactive state
 let artifacts = $state<Artifact[]>([]);
@@ -45,7 +46,8 @@ async function persistArtifact(artifact: Artifact): Promise<void> {
       })),
       createdAt: artifact.createdAt,
       updatedAt: artifact.updatedAt,
-      viewed: artifact.viewed ?? false
+      viewed: artifact.viewed ?? false,
+      tags: artifact.tags || []
     };
     await db.artifacts.save(plainArtifact);
   } catch (error) {
@@ -150,6 +152,52 @@ function setArtifactVersion(id: string, versionIndex: number): void {
   artifacts = artifacts.map((a) =>
     a.id === id ? { ...a, currentVersionIndex: versionIndex } : a
   );
+}
+
+function toggleArtifactTag(id: string, tagName: string): void {
+  const artifact = artifacts.find(a => a.id === id);
+  if (!artifact) return;
+  
+  const currentTags = artifact.tags || [];
+  const hasTag = currentTags.includes(tagName);
+  
+  const newTags = hasTag 
+    ? currentTags.filter(t => t !== tagName)
+    : [...currentTags, tagName];
+    
+  artifacts = artifacts.map((a) =>
+    a.id === id ? { ...a, tags: newTags } : a
+  );
+  
+  persistArtifact(artifacts.find(a => a.id === id)!);
+}
+
+function removeTagFromAllArtifacts(projectId: string, tagName: string): void {
+  const projectArtifacts = artifacts.filter(a => a.projectId === projectId);
+  
+  projectArtifacts.forEach(artifact => {
+    if (artifact.tags?.includes(tagName)) {
+      const newTags = artifact.tags.filter(t => t !== tagName);
+      artifacts = artifacts.map(a => a.id === artifact.id ? { ...a, tags: newTags } : a);
+      persistArtifact(artifacts.find(a => a.id === artifact.id)!);
+    }
+  });
+}
+
+function renameArtifact(id: string, newTitle: string): void {
+  const artifact = artifacts.find(a => a.id === id);
+  if (!artifact) return;
+
+  const updatedArtifact = {
+    ...artifact,
+    versions: artifact.versions.map((v, i) => 
+      i === artifact.currentVersionIndex ? { ...v, title: newTitle } : v
+    ),
+    updatedAt: Date.now()
+  };
+
+  artifacts = artifacts.map(a => a.id === id ? updatedArtifact : a);
+  persistArtifact(updatedArtifact);
 }
 
 async function deleteArtifact(id: string): Promise<void> {
@@ -274,6 +322,9 @@ export const artifactStore = {
   createArtifact,
   updateArtifact,
   setArtifactVersion,
+  toggleArtifactTag,
+  removeTagFromAllArtifacts,
+  renameArtifact,
   deleteArtifact,
   selectArtifact,
   closeArtifact,

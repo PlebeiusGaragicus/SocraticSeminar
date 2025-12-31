@@ -29,12 +29,19 @@ export interface TodoItem {
   status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
 }
 
+export interface ProjectTag {
+  name: string;
+  color: string;
+  deletable?: boolean;
+}
+
 export interface Project {
   id: string;
   npub: string;
   title: string;
   createdAt: number; // Unix timestamp
   updatedAt: number;
+  tags?: ProjectTag[];
 }
 
 export type ThreadStatus = 'idle' | 'busy' | 'interrupted' | 'error';
@@ -112,6 +119,7 @@ export interface Artifact {
   createdAt: number;
   updatedAt: number;
   viewed?: boolean;
+  tags?: string[];
 }
 
 export interface Source {

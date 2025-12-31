@@ -30,8 +30,9 @@ These references will be used to build our "Socratic Seminar" web application:
 
 ---
 
-## Initial setup for local development:
+### Initial setup for local development:
 
+## LangGraph agent server
 ```sh
 python3.12 -m venv venv_agents
 source venv_agents/bin/activate
@@ -40,6 +41,14 @@ pip install -e .
 cp .env.example .env
 nano .env
 ```
+
+```sh
+cd agents
+source ../venv_agents/bin/activate
+langgraph dev --no-browser
+```
+
+## FastAPI payment backend
 
 ```sh
 python3.12 -m venv venv_backend
@@ -51,8 +60,20 @@ nano .env
 ```
 
 ```sh
+cd backend
+source ../venv_backend/bin/activate
+uvicorn src.main:app --reload
+```
+
+
+## Svelte Frontend
+
+---
+
+```sh
 cd cyphertap
-npm run build
+pnpm install
+pnpm run build
 cd ../frontend
 npm install
 
@@ -61,16 +82,35 @@ nano .env
 ```
 
 
+```sh
+cd frontend
+npm run dev
+```
+
+
+
+
+
+
+
+
+
 
 ## How to run for development:
 
 ```sh
-git submodule --init --recursive
+git clone ...
+
+# IMPORTANT
+git submodule update --init --recursive
 ```
 
 ```sh
 # Frontend
-cd frontend
+cd cyphertap
+pnpm install
+pnpm run build
+cd ../frontend
 npm run dev
 ```
 
@@ -90,6 +130,10 @@ langgraph dev --no-browser
 
 ---
 
+## pull latest trace's message history from LangSmith
+
 ```sh
+cd agents/scripts
+./fetch_trace.sh --latest > ./traces/latest.json
 ./fetch_trace.sh --latest | jq '.runs[-1].inputs.messages' > ./traces/messages.json
 ```

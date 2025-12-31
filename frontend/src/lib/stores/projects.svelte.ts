@@ -2,8 +2,15 @@
 // Stores projects with IndexedDB persistence
 
 import { nanoid } from 'nanoid';
-import type { Project } from './types.js';
+import type { Project, ProjectTag } from './types.js';
 import { db } from '$lib/services/indexeddb.js';
+
+const DEFAULT_TAGS: ProjectTag[] = [
+  { name: 'Draft', color: 'bg-red-500', deletable: true },
+  { name: 'Final', color: 'bg-green-500', deletable: true },
+  { name: 'notes', color: 'bg-purple-500', deletable: true },
+  { name: 'Human-edit ONLY', color: 'bg-red-500', deletable: false }
+];
 
 // Reactive state using Svelte 5 runes
 let projects = $state<Project[]>([]);
@@ -55,7 +62,8 @@ function createProject(title: string, npub: string): Project {
     npub,
     title,
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
+    tags: [...DEFAULT_TAGS]
   };
   
   projects = [...projects, project];
@@ -67,7 +75,7 @@ function createProject(title: string, npub: string): Project {
   return project;
 }
 
-function updateProject(id: string, updates: Partial<Pick<Project, 'title'>>): void {
+function updateProject(id: string, updates: Partial<Project>): void {
   const updatedProject = projects.find(p => p.id === id);
   if (!updatedProject) return;
   
@@ -76,6 +84,27 @@ function updateProject(id: string, updates: Partial<Pick<Project, 'title'>>): vo
   
   // Persist async
   persistProject(updated);
+}
+
+function addProjectTag(projectId: string, tag: ProjectTag): void {
+  const project = projects.find(p => p.id === projectId);
+  if (!project) return;
+  
+  const currentTags = project.tags || [];
+  if (currentTags.some(t => t.name.toLowerCase() === tag.name.toLowerCase())) return;
+  
+  updateProject(projectId, { tags: [...currentTags, tag] });
+}
+
+function deleteProjectTag(projectId: string, tagName: string): void {
+  const project = projects.find(p => p.id === projectId);
+  if (!project) return;
+  
+  const currentTags = project.tags || [];
+  const tagToDelete = currentTags.find(t => t.name === tagName);
+  if (tagToDelete && !tagToDelete.deletable) return;
+  
+  updateProject(projectId, { tags: currentTags.filter(t => t.name !== tagName) });
 }
 
 async function deleteProject(id: string): Promise<void> {
@@ -125,6 +154,8 @@ export const projectStore = {
   init,
   createProject,
   updateProject,
+  addProjectTag,
+  deleteProjectTag,
   deleteProject,
   selectProject,
   loadProjects,
