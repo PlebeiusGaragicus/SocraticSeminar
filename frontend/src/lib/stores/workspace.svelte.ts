@@ -17,39 +17,60 @@ let forceSingleColumn = $state(false);
  * Open an item in the workspace.
  */
 function openItem(id: string, type: TabType, targetColumn?: 'left' | 'right') {
-  // Check if already open
-  if (leftTabs.some(t => t.id === id)) {
+  // 1. If targetColumn is specified, check that column first
+  if (targetColumn === 'left' && leftTabs.some(t => t.id === id)) {
     activeLeftTabId = id;
     return;
   }
-  if (rightTabs.some(t => t.id === id)) {
+  if (targetColumn === 'right' && rightTabs.some(t => t.id === id)) {
     activeRightTabId = id;
     rightPanelCollapsed = false;
     forceSingleColumn = false;
     return;
+  }
+
+  // 2. If it's in the OTHER column and targetColumn is specified, move it
+  if (targetColumn === 'left' && rightTabs.some(t => t.id === id)) {
+    moveTab(id, 'right', 'left');
+    return;
+  }
+  if (targetColumn === 'right' && leftTabs.some(t => t.id === id)) {
+    moveTab(id, 'left', 'right');
+    return;
+  }
+
+  // 3. If no target column, check if it's already open anywhere
+  if (!targetColumn) {
+    if (leftTabs.some(t => t.id === id)) {
+      activeLeftTabId = id;
+      return;
+    }
+    if (rightTabs.some(t => t.id === id)) {
+      activeRightTabId = id;
+      rightPanelCollapsed = false;
+      forceSingleColumn = false;
+      return;
+    }
+    
+    // Default logic: where to open new item
+    if (leftTabs.length === 0 || forceSingleColumn) {
+      targetColumn = 'left';
+    } else {
+      targetColumn = 'right';
+    }
   }
 
   const newItem: TabItem = { id, type };
 
-  // Determine which column to open in
+  // 4. Actually open it in the target column
   if (targetColumn === 'left') {
     leftTabs = [...leftTabs, newItem];
     activeLeftTabId = id;
-  } else if (targetColumn === 'right') {
+  } else {
     rightTabs = [...rightTabs, newItem];
     activeRightTabId = id;
     rightPanelCollapsed = false;
     forceSingleColumn = false;
-  } else {
-    // Default logic
-    if (leftTabs.length === 0 || forceSingleColumn) {
-      leftTabs = [...leftTabs, newItem];
-      activeLeftTabId = id;
-    } else {
-      rightTabs = [...rightTabs, newItem];
-      activeRightTabId = id;
-      rightPanelCollapsed = false;
-    }
   }
 
   if (type === 'artifact') artifactStore.selectArtifact(id);
@@ -147,9 +168,7 @@ function moveTab(id: string, fromColumn: 'left' | 'right', toColumn: 'left' | 'r
     if (activeRightTabId === id) {
       activeRightTabId = rightTabs[rightTabs.length - 1]?.id ?? null;
     }
-    if (rightTabs.length === 0) {
-      rightPanelCollapsed = true;
-    }
+    // We don't auto-collapse here to allow empty right panel
   }
 
   // Add to target

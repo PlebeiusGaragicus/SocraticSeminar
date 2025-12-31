@@ -330,6 +330,7 @@
 
   // Drag and drop state
   let isDraggingOver = $state(false);
+  let isDraggingRightEdge = $state(false);
 
   function handleDragStart(e: DragEvent, tabId: string, tabType: string) {
     if (e.dataTransfer) {
@@ -343,7 +344,9 @@
 
   function handleDrop(e: DragEvent) {
     e.preventDefault();
+    const wasDraggingRightEdge = isDraggingRightEdge;
     isDraggingOver = false;
+    isDraggingRightEdge = false;
     
     const id = e.dataTransfer?.getData('application/svelte-tab-id');
     const type = e.dataTransfer?.getData('application/svelte-tab-type');
@@ -351,13 +354,19 @@
 
     if (!id || !type) return;
 
+    // Determine target column
+    let targetColumn: 'left' | 'right' = column;
+    if (column === 'left' && workspaceStore.rightPanelCollapsed && wasDraggingRightEdge) {
+      targetColumn = 'right';
+    }
+
     if (sourceColumn && (sourceColumn === 'left' || sourceColumn === 'right')) {
-      if (sourceColumn !== column) {
-        workspaceStore.moveTab(id, sourceColumn, column);
+      if (sourceColumn !== targetColumn) {
+        workspaceStore.moveTab(id, sourceColumn as 'left' | 'right', targetColumn);
       }
     } else {
       // Sidebar drag or unknown source
-      workspaceStore.openItem(id, type as any, column);
+      workspaceStore.openItem(id, type as any, targetColumn);
     }
   }
 
@@ -367,24 +376,44 @@
       e.dataTransfer.dropEffect = 'move';
     }
     isDraggingOver = true;
+
+    if (column === 'left' && workspaceStore.rightPanelCollapsed) {
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      isDraggingRightEdge = x > rect.width * 0.8; // Right 20%
+    } else {
+      isDraggingRightEdge = false;
+    }
   }
 
   function handleDragLeave() {
     isDraggingOver = false;
+    isDraggingRightEdge = false;
   }
 </script>
 
 <div 
-  class={cn(
-    "flex h-full flex-col bg-zinc-950 relative transition-colors duration-200",
-    isDraggingOver ? "ring-2 ring-inset ring-amber-500/30 bg-amber-500/5" : ""
-  )}
+  class="flex h-full flex-col bg-zinc-950 relative"
   role="region"
   aria-label="Tabbed workspace panel"
   ondragover={handleDragOver}
   ondragleave={handleDragLeave}
   ondrop={handleDrop}
 >
+  <!-- Drag over overlay -->
+  {#if isDraggingOver}
+    <div class={cn(
+      "absolute inset-0 z-50 pointer-events-none border-2 border-amber-500/30 transition-all",
+      isDraggingRightEdge ? "bg-gradient-to-l from-amber-500/10 to-transparent border-r-4 border-r-amber-500/50" : "bg-amber-500/5"
+    )}>
+      {#if isDraggingRightEdge}
+        <div class="absolute right-4 top-1/2 -translate-y-1/2 rounded bg-amber-500 px-2 py-1 text-[10px] font-bold text-black uppercase tracking-wider shadow-lg">
+          Split Right
+        </div>
+      {/if}
+    </div>
+  {/if}
+
   {#if showNewMenu}
     <div 
       class="fixed inset-0 z-40" 
