@@ -10,6 +10,7 @@
   import { getFileIcon } from '$lib/icons.js';
   import { cn } from '$lib/utils.js';
   import ThreadList from './ThreadList.svelte';
+  import NewFileModal from './NewFileModal.svelte';
 
   interface Props {
     onSelectFile: (artifact: Artifact) => void;
@@ -26,8 +27,7 @@
   }: Props = $props();
 
   // File creation state
-  let isCreatingFile = $state(false);
-  let newFileName = $state('');
+  let showNewFileModal = $state(false);
   
   // Section expansion state
   let chatsExpanded = $state(true);
@@ -68,20 +68,6 @@
   const hasEmptyNewThread = $derived(
     threads.some(t => threadStore.getThreadMessageCount(t.id) === 0)
   );
-
-  function handleCreateFile() {
-    if (!newFileName.trim() || !currentProjectId) return;
-    
-    let fileName = newFileName.trim();
-    if (!fileName.endsWith('.md')) {
-      fileName += '.md';
-    }
-    
-    const artifact = artifactStore.createArtifact(currentProjectId, fileName, '');
-    newFileName = '';
-    isCreatingFile = false;
-    onSelectFile(artifact);
-  }
 
   function handleCreateThread() {
     if (!currentProjectId) return;
@@ -218,7 +204,7 @@
           <span class="text-xs font-semibold uppercase tracking-wider">Files</span>
         </button>
         <button
-          onclick={() => (isCreatingFile = true)}
+          onclick={() => (showNewFileModal = true)}
           class="rounded p-1 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-300"
           title="New file"
         >
@@ -228,40 +214,9 @@
 
       {#if filesExpanded}
         <div class="flex flex-1 flex-col overflow-hidden pb-2">
-          <!-- New File Form -->
-          {#if isCreatingFile}
-            <div class="px-3 pb-2">
-              <input
-                type="text"
-                bind:value={newFileName}
-                onkeydown={handleFileKeydown}
-                placeholder="document.md"
-                class="mb-2 w-full rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
-              />
-              <div class="flex gap-2">
-                <button
-                  onclick={handleCreateFile}
-                  disabled={!newFileName.trim()}
-                  class="flex-1 rounded bg-amber-600 px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-amber-500 disabled:opacity-50"
-                >
-                  Create
-                </button>
-                <button
-                  onclick={() => {
-                    isCreatingFile = false;
-                    newFileName = '';
-                  }}
-                  class="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-400 transition-colors hover:bg-zinc-800"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          {/if}
-
           <!-- File List -->
           <div class="flex-1 overflow-y-auto py-1">
-            {#if artifacts.length === 0 && !isCreatingFile}
+            {#if artifacts.length === 0}
               <div class="px-3 py-4 text-center text-xs text-zinc-600">
                 No files yet
               </div>
@@ -336,6 +291,10 @@
       {threads.length} thread{threads.length !== 1 ? 's' : ''} · {artifacts.length} file{artifacts.length !== 1 ? 's' : ''}
     </div>
   </div>
+{/if}
+
+{#if showNewFileModal}
+  <NewFileModal onClose={() => (showNewFileModal = false)} />
 {/if}
 
 <!-- Delete File Confirmation Modal -->

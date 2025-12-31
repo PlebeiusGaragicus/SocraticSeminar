@@ -16,6 +16,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { browser } from '$app/environment';
   import ChatPanel from './ChatPanel.svelte';
+  import NewFileModal from './NewFileModal.svelte';
   import { Button } from './ui/index.js';
   import MessageCircle from '@lucide/svelte/icons/message-circle';
 
@@ -235,9 +236,10 @@
   }
 
   let showNewMenu = $state(false);
+  let showNewFileModal = $state(false);
 
   function handleCreateFile() {
-    workspaceStore.createNewFile(column);
+    showNewFileModal = true;
     showNewMenu = false;
   }
 
@@ -483,6 +485,10 @@
     </div>
   {/if}
 </div>
+
+{#if showNewFileModal}
+  <NewFileModal {column} onClose={() => (showNewFileModal = false)} />
+{/if}
 
 <style>
   :global(.cm-editor) { height: 100%; background-color: #0a0a0a; }
