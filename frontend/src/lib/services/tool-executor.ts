@@ -171,20 +171,40 @@ async function executeReadFile(
     };
   }
 
-  const artifact = await db.artifacts.get(fileId);
-  
-  if (!artifact) {
-    return {
-      tool_call_id: toolCallId,
-      name: toolName,
-      content: '',
-      error: `File not found: ${fileId}`
-    };
+  // Try to get live content from store first (most up-to-date)
+  let content = artifactStore.getLiveContent(fileId);
+  let title = 'Untitled';
+  let version = 0;
+  let totalVersions = 1;
+
+  if (content === null) {
+    // If not in live map, fallback to DB
+    const artifact = await db.artifacts.get(fileId);
+    if (!artifact) {
+      return {
+        tool_call_id: toolCallId,
+        name: toolName,
+        content: '',
+        error: `File not found: ${fileId}`
+      };
+    }
+    const currentVersion = artifact.versions[artifact.currentVersionIndex];
+    content = currentVersion?.content || '';
+    title = currentVersion?.title || 'Untitled';
+    version = artifact.currentVersionIndex;
+    totalVersions = artifact.versions.length;
+  } else {
+    // Found in live map, get metadata from store
+    const artifact = artifactStore.artifacts.find(a => a.id === fileId);
+    if (artifact) {
+      const currentVersion = artifact.versions[artifact.currentVersionIndex];
+      title = currentVersion?.title || 'Untitled';
+      version = artifact.currentVersionIndex;
+      totalVersions = artifact.versions.length;
+    }
   }
 
-  const currentVersion = artifact.versions[artifact.currentVersionIndex];
-  
-  if (!currentVersion || !currentVersion.content) {
+  if (content === '') {
     return {
       tool_call_id: toolCallId,
       name: toolName,
@@ -195,11 +215,11 @@ async function executeReadFile(
 
   // Return structured response
   const result = {
-    id: artifact.id,
-    title: currentVersion.title,
-    content: currentVersion.content,
-    version: artifact.currentVersionIndex,
-    totalVersions: artifact.versions.length
+    id: fileId,
+    title,
+    content,
+    version,
+    totalVersions
   };
 
   return {

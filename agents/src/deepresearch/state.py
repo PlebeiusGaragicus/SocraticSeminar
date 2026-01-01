@@ -51,11 +51,9 @@ class DeepResearchState(TypedDict, total=False):
     - Message history (required for create_agent)
     - Cashu payment state for streaming micropayments
     - Research-specific fields
-    - Server-side files (added by FilesystemMiddleware)
     - Todo list (added by TodoListMiddleware)
     
     Note: Some state fields are added automatically by middleware:
-    - `files`: Server-side ephemeral files (FilesystemMiddleware)
     - `todos`: Task tracking list (TodoListMiddleware)
     """
     

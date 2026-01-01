@@ -209,12 +209,13 @@ import type { ScratchFile, TodoItem } from './types.js';
 function buildProjectFiles(): ProjectFile[] {
   const artifacts = artifactStore.artifacts;
   return artifacts.map(artifact => {
+    const content = artifactStore.getLiveContent(artifact.id);
     const currentVersion = artifact.versions[artifact.currentVersionIndex];
     return {
       id: artifact.id,
       title: currentVersion?.title || 'Untitled',
       file_type: 'artifact' as const,
-      content: currentVersion?.content || ''
+      content: content || ''
     };
   });
 }
@@ -771,7 +772,7 @@ async function handleClientToolInterrupt(
       if (fileModCall.name === 'patch_file') {
         const artifact = artifactStore.artifacts.find(a => a.id === artifactId);
         if (artifact) {
-          const oldContent = artifact.versions[artifact.currentVersionIndex]?.content || '';
+          const oldContent = artifactStore.getLiveContent(artifactId) || '';
           let newContent = '';
 
           const search = args.search as string;

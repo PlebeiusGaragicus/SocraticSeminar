@@ -57,7 +57,7 @@
   
   // Per-tab autosave timers
   const saveTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
-  const AUTOSAVE_DELAY = 2000;
+  const AUTOSAVE_DELAY = 500;
   
   let cmModules = $state<any>(null);
 
@@ -102,7 +102,7 @@
       destroy() {
         if (editor) {
           if (currentEditorArtifactId) {
-            saveToArtifact(currentEditorArtifactId, true);
+            saveToArtifact(currentEditorArtifactId, false);
           }
           editor.destroy();
           editor = null;
@@ -123,7 +123,7 @@
     if (!activeArtifact || !canGoPrev) return;
     const targetIndex = activeArtifact.currentVersionIndex - 1;
     if (currentEditorArtifactId) {
-      saveToArtifact(currentEditorArtifactId, true);
+      saveToArtifact(currentEditorArtifactId, false);
     }
     artifactStore.setArtifactVersion(activeArtifact.id, targetIndex);
   }
@@ -132,7 +132,7 @@
     if (!activeArtifact || !canGoNext) return;
     const targetIndex = activeArtifact.currentVersionIndex + 1;
     if (currentEditorArtifactId) {
-      saveToArtifact(currentEditorArtifactId, true);
+      saveToArtifact(currentEditorArtifactId, false);
     }
     artifactStore.setArtifactVersion(activeArtifact.id, targetIndex);
   }
@@ -203,7 +203,7 @@
   onDestroy(() => {
     saveTimeouts.forEach((timeout, id) => {
       clearTimeout(timeout);
-      saveToArtifact(id, true);
+      saveToArtifact(id, false);
     });
     saveTimeouts.clear();
     editor?.destroy();
@@ -218,8 +218,8 @@
     // 1. Handle artifact switch or panel closing (Saving)
     const idToSave = currentEditorArtifactId;
     if (idToSave && (!isShowingArtifact || artifactId !== idToSave)) {
-      // Save as a new version when switching away or closing
-      saveToArtifact(idToSave, true);
+      // Save in-place when switching away or closing
+      saveToArtifact(idToSave, false);
       currentEditorArtifactId = null;
     }
 
@@ -240,6 +240,7 @@
             createSocraticTheme(EditorView), livePreview, EditorView.lineWrapping,
             EditorView.updateListener.of((update: any) => { 
               if (update.docChanged && currentEditorArtifactId) {
+                artifactStore.updateLiveContent(currentEditorArtifactId, update.state.doc.toString());
                 scheduleAutoSave(currentEditorArtifactId); 
               } 
             }),
@@ -248,7 +249,7 @@
                 // Only trigger a save on blur if there are actually pending changes
                 // This prevents redundant versions when just clicking around or navigating
                 if (currentEditorArtifactId && saveTimeouts.has(currentEditorArtifactId)) {
-                  saveToArtifact(currentEditorArtifactId, true);
+                  saveToArtifact(currentEditorArtifactId, false);
                 }
               }
             })
@@ -270,22 +271,15 @@
       const normalizedNew = newValue.trim();
 
       if (normalizedCurrent !== normalizedNew) {
-        // If we have unsaved local changes (pending autosave), 
-        // we must commit them before accepting the external update.
-        // This prevents the "reversion" bug where user typing is lost
-        // when an agent update or external state change occurs.
-        const activeId = currentEditorArtifactId;
-        if (activeId && saveTimeouts.has(activeId)) {
-          saveToArtifact(activeId, true);
-          // The next effect cycle will handle syncing with the updated store
+        // If the user is currently typing (has a pending autosave),
+        // we don't want to overwrite their editor content.
+        // The autosave will eventually run and update the store.
+        if (saveTimeouts.has(artifactId as string)) {
           return;
         }
 
-        // Only overwrite if the content is actually different, 
-        // not just whitespace or if the user is currently typing
-        if (!saveTimeouts.has(artifactId as string)) {
-          editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: newValue } });
-        }
+        // Only overwrite if the content is actually different and the user is NOT typing
+        editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: newValue } });
       }
     }
   });

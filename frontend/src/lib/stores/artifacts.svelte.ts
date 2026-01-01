@@ -10,6 +10,7 @@ import { projectStore } from './projects.svelte.js';
 let artifacts = $state<Artifact[]>([]);
 let currentArtifactId = $state<string | null>(null);
 let openArtifactIds = $state<string[]>([]);
+let liveContentMap = $state<Record<string, string>>({});
 let pendingChanges = $state<{
   artifactId: string;
   newContent: string;
@@ -116,7 +117,7 @@ function updateArtifact(
   id: string,
   title: string,
   content: string,
-  createNewVersion: boolean = true
+  createNewVersion: boolean = false
 ): ArtifactVersion {
   const artifact = artifacts.find((a) => a.id === id);
   if (!artifact) {
@@ -127,9 +128,7 @@ function updateArtifact(
   let updatedArtifact: Artifact;
   let resultVersion: ArtifactVersion;
 
-  const isOldVersion = artifact.currentVersionIndex < artifact.versions.length - 1;
-
-  if (createNewVersion || isOldVersion) {
+  if (createNewVersion) {
     const newVersion: ArtifactVersion = {
       index: artifact.versions.length,
       title,
@@ -166,6 +165,9 @@ function updateArtifact(
   }
   
   artifacts = artifacts.map((a) => a.id === id ? updatedArtifact : a);
+  
+  // Also update live content map so everything is in sync
+  liveContentMap[id] = content;
   
   // Persist async
   persistArtifact(updatedArtifact);
@@ -269,11 +271,25 @@ function selectArtifact(id: string | null): void {
 
 function closeArtifact(id: string): void {
   openArtifactIds = openArtifactIds.filter(openId => openId !== id);
+  delete liveContentMap[id];
   
   if (currentArtifactId === id) {
     // Select another open artifact or null
     currentArtifactId = openArtifactIds[openArtifactIds.length - 1] ?? null;
   }
+}
+
+function updateLiveContent(id: string, content: string): void {
+  liveContentMap[id] = content;
+}
+
+function getLiveContent(id: string): string | null {
+  if (liveContentMap[id] !== undefined) {
+    return liveContentMap[id];
+  }
+  const artifact = artifacts.find(a => a.id === id);
+  if (!artifact) return null;
+  return artifact.versions[artifact.currentVersionIndex]?.content || '';
 }
 
 function loadArtifacts(loadedArtifacts: Artifact[]): void {
@@ -326,6 +342,7 @@ function reset(): void {
   artifacts = [];
   currentArtifactId = null;
   openArtifactIds = [];
+  liveContentMap = {};
   pendingChanges = null;
 }
 
@@ -336,6 +353,7 @@ function reset(): void {
 function clearProjectState(): void {
   currentArtifactId = null;
   openArtifactIds = [];
+  liveContentMap = {};
   pendingChanges = null;
 }
 
@@ -360,6 +378,8 @@ export const artifactStore = {
   deleteArtifact,
   selectArtifact,
   closeArtifact,
+  updateLiveContent,
+  getLiveContent,
   loadArtifacts,
   setPendingChanges,
   acceptPendingChanges,
