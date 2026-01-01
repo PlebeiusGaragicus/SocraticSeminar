@@ -57,7 +57,7 @@ stored locally on the user's device (browser) and will be provided when you requ
 
 **Writing:**
 - `write_file(title, content, file_type)` - Create a new file
-- `edit_file(file_id, new_content, description)` - Edit an existing file
+- `patch_file(file_id, search, replace, description)` - Edit specific portion of a file
 
 ### Guidelines
 
@@ -65,7 +65,8 @@ stored locally on the user's device (browser) and will be provided when you requ
 2. **Use grep_files** when searching for specific text patterns across files
 3. **Use glob_files** when looking for files by name pattern
 4. **Read files before editing** to understand current content
-5. **Explain your changes** clearly when writing or editing files"""
+5. **Use patch_file** for all edits to existing files
+6. **Explain your changes** clearly when writing or patching files"""
 
 
 # =============================================================================
@@ -204,43 +205,6 @@ Returns success message with new file ID.""",
     )
 
 
-def _create_edit_file_tool() -> StructuredTool:
-    """Create the edit_file tool."""
-    
-    def edit_file(
-        file_id: str,
-        new_content: str,
-        description: str = "",
-        runtime: ToolRuntime = None,
-    ) -> str:
-        """Edit an existing file's content.
-        
-        This action executes on the client-side.
-        
-        Args:
-            file_id: ID of the file to edit
-            new_content: Complete new content for the file
-            description: Description of changes (helps user understand)
-        
-        Returns:
-            Success message, or error if file not found
-        """
-        return "Tool execution pending - awaiting client response"
-    
-    return StructuredTool.from_function(
-        name="edit_file",
-        func=edit_file,
-        description="""Edit a file's content.
-
-Args:
-    file_id: File ID from list_files()
-    new_content: Complete new content
-    description: What changed (optional but helpful)
-
-Returns success message.""",
-    )
-
-
 def _create_grep_files_tool() -> StructuredTool:
     """Create the grep_files tool for pattern search in file contents."""
     
@@ -310,6 +274,47 @@ Returns array of matching files with id, title, file_type.""",
     )
 
 
+def _create_patch_file_tool() -> StructuredTool:
+    """Create the patch_file tool."""
+    
+    def patch_file(
+        file_id: str,
+        search: str,
+        replace: str,
+        description: str = "",
+        runtime: ToolRuntime = None,
+    ) -> str:
+        """Patch an existing file by replacing a specific string with another.
+        
+        This tool allows you to change a specific portion of a file by replacing a search string.
+        The 'search' string must match EXACTLY (including whitespace) in the file.
+        
+        Args:
+            file_id: ID of the file to patch
+            search: The exact text to find in the file
+            replace: The text to replace it with
+            description: Description of what is being changed
+        
+        Returns:
+            Success message, or error if search string not found
+        """
+        return "Tool execution pending - awaiting client response"
+    
+    return StructuredTool.from_function(
+        name="patch_file",
+        func=patch_file,
+        description="""Patch a file by replacing a specific string.
+        
+Args:
+    file_id: File ID from list_files()
+    search: EXACT text to find in the file
+    replace: New text to insert
+    description: What changed (optional but helpful)
+
+Returns success message or error if search text not found.""",
+    )
+
+
 # Tools that can be auto-approved by the client
 AUTO_APPROVE_TOOLS = {
     "list_files", 
@@ -317,12 +322,13 @@ AUTO_APPROVE_TOOLS = {
     "search_files", 
     "grep_files", 
     "glob_files",
-    "write_file",
-    "edit_file",
 }
 
 # Tools that require explicit human approval
-REQUIRE_APPROVAL_TOOLS = set()
+REQUIRE_APPROVAL_TOOLS = {
+    "write_file",
+    "patch_file",
+}
 
 
 # =============================================================================
@@ -378,7 +384,7 @@ class ClientToolsMiddleware(AgentMiddleware[ClientToolsState, None]):
             _create_read_file_tool(),
             _create_search_files_tool(),
             _create_write_file_tool(),
-            _create_edit_file_tool(),
+            _create_patch_file_tool(),
             _create_grep_files_tool(),
             _create_glob_files_tool(),
         ]
@@ -508,12 +514,12 @@ def _format_tool_description(tool_name: str, args: dict[str, Any]) -> str:
         preview = content[:200] + "..." if len(content) > 200 else content
         return f"Create new file '{title}'\n\nContent preview:\n{preview}"
     
-    elif tool_name == "edit_file":
+    elif tool_name == "patch_file":
         file_id = args.get("file_id", "unknown")
         description = args.get("description", "No description provided")
-        new_content = args.get("new_content", "")
-        preview = new_content[:200] + "..." if len(new_content) > 200 else new_content
-        return f"Edit file '{file_id}'\n\n{description}\n\nNew content preview:\n{preview}"
+        search = args.get("search", "")
+        replace = args.get("replace", "")
+        return f"Patch file '{file_id}'\n\n{description}\n\nSearch:\n{search}\n\nReplace:\n{replace}"
     
     else:
         return f"Execute {tool_name} with args: {args}"

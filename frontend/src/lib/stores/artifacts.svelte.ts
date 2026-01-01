@@ -115,7 +115,8 @@ function createArtifact(
 function updateArtifact(
   id: string,
   title: string,
-  content: string
+  content: string,
+  createNewVersion: boolean = true
 ): ArtifactVersion {
   const artifact = artifacts.find((a) => a.id === id);
   if (!artifact) {
@@ -123,26 +124,53 @@ function updateArtifact(
   }
   
   const now = Date.now();
-  const newVersion: ArtifactVersion = {
-    index: artifact.versions.length,
-    title,
-    content,
-    createdAt: now
-  };
-  
-  const updatedArtifact = {
-    ...artifact,
-    versions: [...artifact.versions, newVersion],
-    currentVersionIndex: newVersion.index,
-    updatedAt: now
-  };
+  let updatedArtifact: Artifact;
+  let resultVersion: ArtifactVersion;
+
+  const isOldVersion = artifact.currentVersionIndex < artifact.versions.length - 1;
+
+  if (createNewVersion || isOldVersion) {
+    const newVersion: ArtifactVersion = {
+      index: artifact.versions.length,
+      title,
+      content,
+      createdAt: now
+    };
+    
+    updatedArtifact = {
+      ...artifact,
+      versions: [...artifact.versions, newVersion],
+      currentVersionIndex: newVersion.index,
+      updatedAt: now
+    };
+    resultVersion = newVersion;
+  } else {
+    // Update current version in place
+    const versions = [...artifact.versions];
+    const currentVersion = versions[artifact.currentVersionIndex];
+    
+    if (currentVersion) {
+      versions[artifact.currentVersionIndex] = {
+        ...currentVersion,
+        title,
+        content
+      };
+    }
+
+    updatedArtifact = {
+      ...artifact,
+      versions,
+      updatedAt: now
+    };
+    resultVersion = versions[artifact.currentVersionIndex];
+  }
   
   artifacts = artifacts.map((a) => a.id === id ? updatedArtifact : a);
   
   // Persist async
   persistArtifact(updatedArtifact);
   
-  return newVersion;
+  return resultVersion;
 }
 
 function setArtifactVersion(id: string, versionIndex: number): void {
@@ -290,6 +318,10 @@ function rejectPendingChanges(): void {
   pendingChanges = null;
 }
 
+function clearPendingChanges(): void {
+  pendingChanges = null;
+}
+
 function reset(): void {
   artifacts = [];
   currentArtifactId = null;
@@ -332,6 +364,7 @@ export const artifactStore = {
   setPendingChanges,
   acceptPendingChanges,
   rejectPendingChanges,
+  clearPendingChanges,
   reset,
   clearProjectState
 };

@@ -213,7 +213,7 @@ The user's actual documents stored in their browser. Use these client-side tools
 - `search_files(query)` - Semantic search across user files
 - `grep_files(pattern)` - Pattern search in file contents
 - `write_file(title, content)` - Create new file
-- `edit_file(file_id, new_content)` - Edit file
+- `patch_file(file_id, search, replace)` - Edit a specific portion of a file
 
 ## Guidelines
 

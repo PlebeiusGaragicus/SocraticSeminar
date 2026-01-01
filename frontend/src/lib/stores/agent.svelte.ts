@@ -759,6 +759,37 @@ async function handleClientToolInterrupt(
       );
     }
   } else {
+    // If this is a write tool that requires approval, we can show a diff
+    const fileModCall = interrupt.tool_calls.find(tc => 
+      ['patch_file', 'write_file'].includes(tc.name)
+    );
+
+    if (fileModCall) {
+      const args = fileModCall.args;
+      const artifactId = args.file_id as string || args.fileId as string;
+      
+      if (fileModCall.name === 'patch_file') {
+        const artifact = artifactStore.artifacts.find(a => a.id === artifactId);
+        if (artifact) {
+          const oldContent = artifact.versions[artifact.currentVersionIndex]?.content || '';
+          let newContent = '';
+
+          const search = args.search as string;
+          const replace = args.replace as string;
+          if (oldContent.includes(search)) {
+            newContent = oldContent.replace(search, replace);
+          } else {
+            newContent = oldContent; // Fallback or handle error
+          }
+
+          artifactStore.setPendingChanges(artifactId, newContent, oldContent);
+        }
+      } else if (fileModCall.name === 'write_file') {
+        // For new files, show diff against empty
+        artifactStore.setPendingChanges('new_file', args.content as string, '');
+      }
+    }
+
     if (interrupt.action_requests && interrupt.review_configs) {
       state.hitlInterrupt = {
         action_requests: interrupt.action_requests,
@@ -802,6 +833,9 @@ async function executeApprovedWriteTools(threadId?: string): Promise<void> {
   state.isStreaming = true;
   state.isInterrupted = false;
   updateThreadStatus(localThreadId);
+  
+  // Clear any UI diffs
+  artifactStore.clearPendingChanges();
   
   await resumeWithToolResults(
     state.langGraphThreadId,
@@ -877,6 +911,9 @@ async function rejectClientToolInterrupt(threadId?: string): Promise<void> {
   state.isStreaming = true;
   state.isInterrupted = false;
   updateThreadStatus(localThreadId);
+  
+  // Clear any UI diffs
+  artifactStore.clearPendingChanges();
   
   const rejectionResults = toolCalls.map(tc => ({
     tool_call_id: tc.id,

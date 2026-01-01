@@ -76,7 +76,7 @@ Allows the agent to ask clarifying questions when user intent is unclear.
 
 Provides server-side ephemeral storage for agent working memory.
 
-**Tools:** `ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`
+**Tools:** `ls`, `read_file`, `write_file`, `patch_file`, `glob`, `grep`
 
 Use for:
 - Intermediate analysis and notes
@@ -96,7 +96,7 @@ Provides access to user's project files stored in the browser.
 - `grep_files(pattern, glob_pattern?, case_sensitive?)` - Pattern search
 - `glob_files(pattern)` - Find files by name pattern
 - `write_file(title, content, file_type)` - Create new file
-- `edit_file(file_id, new_content, description)` - Edit file
+- `patch_file(file_id, search, replace, description)` - Edit file
 
 ### 6. HumanInTheLoopMiddleware
 
@@ -244,7 +244,7 @@ The frontend handles interrupts by:
 2. **Rendering appropriate UI**:
    - Text input for `ask_user`
    - Choice buttons for `ask_choices`
-   - Diff view for `edit_file` approval
+   - Diff view for `patch_file` approval
 
 3. **Resuming the graph** with the response in the expected format
 

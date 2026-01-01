@@ -5,7 +5,6 @@ Architecture:
 - CashuPaymentMiddleware: Streaming micropayments with per-iteration deduction
 - TodoListMiddleware: Task tracking for complex multi-step operations
 - ClarifyWithHumanMiddleware: Ask user for intent clarification
-- FilesystemMiddleware: Server-side ephemeral storage for agent working memory
 - ClientToolsMiddleware: Client-side file operations via interrupts
 - HumanInTheLoopMiddleware: Approval for funding requests
 
@@ -26,9 +25,6 @@ from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Checkpointer
-
-from deepagents.middleware.filesystem import FilesystemMiddleware
-from deepagents.backends import StateBackend
 
 from src.middleware import (
     CashuPaymentMiddleware, 
@@ -140,7 +136,7 @@ These are the user's actual documents stored in their browser. Use these tools:
 - `grep_files(pattern)` - Pattern search in file contents
 - `glob_files(pattern)` - Find files by name pattern
 - `write_file(title, content)` - Create new file
-- `edit_file(file_id, new_content)` - Edit file
+- `patch_file(file_id, search, replace)` - Edit a specific portion of a file
 
 ### 2. Your Working Memory (Server-side)
 Ephemeral storage for your notes, analysis, and drafts. Use these tools:
@@ -187,7 +183,6 @@ def create_deeptutor_agent(
     1. CashuPaymentMiddleware - Payment validation and per-iteration deduction
     2. TodoListMiddleware - Task tracking for complex operations
     3. ClarifyWithHumanMiddleware - Ask user for intent clarification
-    4. FilesystemMiddleware - Server-side ephemeral storage for agent memory
     5. ClientToolsMiddleware - File operations via client interrupts
     6. HumanInTheLoopMiddleware - Approval for writes and funding
     7. Any additional middleware
@@ -235,11 +230,7 @@ def create_deeptutor_agent(
 
         # 3. Clarification tools - ask user for intent clarification
         ClarifyWithHumanMiddleware(),
-        
-        # 4. Filesystem - server-side ephemeral storage for agent working memory
-        #    Agent can write to /scratch/, /summaries/, /analysis/ without approval
-        FilesystemMiddleware(backend=StateBackend),
-        
+
         # 5. Client tools - ALL file operations interrupt for client-side execution
         ClientToolsMiddleware(),
 

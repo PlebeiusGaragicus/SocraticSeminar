@@ -224,10 +224,10 @@ export interface HITLResumeResponse {
 }
 
 // Read and write tools that should be auto-approved (client-side execution)
-export const AUTO_APPROVE_TOOLS = ['list_files', 'read_file', 'search_files', 'grep_files', 'glob_files', 'write_file', 'edit_file'];
+export const AUTO_APPROVE_TOOLS = ['list_files', 'read_file', 'search_files', 'grep_files', 'glob_files'];
 
-// Tools that require human approval (currently empty, but reserved for safety-critical tools)
-export const WRITE_TOOLS = [];
+// Tools that require human approval
+export const WRITE_TOOLS = ['write_file', 'patch_file'];
 
 // =============================================================================
 // CASHU PAYMENT TYPES

@@ -12,7 +12,7 @@
   import ExternalLink from '@lucide/svelte/icons/external-link';
   import PanelRightOpen from '@lucide/svelte/icons/panel-right-open';
   import PanelRightClose from '@lucide/svelte/icons/panel-right-close';
-  import { artifactStore, threadStore, workspaceStore, projectStore, sourceStore } from '$lib/stores/index.js';
+  import { artifactStore, threadStore, workspaceStore, projectStore, sourceStore, agentStore } from '$lib/stores/index.js';
   import type { TabItem, Artifact, Thread, Source } from '$lib/stores/types.js';
   import { getFileIcon } from '$lib/icons.js';
   import { cn } from '$lib/utils.js';
@@ -53,9 +53,12 @@
   let containerMounted = $state(false);
   let editor: EditorView | null = null;
   let isEditorReady = $state(false);
-  let currentEditorArtifactId: string | null = null;
-  let saveTimeout: ReturnType<typeof setTimeout> | null = null;
-  const AUTOSAVE_DELAY = 500;
+  let currentEditorArtifactId = $state<string | null>(null);
+  
+  // Per-tab autosave timers
+  const saveTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+  const AUTOSAVE_DELAY = 2000;
+  
   let cmModules = $state<any>(null);
 
   const activeTab = $derived(tabs.find(t => t.id === activeTabId) ?? null);
@@ -83,6 +86,8 @@
     activeTab?.type === 'source' ? sourceStore.sources.find(s => s.id === activeTabId) : null
   );
 
+  const clientToolInterrupt = $derived(agentStore.clientToolInterrupt);
+
   const STATUS_COLORS = {
     idle: "bg-green-500",
     busy: "bg-blue-500",
@@ -96,8 +101,9 @@
     return {
       destroy() {
         if (editor) {
-          if (saveTimeout) { clearTimeout(saveTimeout); saveTimeout = null; }
-          if (currentEditorArtifactId) saveToArtifact(currentEditorArtifactId);
+          if (currentEditorArtifactId) {
+            saveToArtifact(currentEditorArtifactId, true);
+          }
           editor.destroy();
           editor = null;
           currentEditorArtifactId = null;
@@ -115,30 +121,55 @@
 
   function handlePrevVersion() {
     if (!activeArtifact || !canGoPrev) return;
-    artifactStore.setArtifactVersion(activeArtifact.id, activeArtifact.currentVersionIndex - 1);
+    const targetIndex = activeArtifact.currentVersionIndex - 1;
+    if (currentEditorArtifactId) {
+      saveToArtifact(currentEditorArtifactId, true);
+    }
+    artifactStore.setArtifactVersion(activeArtifact.id, targetIndex);
   }
 
   function handleNextVersion() {
     if (!activeArtifact || !canGoNext) return;
-    artifactStore.setArtifactVersion(activeArtifact.id, activeArtifact.currentVersionIndex + 1);
+    const targetIndex = activeArtifact.currentVersionIndex + 1;
+    if (currentEditorArtifactId) {
+      saveToArtifact(currentEditorArtifactId, true);
+    }
+    artifactStore.setArtifactVersion(activeArtifact.id, targetIndex);
   }
 
-  function saveToArtifact(artifactId: string) {
+  function saveToArtifact(artifactId: string, createNewVersion: boolean = false) {
     if (!editor) return;
     const artifact = artifactStore.artifacts.find(a => a.id === artifactId);
     if (!artifact) return;
-    const editorContent = editor.state.doc.toString();
+    
+    // Normalize content comparison to avoid redundant saves from whitespace/line-endings
+    const editorContent = editor.state.doc.toString().trim();
     const version = artifact.versions[artifact.currentVersionIndex];
-    if (version && editorContent !== version.content) {
-      artifactStore.updateArtifact(artifactId, version.title || 'Untitled', editorContent);
+    const versionContent = (version?.content || '').trim();
+    
+    if (version && editorContent !== versionContent) {
+      artifactStore.updateArtifact(artifactId, version.title || 'Untitled', editor.state.doc.toString(), createNewVersion);
+    }
+
+    // Clear the timeout for this artifact as we've just saved it
+    const timeout = saveTimeouts.get(artifactId);
+    if (timeout) {
+      clearTimeout(timeout);
+      saveTimeouts.delete(artifactId);
     }
   }
 
-  function scheduleAutoSave() {
-    if (saveTimeout) clearTimeout(saveTimeout);
-    saveTimeout = setTimeout(() => {
-      if (currentEditorArtifactId) saveToArtifact(currentEditorArtifactId);
+  function scheduleAutoSave(artifactId: string) {
+    const existing = saveTimeouts.get(artifactId);
+    if (existing) clearTimeout(existing);
+    
+    const timeout = setTimeout(() => {
+      // For autosave while typing, we update the current version in place
+      // to avoid creating hundreds of versions.
+      saveToArtifact(artifactId, false);
     }, AUTOSAVE_DELAY);
+    
+    saveTimeouts.set(artifactId, timeout);
   }
 
   function createSocraticTheme(EditorView: any) {
@@ -170,39 +201,91 @@
   });
 
   onDestroy(() => {
-    if (saveTimeout) { clearTimeout(saveTimeout); if (currentEditorArtifactId) saveToArtifact(currentEditorArtifactId); }
+    saveTimeouts.forEach((timeout, id) => {
+      clearTimeout(timeout);
+      saveToArtifact(id, true);
+    });
+    saveTimeouts.clear();
     editor?.destroy();
   });
 
   $effect(() => {
-    if (!browser || !isEditorReady || !cmModules || !containerMounted || !editorContainer || showDiff || activeTab?.type !== 'artifact') return;
+    if (!browser || !isEditorReady || !cmModules || !containerMounted || !editorContainer) return;
+
+    const isShowingArtifact = activeTab?.type === 'artifact' && !showDiff;
+    const artifactId = activeTabId;
+    
+    // 1. Handle artifact switch or panel closing (Saving)
+    const idToSave = currentEditorArtifactId;
+    if (idToSave && (!isShowingArtifact || artifactId !== idToSave)) {
+      // Save as a new version when switching away or closing
+      saveToArtifact(idToSave, true);
+      currentEditorArtifactId = null;
+    }
+
+    if (!isShowingArtifact) return;
+
+    // 2. Initialize or Update Editor
     const content = currentContent();
-    const artifactChanged = activeTabId !== currentEditorArtifactId;
+    const newValue = content?.content || '';
+
     if (!editor) {
       const { EditorView, keymap, highlightActiveLine, EditorState, markdown, languages, oneDark, defaultKeymap, history, historyKeymap, livePreview } = cmModules;
       editor = new EditorView({
         state: EditorState.create({
-          doc: content?.content || '',
+          doc: newValue,
           extensions: [
             highlightActiveLine(), history(), markdown({ codeLanguages: languages }),
             keymap.of([...defaultKeymap, ...historyKeymap]), oneDark,
             createSocraticTheme(EditorView), livePreview, EditorView.lineWrapping,
-            EditorView.updateListener.of((update: any) => { if (update.docChanged) scheduleAutoSave(); })
+            EditorView.updateListener.of((update: any) => { 
+              if (update.docChanged && currentEditorArtifactId) {
+                scheduleAutoSave(currentEditorArtifactId); 
+              } 
+            }),
+            EditorView.domEventHandlers({
+              blur: () => {
+                // Only trigger a save on blur if there are actually pending changes
+                // This prevents redundant versions when just clicking around or navigating
+                if (currentEditorArtifactId && saveTimeouts.has(currentEditorArtifactId)) {
+                  saveToArtifact(currentEditorArtifactId, true);
+                }
+              }
+            })
           ]
         }),
         parent: editorContainer
       });
-      currentEditorArtifactId = activeTabId;
-    } else if (artifactChanged) {
-      if (saveTimeout) clearTimeout(saveTimeout);
-      if (currentEditorArtifactId) saveToArtifact(currentEditorArtifactId);
-      editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: content?.content || '' } });
-      currentEditorArtifactId = activeTabId;
+      currentEditorArtifactId = artifactId;
+    } else if (artifactId !== currentEditorArtifactId) {
+      // Switched to a new artifact (already saved old one above)
+      editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: newValue } });
+      currentEditorArtifactId = artifactId;
     } else {
+      // Same artifact, might be a version change or external update
       const currentValue = editor.state.doc.toString();
-      const newValue = content?.content || '';
-      if (currentValue !== newValue) {
-        editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: newValue } });
+      
+      // Use the same normalization as saveToArtifact for comparison
+      const normalizedCurrent = currentValue.trim();
+      const normalizedNew = newValue.trim();
+
+      if (normalizedCurrent !== normalizedNew) {
+        // If we have unsaved local changes (pending autosave), 
+        // we must commit them before accepting the external update.
+        // This prevents the "reversion" bug where user typing is lost
+        // when an agent update or external state change occurs.
+        const activeId = currentEditorArtifactId;
+        if (activeId && saveTimeouts.has(activeId)) {
+          saveToArtifact(activeId, true);
+          // The next effect cycle will handle syncing with the updated store
+          return;
+        }
+
+        // Only overwrite if the content is actually different, 
+        // not just whitespace or if the user is currently typing
+        if (!saveTimeouts.has(artifactId as string)) {
+          editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: newValue } });
+        }
       }
     }
   });
@@ -333,6 +416,10 @@
   let isDraggingRightEdge = $state(false);
 
   function handleDragStart(e: DragEvent, tabId: string, tabType: string) {
+    if (tabType === 'artifact' && tabId === currentEditorArtifactId) {
+      saveToArtifact(tabId, true);
+    }
+    
     if (e.dataTransfer) {
       e.dataTransfer.setData('application/svelte-tab-id', tabId);
       e.dataTransfer.setData('application/svelte-tab-type', tabType);
@@ -625,8 +712,28 @@
           <div class="flex items-center justify-between border-b border-amber-500/30 bg-amber-500/10 px-4 py-2">
             <span class="text-sm font-medium text-amber-400">Agent proposed changes</span>
             <div class="flex gap-2">
-              <Button variant="ghost" size="sm" onclick={() => artifactStore.rejectPendingChanges()}>Reject</Button>
-              <Button size="sm" class="bg-amber-600" onclick={() => artifactStore.acceptPendingChanges()}>Accept</Button>
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onclick={() => {
+                  if (clientToolInterrupt) {
+                    agentStore.rejectClientToolInterrupt();
+                  } else {
+                    artifactStore.rejectPendingChanges();
+                  }
+                }}
+              >Reject</Button>
+              <Button 
+                size="sm" 
+                class="bg-amber-600" 
+                onclick={() => {
+                  if (clientToolInterrupt) {
+                    agentStore.executeApprovedWriteTools();
+                  } else {
+                    artifactStore.acceptPendingChanges();
+                  }
+                }}
+              >Accept</Button>
             </div>
           </div>
           <div use:setDiffContainer class="flex-1 overflow-auto"></div>

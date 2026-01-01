@@ -11,10 +11,11 @@
  * 4. This service executes tools against local IndexedDB
  * 5. Frontend resumes the graph with tool results
  * 
- * Read operations (list_files, read_file, search_files, grep_files, glob_files) and write operations (write_file, edit_file) are typically auto-approved.
+ * Read operations (list_files, read_file, search_files, grep_files, glob_files) and write operations (write_file, patch_file) require human approval.
  */
 
 import { db } from './indexeddb.js';
+import { artifactStore } from '../stores/artifacts.svelte.js';
 import type { ToolCall, ToolResult, ProjectFile, Artifact, ArtifactVersion } from '../stores/types.js';
 import { nanoid } from 'nanoid';
 
@@ -56,7 +57,7 @@ export async function executeToolCall(
         );
 
       case 'write_file':
-        return await executeWriteFile(
+        return executeWriteFile(
           toolCallId,
           name,
           projectId,
@@ -65,12 +66,13 @@ export async function executeToolCall(
           (args.file_type as 'artifact' | 'document' | 'code') || 'artifact'
         );
 
-      case 'edit_file':
-        return await executeEditFile(
+      case 'patch_file':
+        return executePatchFile(
           toolCallId,
           name,
           args.file_id as string,
-          args.new_content as string,
+          args.search as string,
+          args.replace as string,
           args.description as string || ''
         );
 
@@ -210,14 +212,14 @@ async function executeReadFile(
 /**
  * write_file(title, content, file_type) - Create a new file
  */
-async function executeWriteFile(
+function executeWriteFile(
   toolCallId: string,
   toolName: string,
   projectId: string,
   title: string,
   content: string,
   fileType: 'artifact' | 'document' | 'code'
-): Promise<ToolResult> {
+): ToolResult {
   if (!title) {
     return {
       tool_call_id: toolCallId,
@@ -236,27 +238,9 @@ async function executeWriteFile(
     };
   }
 
-  const now = Date.now();
-  const fileId = nanoid();
+  const artifact = artifactStore.createArtifact(projectId, title, content || '');
 
-  // Create new artifact
-  const newArtifact: Artifact = {
-    id: fileId,
-    projectId: projectId,
-    currentVersionIndex: 0,
-    versions: [{
-      index: 0,
-      title: title,
-      content: content || '',
-      createdAt: now
-    }],
-    createdAt: now,
-    updatedAt: now
-  };
-
-  await db.artifacts.save(newArtifact);
-
-  console.log(`[ToolExecutor] Created new file: ${title} (${fileId})`);
+  console.log(`[ToolExecutor] Created new file via store: ${title} (${artifact.id})`);
 
   return {
     tool_call_id: toolCallId,
@@ -264,24 +248,23 @@ async function executeWriteFile(
     content: JSON.stringify({
       success: true,
       message: `File "${title}" created successfully`,
-      file_id: fileId,
+      file_id: artifact.id,
       file_type: fileType
     })
   };
 }
 
 /**
- * edit_file(file_id, new_content, description) - Edit an existing file
- * 
- * Creates a new version of the file.
+ * patch_file(file_id, search, replace, description) - Patch an existing file
  */
-async function executeEditFile(
+function executePatchFile(
   toolCallId: string,
   toolName: string,
   fileId: string,
-  newContent: string,
+  search: string,
+  replace: string,
   description: string
-): Promise<ToolResult> {
+): ToolResult {
   if (!fileId) {
     return {
       tool_call_id: toolCallId,
@@ -291,46 +274,65 @@ async function executeEditFile(
     };
   }
 
-  const artifact = await db.artifacts.get(fileId);
-  
+  const artifact = artifactStore.artifacts.find(a => a.id === fileId);
   if (!artifact) {
     return {
       tool_call_id: toolCallId,
       name: toolName,
       content: '',
-      error: `File not found: ${fileId}`
+      error: `File not found in store: ${fileId}`
     };
   }
 
   const currentVersion = artifact.versions[artifact.currentVersionIndex];
-  const now = Date.now();
+  if (!currentVersion) {
+    return {
+      tool_call_id: toolCallId,
+      name: toolName,
+      content: '',
+      error: 'File has no content to patch'
+    };
+  }
 
-  // Create new version
-  const newVersion: ArtifactVersion = {
-    index: artifact.versions.length,
-    title: currentVersion?.title || 'Untitled',
-    content: newContent,
-    createdAt: now
-  };
+  const content = currentVersion.content;
+  if (!content.includes(search)) {
+    return {
+      tool_call_id: toolCallId,
+      name: toolName,
+      content: '',
+      error: `Search string not found in file. Make sure it matches exactly (including whitespace and line endings).`
+    };
+  }
 
-  // Update artifact with new version
-  const updatedArtifact: Artifact = {
-    ...artifact,
-    versions: [...artifact.versions, newVersion],
-    currentVersionIndex: artifact.versions.length,
-    updatedAt: now
-  };
+  // Check for multiple occurrences
+  const occurrences = content.split(search).length - 1;
+  if (occurrences > 1) {
+    return {
+      tool_call_id: toolCallId,
+      name: toolName,
+      content: '',
+      error: `Search string found multiple times (${occurrences}). Please provide a more unique search string.`
+    };
+  }
 
-  await db.artifacts.save(updatedArtifact);
+  const newContent = content.replace(search, replace);
 
-  console.log(`[ToolExecutor] Edited file: ${currentVersion?.title || fileId} (new version ${newVersion.index})`);
+  // Create new version via store
+  const newVersion = artifactStore.updateArtifact(
+    fileId,
+    currentVersion.title || 'Untitled',
+    newContent,
+    true
+  );
+
+  console.log(`[ToolExecutor] Patched file via store: ${currentVersion.title || fileId} (new version ${newVersion.index})`);
 
   return {
     tool_call_id: toolCallId,
     name: toolName,
     content: JSON.stringify({
       success: true,
-      message: `File edited successfully${description ? `: ${description}` : ''}`,
+      message: `File patched successfully${description ? `: ${description}` : ''}`,
       file_id: fileId,
       version: newVersion.index,
       previous_version: artifact.currentVersionIndex
