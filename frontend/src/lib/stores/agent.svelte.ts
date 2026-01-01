@@ -359,10 +359,19 @@ async function sendMessage(
         onClientToolInterrupt: (interrupt, interruptId) => {
           state.clientToolInterrupt = interrupt;
           state.hitlInterruptId = interruptId;
-          state.awaitingHumanResponse = true;
-          state.isInterrupted = true;
-          state.isStreaming = false;
-          updateThreadStatus(localThreadId);
+          
+          // If all tools are auto-approvable (like our updated file tools),
+          // we execute and resume immediately without setting awaitingHumanResponse.
+          // This allows the agent to keep running while the UI shows the "Review" diff.
+          if (interrupt.auto_approve) {
+            handleClientToolInterrupt(interrupt, interruptId);
+          } else {
+            state.awaitingHumanResponse = true;
+            state.isInterrupted = true;
+            state.isStreaming = false;
+            updateThreadStatus(localThreadId);
+            handleClientToolInterrupt(interrupt, interruptId);
+          }
         },
         
         onClarificationInterrupt: (interrupt, interruptId) => {
@@ -743,12 +752,7 @@ async function handleClientToolInterrupt(
             updateThreadStatus(localThreadId);
           },
           onClientToolInterrupt: (newInterrupt, newInterruptId) => {
-            state.clientToolInterrupt = newInterrupt;
-            state.hitlInterruptId = newInterruptId;
-            state.awaitingHumanResponse = true;
-            state.isInterrupted = true;
-            state.isStreaming = false;
-            updateThreadStatus(localThreadId);
+            handleClientToolInterrupt(newInterrupt, newInterruptId);
           },
           onError: (err) => {
             state.error = err.message;
@@ -767,27 +771,15 @@ async function handleClientToolInterrupt(
 
     if (fileModCall) {
       const args = fileModCall.args;
-      const artifactId = args.file_id as string || args.fileId as string;
+      const artifactId = (args.file_id as string) || (args.fileId as string);
       
-      if (fileModCall.name === 'patch_file') {
-        const artifact = artifactStore.artifacts.find(a => a.id === artifactId);
-        if (artifact) {
-          const oldContent = artifactStore.getLiveContent(artifactId) || '';
-          let newContent = '';
-
-          const search = args.search as string;
-          const replace = args.replace as string;
-          if (oldContent.includes(search)) {
-            newContent = oldContent.replace(search, replace);
-          } else {
-            newContent = oldContent; // Fallback or handle error
-          }
-
-          artifactStore.setPendingChanges(artifactId, newContent, oldContent);
-        }
-      } else if (fileModCall.name === 'write_file') {
-        // For new files, show diff against empty
-        artifactStore.setPendingChanges('new_file', args.content as string, '');
+      // We don't need to manually calculate diff here anymore because 
+      // the artifactStore now handles tracking agent edits and base versions.
+      // We just need to ensure the tab is open.
+      if (artifactId && artifactId !== 'new_file') {
+        import('./workspace.svelte.js').then(m => {
+          m.workspaceStore.openItem(artifactId, 'artifact');
+        });
       }
     }
 
@@ -1183,6 +1175,8 @@ async function loadThreadState(
           break;
         case 'client_tool':
           state.clientToolInterrupt = stateInfo.interruptData as ClientToolInterrupt;
+          // Re-calculate diff and switch tabs if loading a pending patch
+          handleClientToolInterrupt(state.clientToolInterrupt, state.hitlInterruptId);
           break;
         case 'hitl':
           state.hitlInterrupt = stateInfo.interruptData as HITLInterrupt;

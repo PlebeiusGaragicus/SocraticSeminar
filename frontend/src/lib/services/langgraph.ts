@@ -575,7 +575,7 @@ export async function submitMessage(
 									[interruptId]: { 
 										tool_results: toolResults.map(r => ({
 											tool_call_id: r.tool_call_id,
-											content: r.error || r.content,
+											content: r.error || r.output || r.content,
 											status: r.error ? 'error' : 'success',
 										}))
 									} 
@@ -1282,7 +1282,7 @@ export async function resumeWithToolResults(
 		[interruptId]: {
 			tool_results: toolResults.map(r => ({
 				tool_call_id: r.tool_call_id,
-				content: r.error ? JSON.stringify({ error: r.error }) : r.content,
+				content: r.error ? JSON.stringify({ error: r.error }) : (r.output || r.content),
 			})),
 		}
 	};

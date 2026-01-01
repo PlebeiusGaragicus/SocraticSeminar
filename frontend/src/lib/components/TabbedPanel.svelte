@@ -13,10 +13,12 @@
   import PanelRightOpen from '@lucide/svelte/icons/panel-right-open';
   import PanelRightClose from '@lucide/svelte/icons/panel-right-close';
   import { artifactStore, threadStore, workspaceStore, projectStore, sourceStore, agentStore } from '$lib/stores/index.js';
-  import type { TabItem, Artifact, Thread, Source } from '$lib/stores/types.js';
+  import type { TabItem, Artifact, Thread, Source, PendingPatch } from '$lib/stores/types.js';
+  // NOTE: inlineDiff is imported dynamically in onMount to avoid SSR issues with CodeMirror
+  import type { InlineDiffCallbacks } from '$lib/codemirror/inlineDiff.js';
   import { getFileIcon } from '$lib/icons.js';
   import { cn } from '$lib/utils.js';
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, untrack } from 'svelte';
   import { browser } from '$app/environment';
   import ChatPanel from './ChatPanel.svelte';
   import NewFileModal from './NewFileModal.svelte';
@@ -49,7 +51,6 @@
 
   // Panel state for Editor
   let editorContainer: HTMLDivElement | null = null;
-  let diffContainer: HTMLDivElement | null = null;
   let containerMounted = $state(false);
   let editor: EditorView | null = null;
   let isEditorReady = $state(false);
@@ -73,8 +74,12 @@
   });
   const canGoPrev = $derived(activeArtifact && activeArtifact.currentVersionIndex > 0);
   const canGoNext = $derived(activeArtifact && activeArtifact.currentVersionIndex < activeArtifact.versions.length - 1);
-  const pendingChanges = $derived(artifactStore.pendingChanges);
-  const showDiff = $derived(pendingChanges && pendingChanges.artifactId === activeTabId);
+  
+  // Pending patches for inline diffs (per-artifact)
+  const currentPatches = $derived(
+    artifactStore.pendingPatches.filter(p => p.artifactId === activeTabId && p.status === 'pending')
+  );
+  const hasPatches = $derived(currentPatches.length > 0);
 
   // Thread specific derivations
   const activeThread = $derived(
@@ -112,11 +117,6 @@
         containerMounted = false;
       }
     };
-  }
-
-  function setDiffContainer(node: HTMLDivElement) {
-    diffContainer = node;
-    return { destroy() { diffContainer = null; } };
   }
 
   function handlePrevVersion() {
@@ -185,17 +185,19 @@
 
   onMount(async () => {
     if (!browser) return;
-    const [view, state, markdown, langData, theme, commands, livePreview, merge] = await Promise.all([
+    const [view, state, markdown, langData, theme, commands, livePreview, inlineDiff] = await Promise.all([
       import('@codemirror/view'), import('@codemirror/state'), import('@codemirror/lang-markdown'),
       import('@codemirror/language-data'), import('@codemirror/theme-one-dark'), import('@codemirror/commands'),
-      import('$lib/codemirror/livePreview.js'), import('@codemirror/merge')
+      import('$lib/codemirror/livePreview.js'), import('$lib/codemirror/inlineDiff.js')
     ]);
     cmModules = {
       EditorView: view.EditorView, keymap: view.keymap, highlightActiveLine: view.highlightActiveLine,
       EditorState: state.EditorState, markdown: markdown.markdown, languages: langData.languages,
       oneDark: theme.oneDark, defaultKeymap: commands.defaultKeymap, history: commands.history,
       historyKeymap: commands.historyKeymap, cursorLineUp: commands.cursorLineUp,
-      cursorLineDown: commands.cursorLineDown, livePreview: livePreview.livePreview, MergeView: merge.MergeView
+      cursorLineDown: commands.cursorLineDown, livePreview: livePreview.livePreview,
+      inlineDiffExtension: inlineDiff.inlineDiffExtension,
+      setPendingPatches: inlineDiff.setPendingPatches
     };
     isEditorReady = true;
   });
@@ -209,10 +211,19 @@
     editor?.destroy();
   });
 
+  // Callbacks for inline diff accept/reject
+  function handlePatchAccept(patchId: string) {
+    artifactStore.acceptPatch(patchId);
+  }
+
+  function handlePatchReject(patchId: string) {
+    artifactStore.rejectPatch(patchId);
+  }
+
   $effect(() => {
     if (!browser || !isEditorReady || !cmModules || !containerMounted || !editorContainer) return;
 
-    const isShowingArtifact = activeTab?.type === 'artifact' && !showDiff;
+    const isShowingArtifact = activeTab?.type === 'artifact';
     const artifactId = activeTabId;
     
     // 1. Handle artifact switch or panel closing (Saving)
@@ -252,6 +263,11 @@
                   saveToArtifact(currentEditorArtifactId, false);
                 }
               }
+            }),
+            // Inline diff extension for showing agent patches
+            cmModules.inlineDiffExtension({
+              onAccept: handlePatchAccept,
+              onReject: handlePatchReject
             })
           ]
         }),
@@ -284,16 +300,27 @@
     }
   });
 
+  // Effect to update inline diff decorations when patches change
+  // Track the pending patches from the store
   $effect(() => {
-    if (!browser || !isEditorReady || !cmModules || !diffContainer || !showDiff || !pendingChanges) return;
-    const { MergeView, EditorState, oneDark, markdown, languages } = cmModules;
-    diffContainer.innerHTML = '';
-    new MergeView({
-      a: { doc: pendingChanges.oldContent, extensions: [oneDark, markdown({ codeLanguages: languages }), EditorState.readOnly.of(true)] },
-      b: { doc: pendingChanges.newContent, extensions: [oneDark, markdown({ codeLanguages: languages }), EditorState.readOnly.of(true)] },
-      parent: diffContainer
+    // Track these values to react to changes
+    const patches = artifactStore.pendingPatches;
+    const artifactId = currentEditorArtifactId;
+    
+    // Use untrack for the dispatch to prevent loops
+    untrack(() => {
+      if (!editor || !artifactId || !cmModules) return;
+      
+      // Filter patches for this artifact
+      const filtered = patches.filter(p => p.artifactId === artifactId && p.status === 'pending');
+      
+      // Dispatch the patches to the editor
+      editor.dispatch({
+        effects: cmModules.setPendingPatches.of(filtered)
+      });
     });
   });
+
 
   function getTabTitle(tab: TabItem) {
     if (tab.type === 'artifact') {
@@ -410,8 +437,10 @@
   let isDraggingRightEdge = $state(false);
 
   function handleDragStart(e: DragEvent, tabId: string, tabType: string) {
-    if (tabType === 'artifact' && tabId === currentEditorArtifactId) {
-      saveToArtifact(tabId, true);
+    // Always save the current editor before any drag operation
+    // This prevents data loss when dragging any tab (not just the current artifact)
+    if (currentEditorArtifactId) {
+      saveToArtifact(currentEditorArtifactId, false);
     }
     
     if (e.dataTransfer) {
@@ -434,6 +463,12 @@
     const sourceColumn = e.dataTransfer?.getData('application/svelte-tab-source-column');
 
     if (!id || !type) return;
+
+    // Save the current editor in this panel before any tab changes
+    // This prevents data loss when dropping tabs into this panel
+    if (currentEditorArtifactId) {
+      saveToArtifact(currentEditorArtifactId, false);
+    }
 
     // Determine target column
     let targetColumn: 'left' | 'right' = column;
@@ -605,7 +640,14 @@
           )} />
           <span class="max-w-[120px] truncate">{title}</span>
           <button
-            onclick={(e) => { e.stopPropagation(); onTabClose(tab.id); }}
+            onclick={(e) => { 
+              e.stopPropagation(); 
+              // Save the artifact before closing if it's the current editor
+              if (tab.type === 'artifact' && tab.id === currentEditorArtifactId) {
+                saveToArtifact(tab.id, false);
+              }
+              onTabClose(tab.id); 
+            }}
             class="rounded p-0.5 text-zinc-500 opacity-0 transition-all hover:bg-zinc-700 hover:text-zinc-300 group-hover:opacity-100 {isActive ? 'opacity-100' : ''}"
           >
             <X class="h-3.5 w-3.5" />
@@ -701,39 +743,39 @@
             <p class="text-sm">Loading editor...</p>
           </div>
         </div>
-      {:else if showDiff}
-        <div class="absolute inset-0 flex flex-col">
-          <div class="flex items-center justify-between border-b border-amber-500/30 bg-amber-500/10 px-4 py-2">
-            <span class="text-sm font-medium text-amber-400">Agent proposed changes</span>
-            <div class="flex gap-2">
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                onclick={() => {
-                  if (clientToolInterrupt) {
-                    agentStore.rejectClientToolInterrupt();
-                  } else {
-                    artifactStore.rejectPendingChanges();
-                  }
-                }}
-              >Reject</Button>
-              <Button 
-                size="sm" 
-                class="bg-amber-600" 
-                onclick={() => {
-                  if (clientToolInterrupt) {
-                    agentStore.executeApprovedWriteTools();
-                  } else {
-                    artifactStore.acceptPendingChanges();
-                  }
-                }}
-              >Accept</Button>
-            </div>
-          </div>
-          <div use:setDiffContainer class="flex-1 overflow-auto"></div>
-        </div>
       {:else}
-        <div use:setEditorContainer class="absolute inset-0 bg-zinc-950"></div>
+        <div class="absolute inset-0 flex flex-col">
+          <!-- Accept/Reject All header when there are pending patches -->
+          {#if hasPatches}
+            <div class="flex items-center justify-between border-b border-blue-500/30 bg-blue-500/10 px-4 py-2">
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-medium text-blue-400">
+                  {currentPatches.length} pending edit{currentPatches.length !== 1 ? 's' : ''} from agent
+                </span>
+                {#if agentStore.isStreaming}
+                  <div class="flex gap-1">
+                    <div class="h-1 w-1 animate-bounce rounded-full bg-blue-400"></div>
+                    <div class="h-1 w-1 animate-bounce rounded-full bg-blue-400 [animation-delay:0.2s]"></div>
+                    <div class="h-1 w-1 animate-bounce rounded-full bg-blue-400 [animation-delay:0.4s]"></div>
+                  </div>
+                {/if}
+              </div>
+              <div class="flex gap-2">
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onclick={() => activeTabId && artifactStore.rejectAllPatches(activeTabId)}
+                >Reject All</Button>
+                <Button 
+                  size="sm" 
+                  class="bg-blue-600 hover:bg-blue-500" 
+                  onclick={() => activeTabId && artifactStore.acceptAllPatches(activeTabId)}
+                >Accept All</Button>
+              </div>
+            </div>
+          {/if}
+          <div use:setEditorContainer class="flex-1 overflow-hidden bg-zinc-950"></div>
+        </div>
       {/if}
     {/if}
   </div>
@@ -749,7 +791,17 @@
 
 <style>
   :global(.cm-editor) { height: 100%; background-color: #0a0a0a; }
-  :global(.cm-scroller) { font-family: 'Inter', sans-serif; }
-  :global(.cm-merge-view) { height: 100%; }
+  :global(.cm-scroller) { font-family: 'Inter', sans-serif; overflow: auto !important; }
+  
+  /* Inline diff styles - minimal design */
+  :global(.cm-deletion) {
+    background-color: rgba(239, 68, 68, 0.15);
+    text-decoration: line-through;
+    color: #f87171;
+  }
+  
+  :global(.cm-inline-addition) {
+    color: #4ade80;
+  }
 </style>
 

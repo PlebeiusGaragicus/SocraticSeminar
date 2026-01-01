@@ -3,10 +3,36 @@
   import { projectStore, artifactStore, threadStore, agentStore } from '$lib/stores/index.js';
   import { cyphertap } from 'cyphertap';
   import type { Project } from '$lib/stores/types.js';
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
+  import { browser } from '$app/environment';
 
   // Application state
   let currentView = $state<'dashboard' | 'workspace'>('dashboard');
+
+  // Handle browser close/refresh - save dirty artifacts
+  function handleBeforeUnload(e: BeforeUnloadEvent) {
+    if (artifactStore.hasDirtyArtifacts) {
+      // Try to save (best effort - may not complete before page unload)
+      artifactStore.saveAllDirtyArtifacts();
+      
+      // Show browser's confirmation dialog
+      e.preventDefault();
+      e.returnValue = '';
+      return '';
+    }
+  }
+
+  onMount(() => {
+    if (browser) {
+      window.addEventListener('beforeunload', handleBeforeUnload);
+    }
+  });
+
+  onDestroy(() => {
+    if (browser) {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    }
+  });
 
   // Reactive CypherTap state (safe to use directly with SSR disabled)
   const isLoggedIn = $derived(cyphertap.isLoggedIn);
@@ -25,13 +51,18 @@
   // Reset stores on logout
   $effect(() => {
     if (!isLoggedIn) {
+      // Note: beforeunload handler already saves dirty artifacts before page unload.
+      // For logout, we just reset state immediately.
       projectStore.reset();
       artifactStore.reset();
       currentView = 'dashboard';
     }
   });
 
-  function handleProjectSelect(project: Project) {
+  async function handleProjectSelect(project: Project) {
+    // Save any unsaved work before switching projects
+    await artifactStore.saveAllDirtyArtifacts();
+    
     // Clear previous project's state before switching
     threadStore.clearProjectState();
     artifactStore.clearProjectState();
@@ -41,7 +72,10 @@
     currentView = 'workspace';
   }
 
-  function handleBackToProjects() {
+  async function handleBackToProjects() {
+    // Save any unsaved work before leaving workspace
+    await artifactStore.saveAllDirtyArtifacts();
+    
     // Clear project-scoped state when going back to dashboard
     threadStore.clearProjectState();
     artifactStore.clearProjectState();

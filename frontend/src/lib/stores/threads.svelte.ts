@@ -2,6 +2,7 @@
 // Manages chat threads within projects with IndexedDB persistence
 
 import { nanoid } from 'nanoid';
+import { untrack } from 'svelte';
 import type { Thread, Message } from './types.js';
 import { db } from '$lib/services/indexeddb.js';
 
@@ -325,15 +326,19 @@ async function loadFromStorage(): Promise<void> {
 // Load threads for a specific project
 async function loadProjectThreads(projectId: string): Promise<void> {
   // Ensure we've loaded from storage first
-  if (!isLoaded) {
+  // Use untrack to prevent creating subscriptions when called from effects
+  const loaded = untrack(() => isLoaded);
+  if (!loaded) {
     await loadFromStorage();
   }
   
   // Ensure the currentThreadId is valid for this project
   // If the current thread doesn't belong to this project, clear the selection
-  const projectThreads = getProjectThreads(projectId);
-  if (currentThreadId) {
-    const isCurrentValid = projectThreads.some(t => t.id === currentThreadId);
+  // Use untrack for reads to prevent subscription loops
+  const projectThreads = untrack(() => getProjectThreads(projectId));
+  const currId = untrack(() => currentThreadId);
+  if (currId) {
+    const isCurrentValid = projectThreads.some(t => t.id === currId);
     if (!isCurrentValid) {
       // Don't auto-select - just clear the invalid selection
       // User should explicitly select a thread for the new project

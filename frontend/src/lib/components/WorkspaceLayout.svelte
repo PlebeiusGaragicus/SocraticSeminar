@@ -107,6 +107,11 @@
   $effect(() => {
     if (currentProjectId) {
       if (previousProjectId && previousProjectId !== currentProjectId) {
+        // Save any unsaved work before switching projects (uses untrack internally)
+        // Fire and forget - the save is best-effort before switching
+        artifactStore.saveAllDirtyArtifacts();
+        
+        // Clear previous project state
         artifactStore.clearProjectState();
         threadStore.clearProjectState();
         sourceStore.clearProjectState();
@@ -114,10 +119,13 @@
         agentStore.clearProjectState();
       }
       
-      artifactStore.loadProjectArtifacts(currentProjectId);
-      threadStore.loadProjectThreads(currentProjectId);
-      sourceStore.loadProjectSources(currentProjectId);
-      previousProjectId = currentProjectId;
+      // Load project data (only if this is a new project or first load)
+      if (previousProjectId !== currentProjectId) {
+        artifactStore.loadProjectArtifacts(currentProjectId);
+        threadStore.loadProjectThreads(currentProjectId);
+        sourceStore.loadProjectSources(currentProjectId);
+        previousProjectId = currentProjectId;
+      }
     }
   });
 </script>

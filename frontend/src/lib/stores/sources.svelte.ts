@@ -2,6 +2,7 @@
 // Manages external sources within projects with IndexedDB persistence
 
 import { nanoid } from 'nanoid';
+import { untrack } from 'svelte';
 import type { Source } from './types.js';
 import { db } from '$lib/services/indexeddb.js';
 
@@ -46,7 +47,8 @@ async function loadProjectSources(projectId: string): Promise<void> {
     const loadedSources = await db.sources.getByProject(projectId);
     
     // Merge with existing sources
-    const otherSources = sources.filter(s => s.projectId !== projectId);
+    // Use untrack to prevent creating subscriptions when called from effects
+    const otherSources = untrack(() => sources.filter(s => s.projectId !== projectId));
     sources = [...otherSources, ...loadedSources];
   } catch (error) {
     console.error('Failed to load sources from IndexedDB:', error);

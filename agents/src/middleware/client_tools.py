@@ -57,7 +57,7 @@ stored locally on the user's device (browser) and will be provided when you requ
 
 **Writing:**
 - `write_file(title, content, file_type)` - Create a new file
-- `patch_file(file_id, search, replace, description)` - Edit specific portion of a file
+- `patch_file(file_id, patches, description)` - Edit a file with one or more patches. `patches` is a list of `{search, replace}` objects. Each `search` string must match exactly.
 
 ### Guidelines
 
@@ -65,7 +65,7 @@ stored locally on the user's device (browser) and will be provided when you requ
 2. **Use grep_files** when searching for specific text patterns across files
 3. **Use glob_files** when looking for files by name pattern
 4. **Read files before editing** to understand current content
-5. **Use patch_file** for all edits to existing files
+5. **Use patch_file** for all edits to existing files. You can provide multiple patches in one call - prefer this for complex edits to avoid multiple user approvals.
 6. **Explain your changes** clearly when writing or patching files"""
 
 
@@ -279,36 +279,39 @@ def _create_patch_file_tool() -> StructuredTool:
     
     def patch_file(
         file_id: str,
-        search: str,
-        replace: str,
+        patches: list[dict[str, str]] | None = None,
         description: str = "",
+        # Legacy support
+        search: str | None = None,
+        replace: str | None = None,
         runtime: ToolRuntime = None,
     ) -> str:
-        """Patch an existing file by replacing a specific string with another.
+        """Patch an existing file by replacing specific strings.
         
-        This tool allows you to change a specific portion of a file by replacing a search string.
-        The 'search' string must match EXACTLY (including whitespace) in the file.
+        This tool allows you to change specific portions of a file.
+        You can provide multiple patches in a single call.
+        Each 'search' string must match EXACTLY (including whitespace) in the file.
         
         Args:
             file_id: ID of the file to patch
-            search: The exact text to find in the file
-            replace: The text to replace it with
+            patches: List of {'search': '...', 'replace': '...'} objects
             description: Description of what is being changed
+            search: (Legacy) The exact text to find in the file
+            replace: (Legacy) The text to replace it with
         
         Returns:
-            Success message, or error if search string not found
+            Success message, or error if any search string not found
         """
         return "Tool execution pending - awaiting client response"
     
     return StructuredTool.from_function(
         name="patch_file",
         func=patch_file,
-        description="""Patch a file by replacing a specific string.
+        description="""Patch a file with one or more string replacements.
         
 Args:
     file_id: File ID from list_files()
-    search: EXACT text to find in the file
-    replace: New text to insert
+    patches: List of {'search': '...', 'replace': '...'} objects
     description: What changed (optional but helpful)
 
 Returns success message or error if search text not found.""",
@@ -322,13 +325,12 @@ AUTO_APPROVE_TOOLS = {
     "search_files", 
     "grep_files", 
     "glob_files",
-}
-
-# Tools that require explicit human approval
-REQUIRE_APPROVAL_TOOLS = {
     "write_file",
     "patch_file",
 }
+
+# Tools that require explicit human approval (e.g. non-file tools)
+REQUIRE_APPROVAL_TOOLS = set()
 
 
 # =============================================================================
@@ -517,9 +519,25 @@ def _format_tool_description(tool_name: str, args: dict[str, Any]) -> str:
     elif tool_name == "patch_file":
         file_id = args.get("file_id", "unknown")
         description = args.get("description", "No description provided")
-        search = args.get("search", "")
-        replace = args.get("replace", "")
-        return f"Patch file '{file_id}'\n\n{description}\n\nSearch:\n{search}\n\nReplace:\n{replace}"
+        patches = args.get("patches", [])
+        
+        if patches:
+            patch_summaries = []
+            for i, p in enumerate(patches[:3]):
+                search = p.get("search", "")[:50]
+                replace = p.get("replace", "")[:50]
+                patch_summaries.append(f"  {i+1}. '{search}' -> '{replace}'")
+            
+            summary = "\n".join(patch_summaries)
+            if len(patches) > 3:
+                summary += f"\n  ... and {len(patches)-3} more"
+            
+            return f"Patch file '{file_id}'\n\n{description}\n\nChanges:\n{summary}"
+        else:
+            # Legacy single patch
+            search = args.get("search", "")
+            replace = args.get("replace", "")
+            return f"Patch file '{file_id}'\n\n{description}\n\nSearch:\n{search}\n\nReplace:\n{replace}"
     
     else:
         return f"Execute {tool_name} with args: {args}"
@@ -541,7 +559,8 @@ def _extract_tool_result(resume_value: Any, tool_call_id: str) -> str:
         tool_results = resume_value.get("tool_results", [])
         for result in tool_results:
             if result.get("tool_call_id") == tool_call_id:
-                return result.get("content", "No content provided")
+                # Client tool results use 'output' or 'content'
+                return result.get("output") or result.get("content") or "Success"
         
         # Check for HITL decisions format
         decisions = resume_value.get("decisions", [])

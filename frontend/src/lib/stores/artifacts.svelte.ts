@@ -2,7 +2,8 @@
 // Manages versioned markdown artifacts within projects with IndexedDB persistence
 
 import { nanoid } from 'nanoid';
-import type { Artifact, ArtifactVersion } from './types.js';
+import { untrack } from 'svelte';
+import type { Artifact, ArtifactVersion, PendingPatch } from './types.js';
 import { db } from '$lib/services/indexeddb.js';
 import { projectStore } from './projects.svelte.js';
 
@@ -11,46 +12,72 @@ let artifacts = $state<Artifact[]>([]);
 let currentArtifactId = $state<string | null>(null);
 let openArtifactIds = $state<string[]>([]);
 let liveContentMap = $state<Record<string, string>>({});
-let pendingChanges = $state<{
-  artifactId: string;
-  newContent: string;
-  oldContent: string;
-} | null>(null);
+
+// Pending patches proposed by the agent - shown as inline diffs
+let pendingPatches = $state<PendingPatch[]>([]);
 
 // Derived state
 const currentArtifact = $derived(
   artifacts.find((a) => a.id === currentArtifactId) ?? null
 );
 
-const currentArtifactContent = $derived(() => {
+const currentArtifactContent = $derived.by(() => {
   if (!currentArtifact) return null;
   return currentArtifact.versions[currentArtifact.currentVersionIndex] ?? null;
 });
 
-const openArtifacts = $derived(
-  openArtifactIds.map(id => artifacts.find(a => a.id === id)).filter(Boolean) as Artifact[]
+const openArtifacts = $derived.by(() => {
+  return openArtifactIds.map(id => artifacts.find(a => a.id === id)).filter(Boolean) as Artifact[];
+});
+
+// Derived: Get pending patches for the current artifact
+const currentArtifactPatches = $derived(
+  pendingPatches.filter(p => p.artifactId === currentArtifactId && p.status === 'pending')
+);
+
+// Derived: Check if any artifact has pending patches
+const hasPendingPatches = $derived(
+  pendingPatches.some(p => p.status === 'pending')
+);
+
+// Get pending patches for a specific artifact
+function getPendingPatches(artifactId: string): PendingPatch[] {
+  return pendingPatches.filter(p => p.artifactId === artifactId && p.status === 'pending');
+}
+
+// Derived: Check if any artifact has unsaved changes
+const hasDirtyArtifacts = $derived(
+  artifacts.some(a => a.isDirty === true)
+);
+
+// Get all dirty artifact IDs
+const dirtyArtifactIds = $derived(
+  artifacts.filter(a => a.isDirty === true).map(a => a.id)
 );
 
 // Persistence helper - creates a plain object copy to avoid Svelte proxy issues
 async function persistArtifact(artifact: Artifact): Promise<void> {
   try {
-    // Deep clone to remove Svelte's Proxy wrapper which can't be cloned by IndexedDB
-    const plainArtifact: Artifact = {
+    // Use JSON.parse(JSON.stringify()) to fully strip Svelte's Proxy wrappers
+    // This is the most reliable way to get a plain object for IndexedDB
+    // Note: isDirty is intentionally NOT persisted - it's runtime-only state
+    const plainArtifact: Artifact = JSON.parse(JSON.stringify({
       id: artifact.id,
       projectId: artifact.projectId,
       currentVersionIndex: artifact.currentVersionIndex,
-      versions: artifact.versions.map(v => ({
-        index: v.index,
-        title: v.title,
-        content: v.content,
-        createdAt: v.createdAt
-      })),
+      versions: artifact.versions,
       createdAt: artifact.createdAt,
       updatedAt: artifact.updatedAt,
       viewed: artifact.viewed ?? false,
       tags: artifact.tags || []
-    };
+    }));
+    
     await db.artifacts.save(plainArtifact);
+    
+    // Clear the dirty flag after successful save
+    if (artifact.isDirty) {
+      artifacts = artifacts.map(a => a.id === artifact.id ? { ...a, isDirty: false } : a);
+    }
   } catch (error) {
     console.error('Failed to persist artifact:', error);
   }
@@ -68,7 +95,8 @@ async function loadProjectArtifacts(projectId: string): Promise<void> {
     const loadedArtifacts = await db.artifacts.getByProject(projectId);
     
     // Merge with existing artifacts (replace those with same projectId)
-    const otherArtifacts = artifacts.filter(a => a.projectId !== projectId);
+    // Use untrack to prevent creating subscriptions when called from effects
+    const otherArtifacts = untrack(() => artifacts.filter(a => a.projectId !== projectId));
     artifacts = [...otherArtifacts, ...loadedArtifacts];
   } catch (error) {
     console.error('Failed to load artifacts from IndexedDB:', error);
@@ -238,11 +266,6 @@ async function deleteArtifact(id: string): Promise<void> {
     currentArtifactId = openArtifactIds[0] ?? null;
   }
   
-  // Clear pending changes if for this artifact
-  if (pendingChanges?.artifactId === id) {
-    pendingChanges = null;
-  }
-  
   // Delete from IndexedDB
   try {
     await db.artifacts.delete(id);
@@ -281,6 +304,12 @@ function closeArtifact(id: string): void {
 
 function updateLiveContent(id: string, content: string): void {
   liveContentMap[id] = content;
+  
+  // Mark the artifact as dirty (has unsaved changes)
+  const artifact = artifacts.find(a => a.id === id);
+  if (artifact && !artifact.isDirty) {
+    artifacts = artifacts.map(a => a.id === id ? { ...a, isDirty: true } : a);
+  }
 }
 
 function getLiveContent(id: string): string | null {
@@ -296,46 +325,260 @@ function loadArtifacts(loadedArtifacts: Artifact[]): void {
   artifacts = loadedArtifacts;
 }
 
-// Pending changes management (for agent edits)
-function setPendingChanges(
+// =============================================================================
+// PENDING PATCH MANAGEMENT (for inline agent edits)
+// =============================================================================
+
+/**
+ * Add a new pending patch proposed by the agent.
+ * The patch is NOT applied yet - it's shown as an inline diff for user review.
+ */
+function addPendingPatch(
   artifactId: string,
-  newContent: string,
-  oldContent: string
-): void {
-  pendingChanges = { artifactId, newContent, oldContent };
+  search: string,
+  replace: string,
+  description?: string
+): PendingPatch {
+  const patch: PendingPatch = {
+    id: nanoid(),
+    artifactId,
+    search,
+    replace,
+    description,
+    status: 'pending',
+    createdAt: Date.now()
+  };
   
-  // Make sure this artifact is selected and open
-  if (!openArtifactIds.includes(artifactId)) {
-    openArtifactIds = [...openArtifactIds, artifactId];
-  }
-  currentArtifactId = artifactId;
+  pendingPatches = [...pendingPatches, patch];
+  return patch;
 }
 
-function acceptPendingChanges(): void {
-  if (!pendingChanges) return;
+/**
+ * Add multiple pending patches at once.
+ */
+function addPendingPatches(
+  artifactId: string,
+  patches: Array<{ search: string; replace: string; description?: string }>
+): PendingPatch[] {
+  const newPatches: PendingPatch[] = patches.map(p => ({
+    id: nanoid(),
+    artifactId,
+    search: p.search,
+    replace: p.replace,
+    description: p.description,
+    status: 'pending' as const,
+    createdAt: Date.now()
+  }));
   
-  const artifact = artifacts.find(a => a.id === pendingChanges!.artifactId);
-  if (!artifact) {
-    pendingChanges = null;
+  pendingPatches = [...pendingPatches, ...newPatches];
+  return newPatches;
+}
+
+/**
+ * Accept a single pending patch - applies it to the artifact.
+ */
+function acceptPatch(patchId: string): boolean {
+  const patch = pendingPatches.find(p => p.id === patchId);
+  if (!patch || patch.status !== 'pending') return false;
+  
+  const artifact = artifacts.find(a => a.id === patch.artifactId);
+  if (!artifact) return false;
+  
+  // Get current content
+  let content = liveContentMap[patch.artifactId];
+  if (content === undefined) {
+    const version = artifact.versions[artifact.currentVersionIndex];
+    content = version?.content || '';
+  }
+  
+  // Apply the patch
+  if (!content.includes(patch.search)) {
+    console.error('[ArtifactStore] Patch search string not found in content');
+    // Mark as rejected since it can't be applied
+    pendingPatches = pendingPatches.map(p => 
+      p.id === patchId ? { ...p, status: 'rejected' as const } : p
+    );
+    return false;
+  }
+  
+  const newContent = content.replace(patch.search, patch.replace);
+  
+  // Update live content
+  liveContentMap[patch.artifactId] = newContent;
+  
+  // Mark as dirty and update the artifact
+  artifacts = artifacts.map(a => 
+    a.id === patch.artifactId ? { ...a, isDirty: true } : a
+  );
+  
+  // Mark patch as accepted
+  pendingPatches = pendingPatches.map(p => 
+    p.id === patchId ? { ...p, status: 'accepted' as const } : p
+  );
+  
+  console.log(`[ArtifactStore] Accepted patch ${patchId}`);
+  return true;
+}
+
+/**
+ * Reject a single pending patch - removes it without applying.
+ */
+function rejectPatch(patchId: string): boolean {
+  const patch = pendingPatches.find(p => p.id === patchId);
+  if (!patch || patch.status !== 'pending') return false;
+  
+  pendingPatches = pendingPatches.map(p => 
+    p.id === patchId ? { ...p, status: 'rejected' as const } : p
+  );
+  
+  console.log(`[ArtifactStore] Rejected patch ${patchId}`);
+  return true;
+}
+
+/**
+ * Accept all pending patches for an artifact.
+ */
+function acceptAllPatches(artifactId: string): void {
+  const patches = pendingPatches.filter(p => p.artifactId === artifactId && p.status === 'pending');
+  
+  // Apply patches in order
+  for (const patch of patches) {
+    acceptPatch(patch.id);
+  }
+}
+
+/**
+ * Reject all pending patches for an artifact.
+ */
+function rejectAllPatches(artifactId: string): void {
+  pendingPatches = pendingPatches.map(p => 
+    p.artifactId === artifactId && p.status === 'pending' 
+      ? { ...p, status: 'rejected' as const } 
+      : p
+  );
+}
+
+/**
+ * Clear all resolved (accepted/rejected) patches.
+ */
+function clearResolvedPatches(): void {
+  pendingPatches = pendingPatches.filter(p => p.status === 'pending');
+}
+
+/**
+ * Clear all patches for an artifact.
+ */
+function clearArtifactPatches(artifactId: string): void {
+  pendingPatches = pendingPatches.filter(p => p.artifactId !== artifactId);
+}
+
+/**
+ * Save all artifacts that have unsaved changes (isDirty === true).
+ * This syncs liveContentMap changes to the artifact versions and persists to IndexedDB.
+ * Returns a Promise that resolves when all saves are complete.
+ * 
+ * Uses untrack() to prevent creating reactive subscriptions when called from effects.
+ */
+async function saveAllDirtyArtifacts(): Promise<void> {
+  // Use untrack to prevent this function from creating reactive subscriptions
+  // when called from $effect blocks (which would cause infinite loops)
+  const dirtyIds = untrack(() => artifacts.filter(a => a.isDirty === true).map(a => a.id));
+  
+  if (dirtyIds.length === 0) {
     return;
   }
   
-  const currentVersion = artifact.versions[artifact.currentVersionIndex];
-  updateArtifact(
-    pendingChanges.artifactId,
-    currentVersion?.title || 'Untitled',
-    pendingChanges.newContent
-  );
+  console.log(`[ArtifactStore] Saving ${dirtyIds.length} dirty artifacts...`);
   
-  pendingChanges = null;
+  const savePromises = dirtyIds.map(async (id) => {
+    const artifact = untrack(() => artifacts.find(a => a.id === id));
+    if (!artifact) return;
+    
+    // Get live content - this is what the user has typed
+    const liveContent = untrack(() => liveContentMap[id]);
+    
+    if (liveContent === undefined) {
+      // No live content to save, just clear dirty flag
+      artifacts = artifacts.map(a => a.id === id ? { ...a, isDirty: false } : a);
+      return;
+    }
+    
+    const currentVersion = artifact.versions[artifact.currentVersionIndex];
+    if (!currentVersion) return;
+    
+    // Check if content actually differs from stored version
+    const storedContent = currentVersion.content || '';
+    if (liveContent.trim() === storedContent.trim()) {
+      // No actual changes, just clear dirty flag
+      artifacts = artifacts.map(a => a.id === id ? { ...a, isDirty: false } : a);
+      return;
+    }
+    
+    // Update the current version in place (not creating new version)
+    const updatedVersions = [...artifact.versions];
+    updatedVersions[artifact.currentVersionIndex] = {
+      ...currentVersion,
+      content: liveContent
+    };
+    
+    const updatedArtifact: Artifact = {
+      ...artifact,
+      versions: updatedVersions,
+      updatedAt: Date.now(),
+      isDirty: false
+    };
+    
+    artifacts = artifacts.map(a => a.id === id ? updatedArtifact : a);
+    
+    // Persist to IndexedDB
+    await persistArtifact(updatedArtifact);
+  });
+  
+  await Promise.all(savePromises);
+  console.log(`[ArtifactStore] Saved ${dirtyIds.length} dirty artifacts`);
 }
 
-function rejectPendingChanges(): void {
-  pendingChanges = null;
-}
-
-function clearPendingChanges(): void {
-  pendingChanges = null;
+/**
+ * Save a specific artifact's live content immediately.
+ * Useful when the editor needs to force a save before an operation.
+ * 
+ * Uses untrack() to prevent creating reactive subscriptions when called from effects.
+ */
+async function saveArtifactNow(id: string): Promise<void> {
+  const artifact = untrack(() => artifacts.find(a => a.id === id));
+  if (!artifact) return;
+  
+  const liveContent = untrack(() => liveContentMap[id]);
+  if (liveContent === undefined) return;
+  
+  const currentVersion = artifact.versions[artifact.currentVersionIndex];
+  if (!currentVersion) return;
+  
+  // Check if content actually differs
+  if (liveContent.trim() === (currentVersion.content || '').trim()) {
+    // No changes, just clear dirty flag
+    if (artifact.isDirty) {
+      artifacts = artifacts.map(a => a.id === id ? { ...a, isDirty: false } : a);
+    }
+    return;
+  }
+  
+  // Update in place
+  const updatedVersions = [...artifact.versions];
+  updatedVersions[artifact.currentVersionIndex] = {
+    ...currentVersion,
+    content: liveContent
+  };
+  
+  const updatedArtifact: Artifact = {
+    ...artifact,
+    versions: updatedVersions,
+    updatedAt: Date.now(),
+    isDirty: false
+  };
+  
+  artifacts = artifacts.map(a => a.id === id ? updatedArtifact : a);
+  await persistArtifact(updatedArtifact);
 }
 
 function reset(): void {
@@ -343,7 +586,7 @@ function reset(): void {
   currentArtifactId = null;
   openArtifactIds = [];
   liveContentMap = {};
-  pendingChanges = null;
+  pendingPatches = [];
 }
 
 /**
@@ -354,7 +597,7 @@ function clearProjectState(): void {
   currentArtifactId = null;
   openArtifactIds = [];
   liveContentMap = {};
-  pendingChanges = null;
+  pendingPatches = [];
 }
 
 // Export reactive getters and actions
@@ -365,7 +608,14 @@ export const artifactStore = {
   get currentArtifactContent() { return currentArtifactContent; },
   get openArtifacts() { return openArtifacts; },
   get openArtifactIds() { return openArtifactIds; },
-  get pendingChanges() { return pendingChanges; },
+  get hasDirtyArtifacts() { return hasDirtyArtifacts; },
+  get dirtyArtifactIds() { return dirtyArtifactIds; },
+  
+  // Pending patches for inline diffs
+  get pendingPatches() { return pendingPatches; },
+  get currentArtifactPatches() { return currentArtifactPatches; },
+  get hasPendingPatches() { return hasPendingPatches; },
+  getPendingPatches,
   
   getProjectArtifacts,
   loadProjectArtifacts,
@@ -381,10 +631,19 @@ export const artifactStore = {
   updateLiveContent,
   getLiveContent,
   loadArtifacts,
-  setPendingChanges,
-  acceptPendingChanges,
-  rejectPendingChanges,
-  clearPendingChanges,
+  
+  // Pending patch management
+  addPendingPatch,
+  addPendingPatches,
+  acceptPatch,
+  rejectPatch,
+  acceptAllPatches,
+  rejectAllPatches,
+  clearResolvedPatches,
+  clearArtifactPatches,
+  
+  saveAllDirtyArtifacts,
+  saveArtifactNow,
   reset,
   clearProjectState
 };

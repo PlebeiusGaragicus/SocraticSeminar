@@ -21,6 +21,8 @@
   import Search from '@lucide/svelte/icons/search';
   import HelpCircle from '@lucide/svelte/icons/help-circle';
   import MessageCircle from '@lucide/svelte/icons/message-circle';
+  import { artifactStore } from '$lib/stores/index.js';
+  import { getFileIcon } from '$lib/icons.js';
   import type { ToolCallWithStatus } from '$lib/stores/types.js';
 
   interface Props {
@@ -93,6 +95,41 @@
       return { labels: [], freeform: content };
     }
   }
+
+  function getPatchStats(toolCall: ToolCallWithStatus) {
+    const patches = toolCall.args.patches as Array<{search: string, replace: string}> | undefined;
+    const patchList = patches || (toolCall.args.search !== undefined ? [{ search: toolCall.args.search as string, replace: toolCall.args.replace as string || '' }] : []);
+    
+    let additions = 0;
+    let deletions = 0;
+    
+    patchList.forEach(p => {
+      const searchLines = p.search.split('\n').length;
+      const replaceLines = p.replace.split('\n').length;
+      
+      // Very rough estimation: if replacing 1 line with 5, it's 4 additions.
+      // If replacing 5 lines with 1, it's 4 deletions.
+      if (replaceLines > searchLines) {
+        additions += (replaceLines - searchLines);
+      } else if (searchLines > replaceLines) {
+        deletions += (searchLines - replaceLines);
+      }
+      
+      // Always count at least 1 change for a replacement even if line count is same
+      if (replaceLines === searchLines && p.search !== p.replace) {
+        additions += 1;
+        deletions += 1;
+      }
+    });
+    
+    return { additions, deletions };
+  }
+
+  function getArtifactTitle(id: string) {
+    const art = artifactStore.artifacts.find(a => a.id === id);
+    if (!art) return id.slice(0, 8);
+    return art.versions[art.currentVersionIndex]?.title || 'Untitled';
+  }
 </script>
 
 <div class="flex flex-col gap-2">
@@ -140,6 +177,41 @@
         <span>{toolCall.status === 'completed' ? 'Searched for:' : 'Searching for:'} <span class="text-zinc-300 font-semibold italic">"{toolCall.args.query}"</span></span>
         {#if toolCall.status === 'executing'}
           <Loader2 class="h-3.5 w-3.5 animate-spin text-blue-500/50" />
+        {/if}
+      </div>
+    {:else if toolCall.name === 'patch_file'}
+      {@const fileId = (toolCall.args.file_id as string) || (toolCall.args.fileId as string)}
+      {@const title = getArtifactTitle(fileId)}
+      {@const Icon = getFileIcon(title)}
+      {@const stats = getPatchStats(toolCall)}
+      <div class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg bg-zinc-800/40 border border-zinc-700/50 hover:bg-zinc-800/60 transition-colors w-fit group cursor-default">
+        <Icon class="h-4 w-4 text-zinc-400 group-hover:text-zinc-300" />
+        <span class="text-sm font-medium text-zinc-300 group-hover:text-zinc-100">{title}</span>
+        <div class="flex items-center gap-1.5 font-mono text-[11px] font-bold">
+          {#if stats.additions > 0}
+            <span class="text-emerald-500">+{stats.additions}</span>
+          {/if}
+          {#if stats.deletions > 0}
+            <span class="text-rose-500">-{stats.deletions}</span>
+          {/if}
+        </div>
+        {#if toolCall.status === 'executing'}
+          <div class="flex gap-0.5 ml-1">
+            <div class="h-1 w-1 animate-bounce rounded-full bg-zinc-500"></div>
+            <div class="h-1 w-1 animate-bounce rounded-full bg-zinc-500 [animation-delay:0.2s]"></div>
+            <div class="h-1 w-1 animate-bounce rounded-full bg-zinc-500 [animation-delay:0.4s]"></div>
+          </div>
+        {/if}
+      </div>
+    {:else if toolCall.name === 'write_file'}
+      {@const title = toolCall.args.title as string}
+      {@const Icon = getFileIcon(title || '')}
+      <div class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg bg-zinc-800/40 border border-zinc-700/50 hover:bg-zinc-800/60 transition-colors w-fit group cursor-default">
+        <Icon class="h-4 w-4 text-zinc-400 group-hover:text-zinc-300" />
+        <span class="text-xs font-semibold uppercase tracking-wider text-zinc-500 group-hover:text-zinc-400">Created</span>
+        <span class="text-sm font-medium text-zinc-300 group-hover:text-zinc-100">{title || 'Untitled'}</span>
+        {#if toolCall.status === 'executing'}
+          <Loader2 class="h-3.5 w-3.5 animate-spin text-zinc-500 ml-1" />
         {/if}
       </div>
     {:else if toolCall.name === 'ask_user' || toolCall.name === 'ask_choices'}

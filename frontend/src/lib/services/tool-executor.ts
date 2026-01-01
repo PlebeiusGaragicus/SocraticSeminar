@@ -67,13 +67,14 @@ export async function executeToolCall(
         );
 
       case 'patch_file':
-        return executePatchFile(
+        return await executePatchFile(
           toolCallId,
           name,
           args.file_id as string,
+          args.patches as Array<{search: string, replace: string}> | undefined,
+          args.description as string || '',
           args.search as string,
-          args.replace as string,
-          args.description as string || ''
+          args.replace as string
         );
 
       case 'grep_files':
@@ -258,6 +259,7 @@ function executeWriteFile(
     };
   }
 
+  // Create the artifact directly - for new files, there's no diff to show
   const artifact = artifactStore.createArtifact(projectId, title, content || '');
 
   console.log(`[ToolExecutor] Created new file via store: ${title} (${artifact.id})`);
@@ -275,22 +277,39 @@ function executeWriteFile(
 }
 
 /**
- * patch_file(file_id, search, replace, description) - Patch an existing file
+ * patch_file(file_id, patches, description) - Propose patches to an existing file
+ * 
+ * IMPORTANT: Patches are NOT applied immediately. They are queued as "pending patches"
+ * and shown as inline diffs in the editor. The user can accept or reject each patch
+ * individually, similar to VS Code / Cursor.
  */
-function executePatchFile(
+async function executePatchFile(
   toolCallId: string,
   toolName: string,
   fileId: string,
-  search: string,
-  replace: string,
-  description: string
-): ToolResult {
+  patches: Array<{search: string, replace: string}> | undefined,
+  description: string,
+  legacySearch?: string,
+  legacyReplace?: string
+): Promise<ToolResult> {
   if (!fileId) {
     return {
       tool_call_id: toolCallId,
       name: toolName,
       content: '',
       error: 'file_id is required'
+    };
+  }
+
+  // Normalize patches: use provided patches list or fallback to legacy search/replace
+  const patchList = patches || (legacySearch !== undefined ? [{ search: legacySearch, replace: legacyReplace || '' }] : []);
+
+  if (patchList.length === 0) {
+    return {
+      tool_call_id: toolCallId,
+      name: toolName,
+      content: '',
+      error: 'No patches provided'
     };
   }
 
@@ -304,8 +323,20 @@ function executePatchFile(
     };
   }
 
-  const currentVersion = artifact.versions[artifact.currentVersionIndex];
-  if (!currentVersion) {
+  // IMPORTANT: Save any unsaved user edits before validating patches
+  // This ensures we validate against the most up-to-date content
+  if (artifact.isDirty) {
+    await artifactStore.saveArtifactNow(fileId);
+  }
+
+  // Get live content if available, otherwise current version
+  let currentContent = artifactStore.getLiveContent(fileId);
+  if (currentContent === null) {
+    const currentVersion = artifact.versions[artifact.currentVersionIndex];
+    currentContent = currentVersion?.content || '';
+  }
+
+  if (currentContent === '') {
     return {
       tool_call_id: toolCallId,
       name: toolName,
@@ -314,48 +345,59 @@ function executePatchFile(
     };
   }
 
-  const content = currentVersion.content;
-  if (!content.includes(search)) {
-    return {
-      tool_call_id: toolCallId,
-      name: toolName,
-      content: '',
-      error: `Search string not found in file. Make sure it matches exactly (including whitespace and line endings).`
-    };
+  // Validate all patches before queuing (check that search strings exist)
+  const validatedPatches: Array<{ search: string; replace: string; description?: string }> = [];
+  let testContent = currentContent;
+
+  for (let i = 0; i < patchList.length; i++) {
+    const { search, replace } = patchList[i];
+    
+    if (!testContent.includes(search)) {
+      return {
+        tool_call_id: toolCallId,
+        name: toolName,
+        content: '',
+        error: `Search string not found in file (Patch #${i+1}). Make sure it matches exactly (including whitespace and line endings).`
+      };
+    }
+
+    // Check for multiple occurrences
+    const occurrences = testContent.split(search).length - 1;
+    if (occurrences > 1) {
+      return {
+        tool_call_id: toolCallId,
+        name: toolName,
+        content: '',
+        error: `Search string found multiple times (${occurrences}) in Patch #${i+1}. Please provide a more unique search string.`
+      };
+    }
+
+    // Apply to test content to check subsequent patches
+    testContent = testContent.replace(search, replace);
+    
+    validatedPatches.push({
+      search,
+      replace,
+      description: description ? `${description} (patch ${i + 1}/${patchList.length})` : undefined
+    });
   }
 
-  // Check for multiple occurrences
-  const occurrences = content.split(search).length - 1;
-  if (occurrences > 1) {
-    return {
-      tool_call_id: toolCallId,
-      name: toolName,
-      content: '',
-      error: `Search string found multiple times (${occurrences}). Please provide a more unique search string.`
-    };
-  }
-
-  const newContent = content.replace(search, replace);
-
-  // Create new version via store
-  const newVersion = artifactStore.updateArtifact(
-    fileId,
-    currentVersion.title || 'Untitled',
-    newContent,
-    true
-  );
-
-  console.log(`[ToolExecutor] Patched file via store: ${currentVersion.title || fileId} (new version ${newVersion.index})`);
+  // Queue patches as pending (NOT applied yet - shown as inline diffs)
+  const pendingPatches = artifactStore.addPendingPatches(fileId, validatedPatches);
+  
+  const currentTitle = artifact.versions[artifact.currentVersionIndex]?.title || 'Untitled';
+  console.log(`[ToolExecutor] Queued ${pendingPatches.length} pending patches for: ${currentTitle}`);
 
   return {
     tool_call_id: toolCallId,
     name: toolName,
     content: JSON.stringify({
       success: true,
-      message: `File patched successfully${description ? `: ${description}` : ''}`,
+      message: `Proposed ${pendingPatches.length} patch${pendingPatches.length !== 1 ? 'es' : ''} for review${description ? `: ${description}` : ''}`,
       file_id: fileId,
-      version: newVersion.index,
-      previous_version: artifact.currentVersionIndex
+      patches_queued: pendingPatches.length,
+      patch_ids: pendingPatches.map(p => p.id),
+      status: 'pending_review'
     })
   };
 }
