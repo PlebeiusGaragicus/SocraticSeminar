@@ -35,6 +35,99 @@ Get current wallet balance.
 { "balance": 1000, "mint": "https://mint.example.com" }
 ```
 
+---
+
+## Pricing Endpoints
+
+Token pricing in satoshis, calculated from USD pricing and live BTC price.
+
+### `GET /api/pricing/tokens`
+Get satoshi-per-token pricing for a specific model. Called by LangGraph agents to determine costs.
+
+```json
+// Request
+GET /api/pricing/tokens?model=gpt-4o
+
+// Response
+{
+  "model": "gpt-4o",
+  "input_sats_per_token": 0.0025,
+  "output_sats_per_token": 0.01,
+  "btc_price_usd": 100000,
+  "btc_price_source": "coinbase",
+  "updated_at": "2026-01-02T12:00:00Z"
+}
+```
+
+### `GET /api/pricing/btc`
+Get current BTC/USD price and source.
+
+```json
+{
+  "btc_price_usd": 100000,
+  "source": "coinbase",
+  "updated_at": "2026-01-02T12:00:00Z"
+}
+```
+
+### `GET /api/pricing/models`
+List all known models and their USD pricing.
+
+```json
+{
+  "models": {
+    "gpt-4o": {
+      "input_usd_per_million": 2.5,
+      "output_usd_per_million": 10.0
+    },
+    "grok-4-1-fast-non-reasoning": {
+      "input_usd_per_million": 0.2,
+      "output_usd_per_million": 0.5
+    }
+  }
+}
+```
+
+### `POST /api/pricing/refresh`
+Manually trigger a BTC price refresh (for testing).
+
+```json
+{
+  "success": true,
+  "btc_price_usd": 100000,
+  "source": "coinbase",
+  "updated_at": "2026-01-02T12:00:00Z"
+}
+```
+
+## Pricing Calculation
+
+Satoshis per token is calculated as:
+
+```
+sats_per_token = (usd_per_million / 1,000,000) / btc_price_usd * 100,000,000
+```
+
+Example: GPT-4o input at $2.50/M tokens, BTC at $100k:
+- `(2.50 / 1,000,000) / 100,000 * 100,000,000 = 0.0025 sats per token`
+
+## Model Pricing Config
+
+Model pricing is stored in `backend/src/model_pricing.json` and hot-reloaded on each request:
+
+```json
+{
+  "models": {
+    "gpt-4o": {
+      "input_usd_per_million": 2.50,
+      "output_usd_per_million": 10.00
+    }
+  }
+}
+```
+
+---
+
 ## nutshell Integration
 
 Uses the nutshell library (Cashu reference implementation):
@@ -67,6 +160,7 @@ Set `DEV_MODE=true` to:
 | `MINT_URL` | minibits | Cashu mint URL |
 | `WALLET_DB_PATH` | `data/wallet` | SQLite wallet path |
 | `PORT` | `8000` | Server port |
+| `BTC_PRICE_REFRESH_INTERVAL` | `300` | BTC price refresh interval in seconds (5 min) |
 
 ---
 

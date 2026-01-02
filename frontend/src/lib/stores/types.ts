@@ -111,29 +111,6 @@ export interface ArtifactVersion {
   createdAt: number;
 }
 
-/**
- * A pending patch proposed by the agent that hasn't been accepted/rejected yet.
- * These are shown as inline diffs in the editor.
- */
-export interface PendingPatch {
-  id: string;
-  artifactId: string;
-  /** The exact text to find and replace */
-  search: string;
-  /** The replacement text */
-  replace: string;
-  /** Optional description of what this patch does */
-  description?: string;
-  /** Status of this patch */
-  status: 'pending' | 'accepted' | 'rejected';
-  /** Timestamp when the patch was proposed */
-  createdAt: number;
-  /** Line number where the patch starts (computed when displayed) */
-  startLine?: number;
-  /** Line number where the patch ends (computed when displayed) */
-  endLine?: number;
-}
-
 export interface Artifact {
   id: string;
   projectId: string;

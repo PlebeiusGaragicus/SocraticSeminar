@@ -24,14 +24,14 @@ from typing import Any
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware, TodoListMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
-from langchain_openai import ChatOpenAI
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Checkpointer
 
 from deepagents.middleware.subagents import SubAgentMiddleware
-from .behaviour import BehaviouralMiddleware
 
-from src.middleware import (
+from src.shared.models import get_model
+from src.shared.config import DEEPRESEARCH_CONFIG
+from src.shared.middleware import (
     CashuPaymentMiddleware, 
     ClarifyWithHumanMiddleware,
     ClientToolsMiddleware,
@@ -39,50 +39,26 @@ from src.middleware import (
     ThinkingMiddleware,
     ToolValidationMiddleware,
 )
+from src.shared.middleware.websearch import tavily_search, fetch_webpage
+from src.shared.middleware.thinking import think_tool
 
-from .tools import RESEARCH_TOOLS, tavily_search, fetch_webpage, think_tool
-from .prompts import get_research_system_prompt, RESEARCHER_INSTRUCTIONS
-from .state import DeepResearchState, COST_PER_ITERATION_SATS
-
-
-# =============================================================================
-# CONFIGURATION
-# =============================================================================
-
-# LLM Configuration (OpenAI-compatible only)
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
-LLM_BASE_URL = os.getenv("LLM_BASE_URL")  # Optional: for OpenAI-compatible endpoints
-LLM_API_KEY = os.getenv("LLM_API_KEY", os.getenv("OPENAI_API_KEY", ""))
-
-# Research Configuration
-MAX_CONCURRENT_RESEARCH_UNITS = int(os.getenv("MAX_CONCURRENT_RESEARCH_UNITS", "3"))
-MAX_RESEARCHER_ITERATIONS = int(os.getenv("MAX_RESEARCHER_ITERATIONS", "3"))
-
-# Payment Configuration
-PAYMENT_COST_PER_ITERATION = int(os.getenv("COST_PER_ITERATION_SATS", str(COST_PER_ITERATION_SATS)))
+from src.deepresearch.behaviour import BehaviouralMiddleware
+from src.deepresearch.tools import RESEARCH_TOOLS
+from src.deepresearch.prompts import get_research_system_prompt, RESEARCHER_INSTRUCTIONS
 
 
 # =============================================================================
-# MODEL FACTORY
+# CONFIGURATION (from shared config)
 # =============================================================================
 
-def get_model():
-    """Get the configured chat model.
-    
-    Supports:
-    - OpenAI (default): gpt-4o, gpt-4-turbo, etc.
-    - OpenAI-compatible: Any endpoint with LLM_BASE_URL
-    """
-    kwargs = {
-        "model": LLM_MODEL,
-        "temperature": 0.0,
-    }
-    if LLM_BASE_URL:
-        kwargs["base_url"] = LLM_BASE_URL
-    if LLM_API_KEY:
-        kwargs["api_key"] = LLM_API_KEY
-    
-    return ChatOpenAI(**kwargs)
+MAX_CONCURRENT_RESEARCH_UNITS = DEEPRESEARCH_CONFIG.settings.get(
+    "max_concurrent_research_units",
+    int(os.getenv("MAX_CONCURRENT_RESEARCH_UNITS", "3"))
+)
+MAX_RESEARCHER_ITERATIONS = DEEPRESEARCH_CONFIG.settings.get(
+    "max_researcher_iterations", 
+    int(os.getenv("MAX_RESEARCHER_ITERATIONS", "3"))
+)
 
 
 # =============================================================================
@@ -112,7 +88,7 @@ def create_research_subagent_config() -> dict[str, Any]:
 def create_deepresearch_agent(
     *,
     checkpointer: Checkpointer | None = None,
-    cost_per_iteration: int = PAYMENT_COST_PER_ITERATION,
+    cost_per_iteration: int | None = None,
     additional_middleware: list[AgentMiddleware] | None = None,
     include_payment: bool = True,
     include_subagents: bool = True,
@@ -122,22 +98,19 @@ def create_deepresearch_agent(
     
     Middleware Stack (in order):
     1. CashuPaymentMiddleware - Payment validation and per-iteration deduction
-    2. TodoListMiddleware - Task tracking for complex research operations
-    3. ClarifyWithHumanMiddleware - Ask user for intent clarification
-    4. ClientToolsMiddleware - Client-side file operations via HITL interrupts
-    5. SubAgentMiddleware - Parallel research delegation
-    6. HumanInTheLoopMiddleware - Approval for funding requests
-    
-    The agent operates with TWO file systems:
-    
-    1. User Files (via ClientToolsMiddleware):
-       - User's project files stored in browser
-       - Write operations require HITL approval
-       - Used for: final reports, user documents
+    2. ToolValidationMiddleware - Catch and correct malformed tool calls
+    3. BehaviouralMiddleware - Agent character and personality
+    4. TodoListMiddleware - Task tracking for complex research operations
+    5. ClarifyWithHumanMiddleware - Ask user for intent clarification
+    6. ClientToolsMiddleware - Client-side file operations via HITL interrupts
+    7. WebsearchMiddleware - Web search and content fetching
+    8. ThinkingMiddleware - Strategic reflection
+    9. SubAgentMiddleware - Parallel research delegation
+    10. HumanInTheLoopMiddleware - Approval for funding requests
     
     Args:
         checkpointer: Optional checkpointer for persistence
-        cost_per_iteration: Satoshis per LLM iteration (default: 10)
+        cost_per_iteration: Override cost per iteration (default: from DEEPRESEARCH_CONFIG)
         additional_middleware: Extra middleware to add
         include_payment: Whether to include payment middleware (default: True)
         include_subagents: Whether to include research sub-agents (default: True)
@@ -152,17 +125,23 @@ def create_deepresearch_agent(
         
         agent = create_deepresearch_agent(
             checkpointer=MemorySaver(),
-            cost_per_iteration=10,
+            cost_per_iteration=15,
         )
         
         # Start a research session
         result = await agent.ainvoke({
             "messages": [HumanMessage(content="Research the history of Bitcoin")],
             "payment_token": "cashuA...",
+            # Optional: client can override cost
+            "payment_cost_per_iteration": 20,
         })
         ```
     """
-    model = get_model()
+    model = get_model(temperature=0.0)
+    
+    # Get effective cost per iteration
+    # Priority: function arg > env var > agent config default
+    effective_cost = DEEPRESEARCH_CONFIG.get_cost_per_iteration(cost_per_iteration)
     
     # Build system prompt
     system_prompt = get_research_system_prompt(
@@ -173,39 +152,34 @@ def create_deepresearch_agent(
     )
     
     # Build middleware stack
-    #
-    # NOTE: ClientToolsMiddleware handles ALL client file tool interrupts including approval.
-    # Write operations (write_file, edit_file) have requires_approval=True which the
-    # frontend uses to show approval UI before executing locally.
     middleware: list[AgentMiddleware] = []
     
-    # 1. Payment middleware (optional) - validates token, tracks balance, deducts per iteration
+    # 1. Payment middleware (optional)
     if include_payment:
-        middleware.append(CashuPaymentMiddleware(cost_per_iteration=cost_per_iteration))
+        middleware.append(CashuPaymentMiddleware(cost_per_iteration=effective_cost))
     
     # 2. Tool Validation - catch and correct malformed tool calls immediately
     middleware.append(ToolValidationMiddleware())
     
-    # 2. Behavioural - control the agent's character and personality
+    # 3. Behavioural - control the agent's character and personality
     middleware.append(BehaviouralMiddleware())
     
-    # 3. Todo list - task tracking for complex multi-step research
+    # 4. Todo list - task tracking for complex multi-step research
     middleware.append(TodoListMiddleware())
     
-    # 3. Clarification tools - ask user for intent clarification
+    # 5. Clarification tools - ask user for intent clarification
     middleware.append(ClarifyWithHumanMiddleware())
 
-    # 5. Client tools - ALL client file operations interrupt for client-side execution
-    #    Write tools include requires_approval=True for frontend approval UI
+    # 6. Client tools - ALL client file operations interrupt for client-side execution
     middleware.append(ClientToolsMiddleware())
 
-    # 6. Web Search - URL discovery and content fetching
+    # 7. Web Search - URL discovery and content fetching
     middleware.append(WebsearchMiddleware())
 
-    # 7. Thinking - Strategic reflection
+    # 8. Thinking - Strategic reflection
     middleware.append(ThinkingMiddleware())
     
-    # 8. Sub-agent middleware (optional) - for parallel research delegation
+    # 9. Sub-agent middleware (optional) - for parallel research delegation
     if include_subagents:
         subagent_config = create_research_subagent_config()
         middleware.append(
@@ -216,15 +190,13 @@ def create_deepresearch_agent(
                 default_middleware=[
                     ToolValidationMiddleware(),
                     TodoListMiddleware(),
-                    # ScratchFilesMiddleware(),  # Sub-agents also use scratch files
-                    ThinkingMiddleware(),      # Sub-agents also think
+                    ThinkingMiddleware(),
                 ],
-                general_purpose_agent=False,  # Research-specific sub-agent
+                general_purpose_agent=False,
             )
         )
 
-    # 9. Human-in-the-loop - ONLY for payment funding requests
-    #    Client file operations are handled by ClientToolsMiddleware above
+    # 10. Human-in-the-loop - ONLY for payment funding requests
     if include_payment:
         middleware.append(
             HumanInTheLoopMiddleware(
@@ -238,12 +210,11 @@ def create_deepresearch_agent(
     if additional_middleware:
         middleware.extend(additional_middleware)
     
-    # Create the agent using create_agent (not create_deep_agent)
-    # This gives us full control over the middleware stack
+    # Create the agent
     agent = create_agent(
         model,
         system_prompt=system_prompt,
-        tools=[],  # Tools provided by middleware (WebsearchMiddleware, ThinkingMiddleware, etc.)
+        tools=[],  # Tools provided by middleware
         middleware=middleware,
         checkpointer=checkpointer,
         debug=debug
@@ -257,5 +228,4 @@ def create_deepresearch_agent(
 # =============================================================================
 
 # Default graph for LangGraph deployment
-# Uses in-memory checkpointing; production should use persistent checkpointer
 graph = create_deepresearch_agent()

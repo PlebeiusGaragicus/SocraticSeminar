@@ -21,64 +21,18 @@ from typing import Any
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware, TodoListMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
-from langchain_anthropic import ChatAnthropic
-from langchain_openai import ChatOpenAI
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Checkpointer
 
-from src.middleware import (
+from src.shared.models import get_model
+from src.shared.config import DEEPTUTOR_CONFIG
+from src.shared.middleware import (
     CashuPaymentMiddleware, 
     ClientToolsMiddleware, 
     ClarifyWithHumanMiddleware,
     ThinkingMiddleware,
     ToolValidationMiddleware,
 )
-from .state import DeeptutorState, COST_PER_ITERATION_SATS
-
-
-# =============================================================================
-# CONFIGURATION
-# =============================================================================
-
-# LLM Configuration
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai")  # "openai" or "anthropic"
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
-LLM_BASE_URL = os.getenv("LLM_BASE_URL")  # Optional: for OpenAI-compatible endpoints
-LLM_API_KEY = os.getenv("LLM_API_KEY", os.getenv("OPENAI_API_KEY", ""))
-
-# Payment Configuration
-PAYMENT_COST_PER_ITERATION = int(os.getenv("COST_PER_ITERATION_SATS", str(COST_PER_ITERATION_SATS)))
-
-
-# =============================================================================
-# MODEL FACTORY
-# =============================================================================
-
-def get_model():
-    """Get the configured chat model.
-    
-    Supports:
-    - OpenAI (default): gpt-4o, gpt-4-turbo, etc.
-    - Anthropic: claude-3-5-sonnet, claude-3-opus, etc.
-    - OpenAI-compatible: Any endpoint with LLM_BASE_URL
-    """
-    if LLM_PROVIDER == "anthropic":
-        return ChatAnthropic(
-            model_name=LLM_MODEL,
-            max_tokens=8192,
-        )
-    else:
-        # OpenAI or OpenAI-compatible
-        kwargs = {
-            "model": LLM_MODEL,
-            "temperature": 0.7,
-        }
-        if LLM_BASE_URL:
-            kwargs["base_url"] = LLM_BASE_URL
-        if LLM_API_KEY:
-            kwargs["api_key"] = LLM_API_KEY
-        
-        return ChatOpenAI(**kwargs)
 
 
 # =============================================================================
@@ -173,7 +127,7 @@ When referencing content from files, cite with the file title:
 def create_deeptutor_agent(
     *,
     checkpointer: Checkpointer | None = None,
-    cost_per_iteration: int = PAYMENT_COST_PER_ITERATION,
+    cost_per_iteration: int | None = None,
     additional_middleware: list[AgentMiddleware] | None = None,
     debug: bool = False,
 ) -> CompiledStateGraph:
@@ -181,15 +135,16 @@ def create_deeptutor_agent(
     
     Middleware Stack (in order):
     1. CashuPaymentMiddleware - Payment validation and per-iteration deduction
-    2. TodoListMiddleware - Task tracking for complex operations
-    3. ClarifyWithHumanMiddleware - Ask user for intent clarification
+    2. ToolValidationMiddleware - Catch and correct malformed tool calls
+    3. TodoListMiddleware - Task tracking for complex operations
+    4. ClarifyWithHumanMiddleware - Ask user for intent clarification
     5. ClientToolsMiddleware - File operations via client interrupts
-    6. HumanInTheLoopMiddleware - Approval for writes and funding
-    7. Any additional middleware
+    6. ThinkingMiddleware - Strategic reflection
+    7. HumanInTheLoopMiddleware - Approval for funding requests
     
     Args:
         checkpointer: Optional checkpointer for persistence
-        cost_per_iteration: Satoshis per LLM iteration (default: 10)
+        cost_per_iteration: Override cost per iteration (default: from DEEPTUTOR_CONFIG)
         additional_middleware: Extra middleware to add after standard ones
         debug: Enable debug logging
         
@@ -209,18 +164,21 @@ def create_deeptutor_agent(
         result = await agent.ainvoke({
             "messages": [HumanMessage(content="Help me with my argument")],
             "payment_token": "cashuA...",
+            # Optional: client can override cost
+            "payment_cost_per_iteration": 5,
         })
         ```
     """
     model = get_model()
     
+    # Get effective cost per iteration
+    # Priority: function arg > env var > agent config default
+    effective_cost = DEEPTUTOR_CONFIG.get_cost_per_iteration(cost_per_iteration)
+    
     # Build middleware stack
-    #
-    # NOTE: ClientToolsMiddleware handles ALL file tool interrupts.
-    # 
     middleware: list[AgentMiddleware] = [
         # 1. Payment middleware - validates token, tracks balance, deducts per iteration
-        CashuPaymentMiddleware(cost_per_iteration=cost_per_iteration),
+        CashuPaymentMiddleware(cost_per_iteration=effective_cost),
         
         # 2. Tool Validation - catch and correct malformed tool calls immediately
         ToolValidationMiddleware(),
@@ -228,7 +186,7 @@ def create_deeptutor_agent(
         # 3. Todo list - task tracking for complex multi-step operations
         TodoListMiddleware(),
 
-        # 3. Clarification tools - ask user for intent clarification
+        # 4. Clarification tools - ask user for intent clarification
         ClarifyWithHumanMiddleware(),
 
         # 5. Client tools - ALL file operations interrupt for client-side execution
@@ -238,7 +196,6 @@ def create_deeptutor_agent(
         ThinkingMiddleware(),
         
         # 7. Human-in-the-loop - ONLY for payment funding requests
-        #    File operations are handled by ClientToolsMiddleware above
         HumanInTheLoopMiddleware(
             interrupt_on={
                 "request_additional_funding": True,
@@ -268,5 +225,4 @@ def create_deeptutor_agent(
 # =============================================================================
 
 # Default graph for LangGraph deployment
-# Uses in-memory checkpointing; production should use persistent checkpointer
 graph = create_deeptutor_agent()

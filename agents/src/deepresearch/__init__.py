@@ -12,18 +12,20 @@ Usage:
     })
 """
 
-from .graph import graph, create_deepresearch_agent
-from src.middleware.websearch import tavily_search, fetch_webpage
-from src.middleware.thinking import think_tool
+from src.shared.middleware.websearch import tavily_search, fetch_webpage
+from src.shared.middleware.thinking import think_tool
+from src.deepresearch.graph import graph, create_deepresearch_agent
 from src.deepresearch.tools import RESEARCH_TOOLS
-from src.deepresearch.state import DeepResearchState
+from src.deepresearch.state import DeepResearchState, COST_PER_ITERATION_SATS
 
 __all__ = [
     "graph",
     "create_deepresearch_agent",
+    "DeepResearchState",
+    "COST_PER_ITERATION_SATS",
+    # Research tools (for external use)
     "tavily_search",
     "fetch_webpage",
     "think_tool",
     "RESEARCH_TOOLS",
-    "DeepResearchState",
 ]

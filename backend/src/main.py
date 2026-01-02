@@ -24,13 +24,25 @@ if os.path.exists(NUTSHELL_PATH):
 load_dotenv()
 
 from .wallet import wallet_router
+from .pricing import pricing_router, pricing_service
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan handler."""
+    """Application lifespan handler.
+    
+    Starts background tasks:
+    - BTC price refresh (every 5 minutes)
+    """
     print("[Backend] Starting Socratic Seminar backend...")
+    
+    # Start BTC price background refresh
+    await pricing_service.start_background_refresh()
+    
     yield
+    
+    # Cleanup
+    await pricing_service.stop_background_refresh()
     print("[Backend] Shutting down...")
 
 
@@ -52,6 +64,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(wallet_router, prefix="/api/wallet", tags=["wallet"])
+app.include_router(pricing_router, prefix="/api/pricing", tags=["pricing"])
 
 
 @app.get("/")

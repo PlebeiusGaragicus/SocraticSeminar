@@ -54,11 +54,17 @@
   // Reactive derived HTML
   const html = $derived.by(() => {
     if (!content) return '';
-    const rawHtml = marked.parse(content) as string;
+    
+    // Strip YAML frontmatter if present for cleaner rendering
+    const cleanContent = content.replace(/^---\n[\s\S]*?\n---\n?/, '');
+    const rawHtml = marked.parse(cleanContent) as string;
     
     // Use DOMPurify only in the browser to avoid SSR issues
     if (browser) {
-      return DOMPurify.sanitize(rawHtml);
+      return DOMPurify.sanitize(rawHtml, {
+        ADD_TAGS: ['span'],
+        ADD_ATTR: ['style']
+      });
     }
     return rawHtml;
   });
