@@ -4,11 +4,13 @@ Provides tools for the agent to search the web using Tavily and fetch full
 webpage content converted to markdown.
 """
 
+import re
 import httpx
 from collections.abc import Awaitable, Callable
 from langchain_core.tools import InjectedToolArg, tool
 from markdownify import markdownify
 from tavily import TavilyClient
+from typing import TypedDict
 from typing_extensions import Annotated, Literal
 from langchain.agents.middleware.types import AgentMiddleware, AgentState, ModelRequest, ModelResponse
 
@@ -109,6 +111,197 @@ def fetch_webpage(url: str) -> str:
 {content}"""
 
 
+# =============================================================================
+# BIBLIOGRAPHY EXTRACTION
+# =============================================================================
+
+class Bibliography(TypedDict, total=False):
+    """Bibliography metadata for citation purposes."""
+    author: str
+    title: str
+    publishedDate: str
+    publisher: str
+    resourceType: str
+
+
+class ScrapedSource(TypedDict):
+    """Structured scraped source data."""
+    url: str
+    title: str
+    content: str
+    bibliography: Bibliography
+
+
+def _extract_meta_content(html: str, *names: str) -> str | None:
+    """Extract content from meta tag by name or property."""
+    for name in names:
+        # Check name attribute
+        match = re.search(
+            rf'<meta\s+[^>]*name=["\']?{re.escape(name)}["\']?\s+[^>]*content=["\']([^"\']+)["\']',
+            html,
+            re.IGNORECASE
+        )
+        if match:
+            return match.group(1).strip()
+        
+        # Check property attribute (for Open Graph)
+        match = re.search(
+            rf'<meta\s+[^>]*property=["\']?{re.escape(name)}["\']?\s+[^>]*content=["\']([^"\']+)["\']',
+            html,
+            re.IGNORECASE
+        )
+        if match:
+            return match.group(1).strip()
+        
+        # Check reversed order (content before name/property)
+        match = re.search(
+            rf'<meta\s+[^>]*content=["\']([^"\']+)["\']?\s+[^>]*(?:name|property)=["\']?{re.escape(name)}["\']?',
+            html,
+            re.IGNORECASE
+        )
+        if match:
+            return match.group(1).strip()
+    
+    return None
+
+
+def _extract_title(html: str) -> str:
+    """Extract page title from HTML."""
+    # Try Open Graph title first
+    og_title = _extract_meta_content(html, "og:title")
+    if og_title:
+        return og_title
+    
+    # Fall back to <title> tag
+    match = re.search(r'<title[^>]*>([^<]+)</title>', html, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    
+    return "Untitled"
+
+
+def _extract_bibliography(html: str, url: str) -> Bibliography:
+    """Extract bibliography metadata from HTML meta tags."""
+    bib: Bibliography = {}
+    
+    # Author - try various meta tag formats
+    author = _extract_meta_content(
+        html,
+        "author", "article:author", "og:author", 
+        "twitter:creator", "dc.creator", "citation_author"
+    )
+    if author:
+        bib["author"] = author
+    
+    # Title
+    title = _extract_title(html)
+    if title and title != "Untitled":
+        bib["title"] = title
+    
+    # Published date
+    date = _extract_meta_content(
+        html,
+        "article:published_time", "og:published_time",
+        "publication_date", "date", "dc.date",
+        "citation_publication_date", "datePublished"
+    )
+    if date:
+        bib["publishedDate"] = date
+    
+    # Publisher/site name
+    publisher = _extract_meta_content(
+        html,
+        "og:site_name", "publisher", "dc.publisher",
+        "citation_journal_title", "application-name"
+    )
+    if publisher:
+        bib["publisher"] = publisher
+    else:
+        # Extract domain as fallback publisher
+        from urllib.parse import urlparse
+        domain = urlparse(url).netloc
+        if domain:
+            # Remove www. prefix if present
+            domain = re.sub(r'^www\.', '', domain)
+            bib["publisher"] = domain
+    
+    # Resource type
+    resource_type = _extract_meta_content(
+        html,
+        "og:type", "dc.type", "citation_type"
+    )
+    if resource_type:
+        bib["resourceType"] = resource_type.capitalize()
+    else:
+        bib["resourceType"] = "Article"  # Default
+    
+    return bib
+
+
+def fetch_and_extract_source(url: str, timeout: float = 15.0) -> ScrapedSource:
+    """Fetch a webpage and extract structured source data with bibliography.
+    
+    Returns structured data suitable for creating a source in the frontend.
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
+    try:
+        response = httpx.get(url, headers=headers, timeout=timeout, follow_redirects=True)
+        response.raise_for_status()
+        html = response.text
+        
+        # Extract bibliography from raw HTML (before markdownification)
+        bibliography = _extract_bibliography(html, url)
+        title = bibliography.get("title") or _extract_title(html)
+        
+        # Convert to markdown
+        content = markdownify(html)
+        
+        # Truncate if too long
+        if len(content) > 50000:
+            content = content[:50000] + "\n\n... [content truncated] ..."
+        
+        return ScrapedSource(
+            url=url,
+            title=title,
+            content=content,
+            bibliography=bibliography
+        )
+        
+    except Exception as e:
+        return ScrapedSource(
+            url=url,
+            title=url.split("/")[-1] or url,
+            content=f"Error fetching content: {str(e)}",
+            bibliography=Bibliography(publisher=url)
+        )
+
+
+@tool(parse_docstring=True)
+def scrape_url_to_source(url: str) -> str:
+    """Scrape a URL and extract structured source data with bibliography metadata.
+    
+    This tool fetches a webpage, converts it to markdown, and extracts citation
+    metadata (author, title, published date, publisher) from meta tags.
+    
+    Use this when the user wants to add a URL as a research source. After calling
+    this tool, use the `create_source` tool to save the source to the user's project.
+    
+    The result is a JSON object with title, content (markdown), and bibliography metadata.
+    
+    Args:
+        url: The URL to scrape and extract source data from
+    """
+    import json
+    
+    source_data = fetch_and_extract_source(url)
+    
+    # Return as JSON for the agent to parse and use with create_source
+    return json.dumps(source_data, indent=2)
+
+
 class WebsearchMiddleware(AgentMiddleware[AgentState, None]):
     """Middleware that provides web search and content fetching tools.
     
@@ -118,7 +311,7 @@ class WebsearchMiddleware(AgentMiddleware[AgentState, None]):
     def __init__(self) -> None:
         """Initialize websearch middleware."""
         super().__init__()
-        self.tools = [tavily_search, fetch_webpage]
+        self.tools = [tavily_search, fetch_webpage, scrape_url_to_source]
     
     async def awrap_model_call(
         self,

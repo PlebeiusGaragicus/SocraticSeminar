@@ -124,12 +124,35 @@ export interface Artifact {
   isDirty?: boolean;
 }
 
+// =============================================================================
+// SOURCE TYPES (Web resources for research)
+// =============================================================================
+
+/**
+ * Bibliography metadata for citation purposes.
+ * Extracted from web pages during scraping.
+ */
+export interface Bibliography {
+  /** Author name, e.g., 'Karpathy, A.' or 'Stanford HAI' */
+  author?: string;
+  /** The title of the article, post, or page */
+  title?: string;
+  /** When the content was originally published (ISO string) */
+  publishedDate?: string;
+  /** Publisher or platform, e.g., 'X', 'Medium', 'Nature' */
+  publisher?: string;
+  /** Resource type, e.g., 'Post', 'Article', 'Dataset' */
+  resourceType?: string;
+}
+
 export interface Source {
   id: string;
   projectId: string;
   title: string;
   url: string;
-  content: string; // Markdown conversion
+  content: string; // Markdown conversion of webpage
+  bibliography?: Bibliography;
+  scrapedAt?: number; // When the agent scraped the content
   metadata?: Record<string, unknown>;
   createdAt: number;
   updatedAt: number;
@@ -226,7 +249,7 @@ export interface HITLResumeResponse {
 }
 
 // Read and write tools that should be auto-approved (client-side execution)
-export const AUTO_APPROVE_TOOLS = ['list_files', 'read_file', 'search_files', 'grep_files', 'glob_files'];
+export const AUTO_APPROVE_TOOLS = ['list_files', 'read_file', 'search_files', 'grep_files', 'glob_files', 'create_source'];
 
 // Tools that require human approval
 export const WRITE_TOOLS = ['write_file', 'patch_file'];

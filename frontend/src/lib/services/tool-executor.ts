@@ -16,7 +16,8 @@
 
 import { db } from './indexeddb.js';
 import { artifactStore } from '../stores/artifacts.svelte.js';
-import type { ToolCall, ToolResult, ProjectFile, Artifact, ArtifactVersion } from '../stores/types.js';
+import { sourceStore } from '../stores/sources.svelte.js';
+import type { ToolCall, ToolResult, ProjectFile, Artifact, ArtifactVersion, Bibliography } from '../stores/types.js';
 
 /**
  * Execute a single tool call and return the result.
@@ -92,6 +93,22 @@ export async function executeToolCall(
           name,
           projectId,
           args.pattern as string
+        );
+
+      case 'create_source':
+        return executeCreateSource(
+          toolCallId,
+          name,
+          projectId,
+          args.url as string,
+          args.title as string,
+          args.content as string,
+          {
+            author: args.author as string | undefined,
+            publishedDate: args.published_date as string | undefined,
+            publisher: args.publisher as string | undefined,
+            resourceType: args.resource_type as string | undefined,
+          }
         );
 
       default:
@@ -629,6 +646,74 @@ function globToRegex(pattern: string): RegExp {
     .replace(/\?/g, '.');                  // ? -> .
   
   return new RegExp(`^${escaped}$`, 'i'); // Case-insensitive, full match
+}
+
+/**
+ * create_source(url, title, content, ...) - Create a new source (web reference)
+ */
+function executeCreateSource(
+  toolCallId: string,
+  toolName: string,
+  projectId: string,
+  url: string,
+  title: string,
+  content: string,
+  bibliography: {
+    author?: string;
+    publishedDate?: string;
+    publisher?: string;
+    resourceType?: string;
+  }
+): ToolResult {
+  if (!url) {
+    return {
+      tool_call_id: toolCallId,
+      name: toolName,
+      content: '',
+      error: 'url is required'
+    };
+  }
+
+  if (!projectId) {
+    return {
+      tool_call_id: toolCallId,
+      name: toolName,
+      content: '',
+      error: 'projectId is required for creating sources'
+    };
+  }
+
+  // Build bibliography object, filtering out undefined values
+  const bib: Bibliography = {};
+  if (bibliography.author) bib.author = bibliography.author;
+  if (bibliography.publishedDate) bib.publishedDate = bibliography.publishedDate;
+  if (bibliography.publisher) bib.publisher = bibliography.publisher;
+  if (bibliography.resourceType) bib.resourceType = bibliography.resourceType;
+
+  // Create the source using the store
+  const source = sourceStore.createSource(
+    projectId,
+    title || url,
+    url,
+    content || '',
+    {
+      bibliography: Object.keys(bib).length > 0 ? bib : undefined,
+      scrapedAt: Date.now(),
+    }
+  );
+
+  console.log(`[ToolExecutor] Created new source via store: ${title || url} (${source.id})`);
+
+  return {
+    tool_call_id: toolCallId,
+    name: toolName,
+    content: JSON.stringify({
+      success: true,
+      message: `Source "${title || url}" created successfully`,
+      source_id: source.id,
+      url: url
+    })
+  };
 }
 
 /**

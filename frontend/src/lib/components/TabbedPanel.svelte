@@ -21,6 +21,7 @@
   import ChatPanel from './ChatPanel.svelte';
   import NewFileModal from './NewFileModal.svelte';
   import NewSourcesModal from './NewSourcesModal.svelte';
+  import SourceViewer from './SourceViewer.svelte';
   import { Button } from './ui/index.js';
   import MessageCircle from '@lucide/svelte/icons/message-circle';
 
@@ -664,29 +665,9 @@
         <ChatPanel threadId={activeTabId} />
       </div>
     {:else if activeTab?.type === 'source'}
-      <div class="absolute inset-0 flex flex-col bg-zinc-950 overflow-hidden">
+      <div class="absolute inset-0">
         {#if activeSource}
-          <div class="flex items-center justify-between border-b border-zinc-800 bg-zinc-900/30 px-4 py-2">
-            <div class="flex items-center gap-2 min-w-0">
-              <Globe class="h-4 w-4 text-blue-500" />
-              <span class="text-sm font-medium text-zinc-300 truncate">{activeSource.title}</span>
-            </div>
-            <a 
-              href={activeSource.url} 
-              target="_blank" 
-              rel="noopener noreferrer"
-              class="flex items-center gap-1.5 rounded-md bg-zinc-800 px-2.5 py-1 text-xs font-medium text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200 transition-colors"
-            >
-              <span>View Original</span>
-              <ExternalLink class="h-3 w-3" />
-            </a>
-          </div>
-          <div class="flex-1 overflow-y-auto p-8 prose prose-invert max-w-none prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-800">
-            <!-- Simple markdown-like rendering for source content -->
-            <div class="text-zinc-300 leading-relaxed whitespace-pre-wrap font-sans">
-              {activeSource.content}
-            </div>
-          </div>
+          <SourceViewer source={activeSource} />
         {/if}
       </div>
     {:else if activeTab?.type === 'artifact'}

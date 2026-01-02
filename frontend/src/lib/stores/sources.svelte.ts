@@ -3,7 +3,7 @@
 
 import { nanoid } from 'nanoid';
 import { untrack } from 'svelte';
-import type { Source } from './types.js';
+import type { Source, Bibliography } from './types.js';
 import { db } from '$lib/services/indexeddb.js';
 
 // Reactive state
@@ -24,6 +24,8 @@ async function persistSource(source: Source): Promise<void> {
       title: source.title,
       url: source.url,
       content: source.content,
+      bibliography: source.bibliography ? JSON.parse(JSON.stringify(source.bibliography)) : undefined,
+      scrapedAt: source.scrapedAt,
       metadata: source.metadata ? JSON.parse(JSON.stringify(source.metadata)) : undefined,
       createdAt: source.createdAt,
       updatedAt: source.updatedAt,
@@ -55,13 +57,20 @@ async function loadProjectSources(projectId: string): Promise<void> {
   }
 }
 
+// Options for creating a source
+interface CreateSourceOptions {
+  bibliography?: Bibliography;
+  scrapedAt?: number;
+  metadata?: Record<string, unknown>;
+}
+
 // Actions
 function createSource(
   projectId: string,
   title: string,
   url: string,
   content: string = '',
-  metadata: Record<string, unknown> = {}
+  options: CreateSourceOptions = {}
 ): Source {
   const now = Date.now();
   
@@ -71,7 +80,9 @@ function createSource(
     title,
     url,
     content,
-    metadata,
+    bibliography: options.bibliography,
+    scrapedAt: options.scrapedAt ?? now,
+    metadata: options.metadata,
     createdAt: now,
     updatedAt: now,
     viewed: false

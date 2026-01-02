@@ -59,6 +59,9 @@ stored locally on the user's device (browser) and will be provided when you requ
 - `write_file(title, content, file_type)` - Create a new file
 - `patch_file(file_id, patches, description)` - Edit a file with one or more patches. `patches` is a list of `{search, replace}` objects. Each `search` string must match exactly.
 
+**Sources:**
+- `create_source(url, title, content, ...)` - Save a web source to the project. Use after scraping a URL to preserve it for research.
+
 ### Guidelines
 
 1. **Use list_files first** to discover what files exist before reading
@@ -66,7 +69,8 @@ stored locally on the user's device (browser) and will be provided when you requ
 3. **Use glob_files** when looking for files by name pattern
 4. **Read files before editing** to understand current content
 5. **Use patch_file** for all edits to existing files. You can provide multiple patches in one call - prefer this for complex edits to avoid multiple user approvals.
-6. **Explain your changes** clearly when writing or patching files"""
+6. **Explain your changes** clearly when writing or patching files
+7. **Use create_source** after scraping URLs with `scrape_url_to_source` to save sources to the project"""
 
 
 # =============================================================================
@@ -318,6 +322,58 @@ Returns success message or error if search text not found.""",
     )
 
 
+def _create_create_source_tool() -> StructuredTool:
+    """Create the create_source tool for adding web sources to the project."""
+    
+    def create_source(
+        url: str,
+        title: str,
+        content: str,
+        author: str | None = None,
+        published_date: str | None = None,
+        publisher: str | None = None,
+        resource_type: str | None = None,
+        runtime: ToolRuntime = None,
+    ) -> str:
+        """Create a new source (web reference) in the user's project.
+        
+        Use this after scraping a webpage with scrape_url_to_source to save
+        the source to the user's project for future reference.
+        
+        Args:
+            url: The URL of the web source
+            title: Title of the source (from webpage title or meta tags)
+            content: Markdown content of the scraped webpage
+            author: Author name if available
+            published_date: Publication date if available (ISO format)
+            publisher: Publisher/site name if available
+            resource_type: Type of resource (Article, Post, Paper, etc.)
+        
+        Returns:
+            Success message with new source ID
+        """
+        return "Tool execution pending - awaiting client response"
+    
+    return StructuredTool.from_function(
+        name="create_source",
+        func=create_source,
+        description="""Create a new source (web reference) in the project.
+
+Use this after scraping a webpage to save the source.
+
+Args:
+    url: The URL of the web source
+    title: Title of the source
+    content: Markdown content of the webpage
+    author: Author name (optional)
+    published_date: Publication date (optional)
+    publisher: Publisher/site name (optional)
+    resource_type: Type of resource (optional)
+
+Returns success message with new source ID.""",
+    )
+
+
 # Tools that can be auto-approved by the client
 AUTO_APPROVE_TOOLS = {
     "list_files", 
@@ -327,6 +383,7 @@ AUTO_APPROVE_TOOLS = {
     "glob_files",
     "write_file",
     "patch_file",
+    "create_source",
 }
 
 # Tools that require explicit human approval (e.g. non-file tools)
@@ -389,6 +446,7 @@ class ClientToolsMiddleware(AgentMiddleware[ClientToolsState, None]):
             _create_patch_file_tool(),
             _create_grep_files_tool(),
             _create_glob_files_tool(),
+            _create_create_source_tool(),
         ]
     
     async def awrap_model_call(

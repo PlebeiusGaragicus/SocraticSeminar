@@ -97,6 +97,11 @@
     if (artifacts.length > 0) {
       filesExpanded = true;
     }
+    
+    // Auto-expand Sources if sources are loaded
+    if (sources.length > 0) {
+      sourcesExpanded = true;
+    }
   });
   
   // Delete confirmation state
