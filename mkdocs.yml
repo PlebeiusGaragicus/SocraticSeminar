@@ -52,7 +52,7 @@ nav:
     - debugging: features/debugging.md
     - testing: features/testing.md
   - How to argue:
-    - How to argue: socratic/index.md
-    - arguments.py: socratic/how-to-argue/arguments.md
+    - How to argue: how-to-argue/index.md
+    - arguments.py: how-to-argue/arguments.md
     - Arguments:
-      - vibe coding: socratic/how-to-argue/arguments/vibe-coding.md
+      - vibe coding: how-to-argue/arguments/vibe-coding.md
