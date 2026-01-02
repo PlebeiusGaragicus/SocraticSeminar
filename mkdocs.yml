@@ -1,5 +1,5 @@
 site_name: Socratic Seminar
-site_description: 
+site_description: A self-hostable, project-based agentic document editor powered by Nostr authentication and Bitcoin eCash payments. Structured intellectual discourse through AI-assisted document editing.
 site_url: https://plebeiusgaragicus.github.io/SocraticSeminar/
 repo_url: https://github.com/PlebeiusGaragicus/SocraticSeminar
 repo_name: SocraticSeminar
