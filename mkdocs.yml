@@ -40,7 +40,7 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Architecture:
+  - Features:
     - Overview: features/overview.md
     - Frontend: features/frontend.md
     - Agents: features/agents.md
