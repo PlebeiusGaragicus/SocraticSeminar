@@ -51,8 +51,8 @@ nav:
     - templates: features/templates.md
     - debugging: features/debugging.md
     - testing: features/testing.md
-  - Socratic Seminar:
-    - Socratic Seminar: socratic/index.md
-    - arguments.py: socratic/arguments.py.md
+  - How to argue:
+    - How to argue: socratic/index.md
+    - arguments.py: socratic/how-to-argue/arguments.md
     - Arguments:
-      - vibe coding: socratic/arguments/vibe-coding.md
+      - vibe coding: socratic/how-to-argue/arguments/vibe-coding.md
