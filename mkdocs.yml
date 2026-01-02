@@ -1,5 +1,5 @@
 site_name: Socratic Seminar
-site_description: 
+site_description: A self-hostable, project-based agentic document editor powered by Nostr authentication and Bitcoin eCash payments. Structured intellectual discourse through AI-assisted document editing.
 site_url: https://plebeiusgaragicus.github.io/SocraticSeminar/
 repo_url: https://github.com/PlebeiusGaragicus/SocraticSeminar
 repo_name: SocraticSeminar
@@ -51,8 +51,8 @@ nav:
     - templates: features/templates.md
     - debugging: features/debugging.md
     - testing: features/testing.md
-  - Socratic Seminar:
-    - Socratic Seminar: socratic/index.md
-    - arguments.py: socratic/arguments.py.md
+  - How to argue:
+    - How to argue: socratic/index.md
+    - arguments.py: socratic/how-to-argue/arguments.md
     - Arguments:
-      - vibe coding: socratic/arguments/vibe-coding.md
+      - vibe coding: socratic/how-to-argue/arguments/vibe-coding.md
