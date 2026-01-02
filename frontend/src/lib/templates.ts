@@ -9,7 +9,7 @@ export interface FileTemplate {
 export const FILE_TEMPLATES: FileTemplate[] = [
   { 
     title: 'Socratic Seminar', 
-    content: '---\ntitle: Socratic Seminar Template\nauthor: [Your Name]\ndate: [Date]\ntags: [topic]\n---\n\n# [Title]\n\n## Thesis\n*A clear, arguable statement that your entire document will support.*\n\n---\n\n## Supporting Clause 1 - "[One-line summary]"\n\n### Definitions & Citations\n- `term`: Definition\n- `source`: [Citation](URL)\n\n### Narrative\nWrite your reasoning here. Build your case using the definitions above.\n\n### Refutation\n*Present the strongest version of opposing viewpoints.*\n\n### Reply\nExplain why your original argument still holds.\n\n---\n\n## Conclusion\n*Synthesize your supporting clauses and restate your thesis.*\n' 
+    content: '# Thesis: [Title]\n\n**Abstract:** [Brief summary of the position]\n\n## 📜 Supporting Clause: [Clause Title]\n\n### 📝 Definitions and supporting evidence:\n\n`[Term]:` [Definition]\n\n**Source:** [Citation]\n\n---\n\n### 💬 Narrative\n[Explain the reasoning behind this clause.]\n\n## 🗣️ Argument: [Core Position]\n\n### 📝 Definitions and supporting evidence:\n\n`[Term]:` [Definition]\n\n---\n\n### 💬 Narrative\n[Synthesize the supporting clauses into the main argument.]\n\n## 🗣️ Refutation to: [Core Position] | Argument: [Counter-Argument]\n\n### 📝 Definitions and supporting evidence:\n\n`[Term]:` [Definition]\n\n---\n\n### 💬 Narrative\n[Detail the strongest possible counter-argument.]\n' 
   },
   { 
     title: 'Bureau All-Hands', 

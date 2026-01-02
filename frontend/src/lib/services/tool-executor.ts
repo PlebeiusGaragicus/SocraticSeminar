@@ -17,7 +17,6 @@
 import { db } from './indexeddb.js';
 import { artifactStore } from '../stores/artifacts.svelte.js';
 import type { ToolCall, ToolResult, ProjectFile, Artifact, ArtifactVersion } from '../stores/types.js';
-import { nanoid } from 'nanoid';
 
 /**
  * Execute a single tool call and return the result.
@@ -277,11 +276,10 @@ function executeWriteFile(
 }
 
 /**
- * patch_file(file_id, patches, description) - Propose patches to an existing file
+ * patch_file(file_id, patches, description) - Apply patches to an existing file immediately
  * 
- * IMPORTANT: Patches are NOT applied immediately. They are queued as "pending patches"
- * and shown as inline diffs in the editor. The user can accept or reject each patch
- * individually, similar to VS Code / Cursor.
+ * Patches are applied directly to the artifact content. Open editor tabs will
+ * automatically refresh via the reactive liveContentMap system.
  */
 async function executePatchFile(
   toolCallId: string,
@@ -323,8 +321,8 @@ async function executePatchFile(
     };
   }
 
-  // IMPORTANT: Save any unsaved user edits before validating patches
-  // This ensures we validate against the most up-to-date content
+  // IMPORTANT: Save any unsaved user edits before applying patches
+  // This ensures we apply against the most up-to-date content
   if (artifact.isDirty) {
     await artifactStore.saveArtifactNow(fileId);
   }
@@ -345,14 +343,13 @@ async function executePatchFile(
     };
   }
 
-  // Validate all patches before queuing (check that search strings exist)
-  const validatedPatches: Array<{ search: string; replace: string; description?: string }> = [];
-  let testContent = currentContent;
+  // Apply all patches sequentially
+  let newContent = currentContent;
 
   for (let i = 0; i < patchList.length; i++) {
     const { search, replace } = patchList[i];
     
-    if (!testContent.includes(search)) {
+    if (!newContent.includes(search)) {
       return {
         tool_call_id: toolCallId,
         name: toolName,
@@ -362,7 +359,7 @@ async function executePatchFile(
     }
 
     // Check for multiple occurrences
-    const occurrences = testContent.split(search).length - 1;
+    const occurrences = newContent.split(search).length - 1;
     if (occurrences > 1) {
       return {
         tool_call_id: toolCallId,
@@ -372,32 +369,24 @@ async function executePatchFile(
       };
     }
 
-    // Apply to test content to check subsequent patches
-    testContent = testContent.replace(search, replace);
-    
-    validatedPatches.push({
-      search,
-      replace,
-      description: description ? `${description} (patch ${i + 1}/${patchList.length})` : undefined
-    });
+    // Apply the patch
+    newContent = newContent.replace(search, replace);
   }
 
-  // Queue patches as pending (NOT applied yet - shown as inline diffs)
-  const pendingPatches = artifactStore.addPendingPatches(fileId, validatedPatches);
+  // Update the live content - this will trigger the reactive system to refresh open editors
+  artifactStore.updateLiveContent(fileId, newContent);
   
   const currentTitle = artifact.versions[artifact.currentVersionIndex]?.title || 'Untitled';
-  console.log(`[ToolExecutor] Queued ${pendingPatches.length} pending patches for: ${currentTitle}`);
+  console.log(`[ToolExecutor] Applied ${patchList.length} patches to: ${currentTitle}`);
 
   return {
     tool_call_id: toolCallId,
     name: toolName,
     content: JSON.stringify({
       success: true,
-      message: `Proposed ${pendingPatches.length} patch${pendingPatches.length !== 1 ? 'es' : ''} for review${description ? `: ${description}` : ''}`,
+      message: `Applied ${patchList.length} patch${patchList.length !== 1 ? 'es' : ''}${description ? `: ${description}` : ''}`,
       file_id: fileId,
-      patches_queued: pendingPatches.length,
-      patch_ids: pendingPatches.map(p => p.id),
-      status: 'pending_review'
+      patches_applied: patchList.length
     })
   };
 }

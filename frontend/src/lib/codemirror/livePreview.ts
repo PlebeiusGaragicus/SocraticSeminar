@@ -295,7 +295,7 @@ function buildDecorations(view: EditorView): DecorationSet {
     }
   });
 
-  // Sort decorations by position and add to builder
+// Sort decorations by position and add to builder
   decorations.sort((a, b) => a.from - b.from || a.value.startSide - b.value.startSide);
   
   for (const deco of decorations) {

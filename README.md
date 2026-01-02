@@ -95,8 +95,8 @@ langgraph dev --no-browser
 cd backend
 python3.12 -m venv venv
 source venv/bin/activate
-
 pip install -e .
+
 cp .env.example .env
 nano .env
 
@@ -111,11 +111,15 @@ uvicorn src.main:app --reload
 **Svelte Frontend**
 
 ```sh
+# build cyphertap so we can use it...
 cd cyphertap
 pnpm install
 pnpm run build
-cd ../frontend
+
+# build frontend
+cd frontend
 pnpm install
+npm run build
 
 cp .env.example .env
 nano .env
