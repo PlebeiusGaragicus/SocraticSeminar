@@ -41,12 +41,14 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Architecture:
-    - Overview: architecture/overview.md
-    - Frontend: architecture/frontend.md
-    - Agents: architecture/agents.md
-    - Backend: architecture/backend.md
-  - Agents:
-    - Socratese:
-      - Overview: agents/Socratese/agent.md
-      - Socratic Seminar: agents/Socratese/SocraticSeminar.md
-      - Coding Agents: agents/Socratese/CodingAgents.md
+    - Overview: features/overview.md
+    - Frontend: features/frontend.md
+    - Agents: features/agents.md
+    - Backend: features/backend.md
+    - Nostr: features/nostr.md
+    - eCash: features/ecash.md
+    - CopyFuck: features/copyfuck.md
+    - deepagents: features/deepagents.md
+    - templates: features/templates.md
+    - debugging: features/debugging.md
+    - testing: features/testing.md

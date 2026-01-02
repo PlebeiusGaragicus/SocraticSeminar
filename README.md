@@ -1,6 +1,28 @@
 # Socratic Seminar
 
-This project uses several example submodules to create a self-hostable web application:
+**Important information for coding agents:**
+
+1. Always read the docs!
+
+1. We always ensure to both review documentation and keep it up-to-date with code changes.  Instead of adding new files, we keep updates terse and contained in the files that reference the features.  We don't include verbose changelogs or list of refactored code elements - we simply update the existing documentation to match.
+
+1. The submodules in this repo are for **reference only** - our Svelte frontend/ contains our web app.
+
+1. Project structure:
+
+  - **`docs/`** - our MKDocs documentation hosted on Github Pages
+  - **`frontend/`** - Svelte 5 web app
+  - **`backend/`** - Python3.12 FastAPI backend for accepting payments - used by our LangGraph agents for payment validation and redemption
+  - **`agent/`** - Self-hosted LangGraph agents for AI chat
+
+  - **`cyphertap`** is our fork of the repository since its `npm` library is out-of-date.  We build from and use our local submodule since it has new features not included in the origional repository. **Changes may be made to this submodule in order to further bugfix/develop its features!**
+  - **`nutshell/`** a python library which handles self-custody ecash wallets - it is used in our FastAPI backend/ to store user's funds which were spent to pay for usage of our agents and is provided for reference and clarity.
+  - **`deepagents/`** is a LangGraph library which demonstrates a `deepagent` whose capabilities can be extended with `Middleware`.  We custom-build out own agents using `create_agent()` similarly to the deepagent library.
+  - **`deep-agent-ui`** is another React frontend that demonstrates a chat UI between a user and a LangGraph `deepagent` capable of tool calling.
+  - **`fullstack-chat-client`** is an example React frontend for demonstrating a chat UI between a user and LangGraph agent capable of tool calling.
+
+
+
 
 Web Application features:
  - agentic: powered by LangGraph / DeepAgents
@@ -13,119 +35,95 @@ Implementation details:
  - Tech Stack: Svelte 5 + Vite
  - openai-compatible: instead of paying for AI usage, we use our own AI inference and connect our LLMs to our own OpenAI-compatible endpoints.  We won't put OpenAI model names as defaults.
 
-Built from references:
- - The `CypherTap` submodule is a Svelte 5 component which will handle user login (using nostr keys) and payment (using Bitcoin eCash).  We'll use our local submodule as the official CypherTap npm package is out-of-date
- - The `deepagents` submodule outlines one form of agentic graph which we will use and have multiple variants of.
- - The `fullstack-chat-client` is an example fullstack web application that exemplifies an agentic UI compatible with LangGraph agents
- - The `open-canvas` submodule provides an example web application that allows for artifact editing between a human and LangGraph agent.
- - The `nutshell` submodule will be used for our ecash wallet and is provided for reference and clarity.
 
-These references will be used to build our "Socratic Seminar" web application:
 
-`frontend/` - our Svelte 5 frontend
 
-`agents/` - our agentic graphs, deployed using `langgraph dev`. One node will hit our backend with an ecash token which will need to be verified before execution.
-
-`backend/` - our Python 3.12+ FastAPI backend, accepts and verifies eCash payments
 
 ---
 
-### Initial setup for local development:
 
-## LangGraph agent server
-```sh
-python3.12 -m venv venv_agents
-source venv_agents/bin/activate
-cd agents
-pip install -e .
-cp .env.example .env
-nano .env
+**Humans:** see our [docs](https://plebeiusgaragicus.github.io/SvelteReader/) for information.
+
+Run all three services for full-stack development:
+
+With `tmux`:
+```bash
+tmux new-session -d -s sveltereader
+tmux split-window -h
+tmux split-window -v
+tmux send-keys -t 0 'cd agent && source .venv/bin/activate && langgraph dev' C-m
+tmux send-keys -t 1 'cd backend && source .venv/bin/activate && uvicorn src.main:app --reload' C-m
+tmux send-keys -t 2 'cd frontend && pnpm dev' C-m
+tmux attach
 ```
-
-```sh
-cd agents
-source ../venv_agents/bin/activate
-langgraph dev --no-browser
-```
-
-## FastAPI payment backend
-
-```sh
-python3.12 -m venv venv_backend
-source venv_backend/bin/activate
-cd backend
-pip install -e .
-cp .env.example .env
-nano .env
-```
-
-```sh
-cd backend
-source ../venv_backend/bin/activate
-uvicorn src.main:app --reload
-```
-
-
-## Svelte Frontend
 
 ---
 
-```sh
-cd cyphertap
-pnpm install
-pnpm run build
-cd ../frontend
-npm install
-
-cp .env.example .env
-nano .env
-```
-
-
-```sh
-cd frontend
-npm run dev
-```
-
-
-
-
-
-
-
-
-
-
-## How to run for development:
+**git clone**
 
 ```sh
 git clone ...
-
-# IMPORTANT
 git submodule update --init --recursive
 ```
 
+**Fresh install setup**
+
 ```sh
-# Frontend
+# LangGraph agent server
+cd agents
+python3.12 -m venv venv
+source venv/bin/activate
+pip install -e .
+
+cp .env.example .env
+nano .env
+
+# run from start root with...
+
+
+cd agents
+source venv/bin/activate
+langgraph dev --no-browser
+```
+
+
+---
+
+**FastAPI payment backend**
+
+```sh
+cd backend
+python3.12 -m venv venv
+source venv/bin/activate
+
+pip install -e .
+cp .env.example .env
+nano .env
+
+# run from root with...
+cd backend
+source venv/bin/activate
+uvicorn src.main:app --reload
+```
+
+---
+
+**Svelte Frontend**
+
+```sh
 cd cyphertap
 pnpm install
 pnpm run build
 cd ../frontend
-npm run dev
-```
+pnpm install
 
-```sh
-# Backend  
-cd backend
-source ../venv_backend/bin/activate
-uvicorn src.main:app --reload
-```
+cp .env.example .env
+nano .env
 
-```sh
-# Agents
-cd agents
-source ../venv_agents/bin/activate
-langgraph dev --no-browser
+
+# run from root with...
+cd frontend
+pnpm run dev
 ```
 
 ---
