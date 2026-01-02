@@ -1,0 +1,32 @@
+#!/bin/bash
+
+# Usage help
+if [ "$1" == "--help" ] || [ "$1" == "-h" ]; then
+    echo "Usage: ./compile.sh [--light] [path_to_markdown_file]"
+    echo "Description: Activates (or creates) the virtual environment and compiles Socratic Seminar markdown files to HTML."
+    echo "If no file path is provided, it compiles all .md files in docs/arguments/ to compiled-html/"
+    echo "Options:"
+    echo "  --light    Default to light mode instead of dark mode."
+    exit 0
+fi
+
+# Get the directory of the script
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+
+# Check if venv exists, create if not
+if [ ! -d "$SCRIPT_DIR/venv" ]; then
+    echo "Virtual environment 'venv' not found. Creating it..."
+    python3 -m venv "$SCRIPT_DIR/venv"
+    source "$SCRIPT_DIR/venv/bin/activate"
+    echo "Installing dependencies..."
+    pip install -r "$SCRIPT_DIR/scripts/requirements.txt"
+else
+    # Activate the virtual environment
+    source "$SCRIPT_DIR/venv/bin/activate"
+fi
+
+# Call the python script with the provided arguments
+python3 "$SCRIPT_DIR/scripts/compile_socratic.py" "$@"
+
+# Deactivate the virtual environment
+deactivate

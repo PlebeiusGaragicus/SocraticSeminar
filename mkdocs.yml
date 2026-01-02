@@ -48,7 +48,11 @@ nav:
     - Nostr: features/nostr.md
     - eCash: features/ecash.md
     - CopyFuck: features/copyfuck.md
-    - deepagents: features/deepagents.md
     - templates: features/templates.md
     - debugging: features/debugging.md
     - testing: features/testing.md
+  - Socratic Seminar:
+    - Socratic Seminar: socratic/index.md
+    - arguments.py: socratic/arguments.py.md
+    - Arguments:
+      - vibe coding: socratic/arguments/vibe-coding.md
