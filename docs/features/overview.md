@@ -84,15 +84,6 @@ SocraticSeminar/
 └── docs/               # This documentation
 ```
 
-## Debugging and Iteration
-
-Clear visibility into agent execution is provided via LangSmith integration and custom CLI tools:
-
-- **LangSmith**: Real-time tracing of all graph runs, node transitions, and LLM calls.
-- **Trace CLI**: The `./scripts/fetch_trace.sh` tool allows developers to quickly pull thread history, analyze interrupts, and inspect state snapshots from the terminal.
-
-See [Debugging and Tracing](debugging.md) for more details.
-
 ## Key Design Decisions
 
 ### Direct LangGraph Streaming

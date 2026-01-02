@@ -47,11 +47,10 @@ nav:
     - Agents: features/agents.md
     - Backend: features/backend.md
     - Nostr: features/nostr.md
-    - templates: features/templates.md
-    - debugging: features/debugging.md
-    - testing: features/testing.md
+    - Testing: features/testing.md
   - How to argue:
-    - How to argue: how-to-argue/index.md
-    - arguments.py: how-to-argue/arguments.md
-    - Arguments:
+    - How to argue: how-to-argue/how-to-argue.md
+    - Templates: how-to-argue/templates.md
+    - argument.py: how-to-argue/argument.md
+    - Example Arguments:
       - vibe coding: how-to-argue/arguments/vibe-coding.md
