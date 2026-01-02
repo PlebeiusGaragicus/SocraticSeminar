@@ -10,7 +10,12 @@
   import Building from '@lucide/svelte/icons/building';
   import Tag from '@lucide/svelte/icons/tag';
   import AlertCircle from '@lucide/svelte/icons/alert-circle';
+  import File from '@lucide/svelte/icons/file';
+  import FileImage from '@lucide/svelte/icons/file-image';
+  import Download from '@lucide/svelte/icons/download';
+  import Loader2 from '@lucide/svelte/icons/loader-2';
   import type { Source } from '$lib/stores/types.js';
+  import { sourceStore } from '$lib/stores/index.js';
   import { cn } from '$lib/utils.js';
   import Markdown from './Markdown.svelte';
 
@@ -20,6 +25,12 @@
 
   let { source }: Props = $props();
 
+  // Determine source type
+  const isFileSource = $derived(source.sourceType === 'file');
+  const isPdf = $derived(isFileSource && source.mimeType === 'application/pdf');
+  const isImage = $derived(isFileSource && source.mimeType?.startsWith('image/'));
+  const isText = $derived(isFileSource && (source.mimeType === 'text/plain' || source.mimeType === 'text/markdown'));
+
   // Tab state
   type ViewTab = 'content' | 'preview';
   let activeTab = $state<ViewTab>('content');
@@ -27,9 +38,14 @@
   // Metadata expansion state
   let metadataExpanded = $state(true);
 
-  // Iframe loading state
+  // Iframe loading state (for URL sources)
   let iframeLoaded = $state(false);
   let iframeError = $state(false);
+
+  // File blob state
+  let blobUrl = $state<string | null>(null);
+  let blobLoading = $state(false);
+  let blobError = $state<string | null>(null);
 
   const bibliography = $derived(source.bibliography);
   const hasBibliography = $derived(
@@ -40,6 +56,22 @@
       bibliography.resourceType
     )
   );
+
+  // File info for file sources
+  const fileInfo = $derived(() => {
+    if (!isFileSource) return null;
+    return {
+      name: source.title,
+      size: source.fileSize ? formatFileSize(source.fileSize) : 'Unknown size',
+      type: source.mimeType || 'Unknown type',
+    };
+  });
+
+  function formatFileSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
 
   function formatDate(dateStr: string | undefined): string {
     if (!dateStr) return '';
@@ -65,6 +97,41 @@
     iframeLoaded = true;
   }
 
+  async function loadBlob() {
+    if (!source.blobId || blobUrl) return;
+    
+    blobLoading = true;
+    blobError = null;
+    
+    try {
+      const blob = await sourceStore.getSourceBlob(source.id);
+      if (blob) {
+        blobUrl = URL.createObjectURL(blob);
+      } else {
+        blobError = 'File not found in storage';
+      }
+    } catch (error) {
+      blobError = error instanceof Error ? error.message : 'Failed to load file';
+    } finally {
+      blobLoading = false;
+    }
+  }
+
+  async function downloadFile() {
+    if (!blobUrl) {
+      await loadBlob();
+    }
+    
+    if (blobUrl) {
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = source.title;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+  }
+
   // Reset iframe state when source changes
   $effect(() => {
     if (source.url) {
@@ -72,63 +139,120 @@
       iframeError = false;
     }
   });
+
+  // Load blob when switching to file source
+  $effect(() => {
+    if (isFileSource && source.blobId && !blobUrl && !blobLoading) {
+      loadBlob();
+    }
+  });
+
+  // Cleanup blob URL on unmount or source change
+  $effect(() => {
+    const currentBlobUrl = blobUrl;
+    return () => {
+      if (currentBlobUrl) {
+        URL.revokeObjectURL(currentBlobUrl);
+      }
+    };
+  });
+
+  // Revoke old blob URL when source changes
+  $effect(() => {
+    // Tracking source.id
+    const _id = source.id;
+    return () => {
+      if (blobUrl) {
+        URL.revokeObjectURL(blobUrl);
+        blobUrl = null;
+      }
+    };
+  });
 </script>
 
 <div class="flex h-full flex-col bg-zinc-950 overflow-hidden">
   <!-- Header Bar -->
   <div class="flex items-center justify-between border-b border-zinc-800 bg-zinc-900/50 px-4 py-2.5">
     <div class="flex items-center gap-3 min-w-0 flex-1">
-      <Globe class="h-4 w-4 flex-shrink-0 text-blue-400" />
+      {#if isFileSource}
+        {#if isPdf}
+          <File class="h-4 w-4 flex-shrink-0 text-red-400" />
+        {:else if isImage}
+          <FileImage class="h-4 w-4 flex-shrink-0 text-purple-400" />
+        {:else}
+          <FileText class="h-4 w-4 flex-shrink-0 text-green-400" />
+        {/if}
+      {:else}
+        <Globe class="h-4 w-4 flex-shrink-0 text-blue-400" />
+      {/if}
       <div class="min-w-0 flex-1">
         <h2 class="text-sm font-medium text-zinc-100 truncate">{source.title}</h2>
-        <a 
-          href={source.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          class="text-xs text-zinc-500 hover:text-blue-400 truncate block transition-colors"
-        >
-          {source.url}
-        </a>
+        {#if isFileSource}
+          <span class="text-xs text-zinc-500">
+            {fileInfo()?.size} · {fileInfo()?.type}
+          </span>
+        {:else}
+          <a 
+            href={source.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="text-xs text-zinc-500 hover:text-blue-400 truncate block transition-colors"
+          >
+            {source.url}
+          </a>
+        {/if}
       </div>
     </div>
     
-    <!-- Tab Switcher -->
-    <div class="flex items-center gap-1 rounded-lg bg-zinc-800/50 p-1 mx-4">
-      <button
-        onclick={() => activeTab = 'content'}
-        class={cn(
-          "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all",
-          activeTab === 'content'
-            ? "bg-zinc-700 text-zinc-100 shadow-sm"
-            : "text-zinc-400 hover:text-zinc-200"
-        )}
-      >
-        <FileText class="h-3.5 w-3.5" />
-        Content
-      </button>
-      <button
-        onclick={() => activeTab = 'preview'}
-        class={cn(
-          "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all",
-          activeTab === 'preview'
-            ? "bg-zinc-700 text-zinc-100 shadow-sm"
-            : "text-zinc-400 hover:text-zinc-200"
-        )}
-      >
-        <Monitor class="h-3.5 w-3.5" />
-        Preview
-      </button>
-    </div>
+    {#if !isFileSource}
+      <!-- Tab Switcher (only for URL sources) -->
+      <div class="flex items-center gap-1 rounded-lg bg-zinc-800/50 p-1 mx-4">
+        <button
+          onclick={() => activeTab = 'content'}
+          class={cn(
+            "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all",
+            activeTab === 'content'
+              ? "bg-zinc-700 text-zinc-100 shadow-sm"
+              : "text-zinc-400 hover:text-zinc-200"
+          )}
+        >
+          <FileText class="h-3.5 w-3.5" />
+          Content
+        </button>
+        <button
+          onclick={() => activeTab = 'preview'}
+          class={cn(
+            "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all",
+            activeTab === 'preview'
+              ? "bg-zinc-700 text-zinc-100 shadow-sm"
+              : "text-zinc-400 hover:text-zinc-200"
+          )}
+        >
+          <Monitor class="h-3.5 w-3.5" />
+          Preview
+        </button>
+      </div>
+    {/if}
 
-    <a 
-      href={source.url} 
-      target="_blank" 
-      rel="noopener noreferrer"
-      class="flex items-center gap-1.5 rounded-md bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100 transition-colors flex-shrink-0"
-    >
-      <span>Open Original</span>
-      <ExternalLink class="h-3 w-3" />
-    </a>
+    {#if isFileSource}
+      <button 
+        onclick={downloadFile}
+        class="flex items-center gap-1.5 rounded-md bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100 transition-colors flex-shrink-0"
+      >
+        <Download class="h-3 w-3" />
+        <span>Download</span>
+      </button>
+    {:else}
+      <a 
+        href={source.url} 
+        target="_blank" 
+        rel="noopener noreferrer"
+        class="flex items-center gap-1.5 rounded-md bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100 transition-colors flex-shrink-0"
+      >
+        <span>Open Original</span>
+        <ExternalLink class="h-3 w-3" />
+      </a>
+    {/if}
   </div>
 
   <!-- Collapsible Metadata Section -->
@@ -194,15 +318,92 @@
 
   <!-- Content Area -->
   <div class="flex-1 overflow-hidden relative">
-    {#if activeTab === 'content'}
-      <!-- Markdown Content View -->
+    {#if isFileSource}
+      <!-- File Source Content -->
+      {#if blobLoading}
+        <div class="absolute inset-0 flex items-center justify-center bg-zinc-950">
+          <div class="text-center">
+            <Loader2 class="h-8 w-8 animate-spin text-blue-500 mx-auto mb-3" />
+            <p class="text-sm text-zinc-500">Loading file...</p>
+          </div>
+        </div>
+      {:else if blobError}
+        <div class="absolute inset-0 flex items-center justify-center bg-zinc-950">
+          <div class="text-center max-w-md px-6">
+            <AlertCircle class="h-10 w-10 text-red-500 mx-auto mb-3" />
+            <h3 class="text-base font-medium text-zinc-200 mb-2">Failed to Load File</h3>
+            <p class="text-sm text-zinc-500">{blobError}</p>
+          </div>
+        </div>
+      {:else if isPdf && blobUrl}
+        <!-- PDF Viewer using native embed -->
+        <object
+          data={blobUrl}
+          type="application/pdf"
+          class="absolute inset-0 w-full h-full"
+          title={source.title}
+        >
+          <div class="absolute inset-0 flex items-center justify-center bg-zinc-950">
+            <div class="text-center max-w-md px-6">
+              <File class="h-10 w-10 text-red-400 mx-auto mb-3" />
+              <h3 class="text-base font-medium text-zinc-200 mb-2">PDF Preview Not Available</h3>
+              <p class="text-sm text-zinc-500 mb-4">
+                Your browser doesn't support inline PDF viewing.
+              </p>
+              <button 
+                onclick={downloadFile}
+                class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 transition-colors"
+              >
+                <Download class="h-4 w-4" />
+                <span>Download PDF</span>
+              </button>
+            </div>
+          </div>
+        </object>
+      {:else if isImage && blobUrl}
+        <!-- Image Viewer -->
+        <div class="absolute inset-0 overflow-auto flex items-center justify-center bg-zinc-900/50 p-8">
+          <img
+            src={blobUrl}
+            alt={source.title}
+            class="max-w-full max-h-full object-contain rounded-lg shadow-xl"
+          />
+        </div>
+      {:else if isText}
+        <!-- Text/Markdown Content -->
+        <div class="absolute inset-0 overflow-y-auto">
+          <div class="max-w-4xl mx-auto px-8 py-6">
+            <Markdown content={source.content} />
+          </div>
+        </div>
+      {:else}
+        <!-- Unknown file type fallback -->
+        <div class="absolute inset-0 flex items-center justify-center bg-zinc-950">
+          <div class="text-center max-w-md px-6">
+            <File class="h-10 w-10 text-zinc-500 mx-auto mb-3" />
+            <h3 class="text-base font-medium text-zinc-200 mb-2">{source.title}</h3>
+            <p class="text-sm text-zinc-500 mb-4">
+              This file type cannot be previewed in the browser.
+            </p>
+            <button 
+              onclick={downloadFile}
+              class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 transition-colors"
+            >
+              <Download class="h-4 w-4" />
+              <span>Download File</span>
+            </button>
+          </div>
+        </div>
+      {/if}
+    {:else if activeTab === 'content'}
+      <!-- Markdown Content View (URL sources) -->
       <div class="absolute inset-0 overflow-y-auto">
         <div class="max-w-4xl mx-auto px-8 py-6">
           <Markdown content={source.content} />
         </div>
       </div>
     {:else}
-      <!-- Iframe Preview View -->
+      <!-- Iframe Preview View (URL sources) -->
       <div class="absolute inset-0 flex flex-col">
         {#if !iframeLoaded}
           <div class="absolute inset-0 flex items-center justify-center bg-zinc-950">
@@ -252,7 +453,11 @@
   <!-- Footer with scraped timestamp -->
   <div class="border-t border-zinc-800 px-4 py-1.5 flex items-center justify-between text-[10px] text-zinc-600">
     <span>
-      {#if source.scrapedAt}
+      {#if isFileSource}
+        {#if source.fileHash}
+          SHA256: {source.fileHash.slice(0, 16)}...
+        {/if}
+      {:else if source.scrapedAt}
         Scraped {new Date(source.scrapedAt).toLocaleDateString()} at {new Date(source.scrapedAt).toLocaleTimeString()}
       {:else}
         Added {new Date(source.createdAt).toLocaleDateString()}
@@ -261,4 +466,3 @@
     <span class="uppercase tracking-wider font-medium text-zinc-700">Read Only</span>
   </div>
 </div>
-

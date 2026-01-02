@@ -145,18 +145,50 @@ export interface Bibliography {
   resourceType?: string;
 }
 
+/** Type of source - web URL or uploaded file */
+export type SourceType = 'url' | 'file';
+
+/** Allowed MIME types for file uploads */
+export const ALLOWED_FILE_TYPES = [
+  'application/pdf',
+  'text/plain',
+  'text/markdown',
+  'image/png',
+  'image/jpeg',
+] as const;
+
+export type AllowedMimeType = typeof ALLOWED_FILE_TYPES[number];
+
 export interface Source {
   id: string;
   projectId: string;
   title: string;
-  url: string;
-  content: string; // Markdown conversion of webpage
+  url: string; // URL for web sources, or filename for file sources
+  content: string; // Markdown/text content (empty for binary files like PDF/images)
   bibliography?: Bibliography;
   scrapedAt?: number; // When the agent scraped the content
   metadata?: Record<string, unknown>;
   createdAt: number;
   updatedAt: number;
   viewed?: boolean;
+  
+  // File source fields
+  sourceType?: SourceType; // 'url' (default) or 'file'
+  fileHash?: string; // SHA256 hash for deduplication
+  mimeType?: string; // MIME type of the file
+  fileSize?: number; // File size in bytes
+  blobId?: string; // Reference to blob in sourceFiles store
+}
+
+/**
+ * Stored file blob for file-based sources.
+ * Stored separately in sourceFiles object store.
+ */
+export interface SourceFile {
+  id: string; // Same as blobId in Source
+  sourceId: string; // Reference back to Source
+  blob: Blob; // The actual file data
+  createdAt: number;
 }
 
 export type TabType = 'artifact' | 'thread' | 'source';

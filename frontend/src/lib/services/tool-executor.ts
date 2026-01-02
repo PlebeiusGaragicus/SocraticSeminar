@@ -96,7 +96,7 @@ export async function executeToolCall(
         );
 
       case 'create_source':
-        return executeCreateSource(
+        return await executeCreateSource(
           toolCallId,
           name,
           projectId,
@@ -650,8 +650,9 @@ function globToRegex(pattern: string): RegExp {
 
 /**
  * create_source(url, title, content, ...) - Create a new source (web reference)
+ * Now async to support duplicate URL checking
  */
-function executeCreateSource(
+async function executeCreateSource(
   toolCallId: string,
   toolName: string,
   projectId: string,
@@ -664,7 +665,7 @@ function executeCreateSource(
     publisher?: string;
     resourceType?: string;
   }
-): ToolResult {
+): Promise<ToolResult> {
   if (!url) {
     return {
       tool_call_id: toolCallId,
@@ -690,30 +691,43 @@ function executeCreateSource(
   if (bibliography.publisher) bib.publisher = bibliography.publisher;
   if (bibliography.resourceType) bib.resourceType = bibliography.resourceType;
 
-  // Create the source using the store
-  const source = sourceStore.createSource(
-    projectId,
-    title || url,
-    url,
-    content || '',
-    {
-      bibliography: Object.keys(bib).length > 0 ? bib : undefined,
-      scrapedAt: Date.now(),
-    }
-  );
+  try {
+    // Create the source using the store (now async with duplicate checking)
+    const source = await sourceStore.createSource(
+      projectId,
+      title || url,
+      url,
+      content || '',
+      {
+        bibliography: Object.keys(bib).length > 0 ? bib : undefined,
+        scrapedAt: Date.now(),
+      }
+    );
 
-  console.log(`[ToolExecutor] Created new source via store: ${title || url} (${source.id})`);
+    console.log(`[ToolExecutor] Created new source via store: ${title || url} (${source.id})`);
 
-  return {
-    tool_call_id: toolCallId,
-    name: toolName,
-    content: JSON.stringify({
-      success: true,
-      message: `Source "${title || url}" created successfully`,
-      source_id: source.id,
-      url: url
-    })
-  };
+    return {
+      tool_call_id: toolCallId,
+      name: toolName,
+      content: JSON.stringify({
+        success: true,
+        message: `Source "${title || url}" created successfully`,
+        source_id: source.id,
+        url: url
+      })
+    };
+  } catch (error) {
+    // Handle duplicate source error specifically
+    const errorMessage = error instanceof Error ? error.message : 'Failed to create source';
+    console.error(`[ToolExecutor] Failed to create source:`, error);
+    
+    return {
+      tool_call_id: toolCallId,
+      name: toolName,
+      content: '',
+      error: errorMessage
+    };
+  }
 }
 
 /**

@@ -1,36 +1,127 @@
 """WebsearchMiddleware for URL discovery and content fetching.
 
 Provides tools for the agent to search the web using Tavily and fetch full
-webpage content converted to markdown.
+webpage content via the centralized backend scraping service.
+
+All actual scraping is delegated to the backend /api/scrape endpoints for
+consistency between agent and frontend scraping behavior.
 """
 
-import re
-import httpx
+import json
+import os
 from collections.abc import Awaitable, Callable
-from langchain_core.tools import InjectedToolArg, tool
-from markdownify import markdownify
-from tavily import TavilyClient
 from typing import TypedDict
+
+import httpx
+from langchain_core.tools import InjectedToolArg, tool
+from tavily import TavilyClient
 from typing_extensions import Annotated, Literal
 from langchain.agents.middleware.types import AgentMiddleware, AgentState, ModelRequest, ModelResponse
 
 # Initialize Tavily client (requires TAVILY_API_KEY env var)
 tavily_client = TavilyClient()
 
+# Backend URL for scraping service
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
-def fetch_webpage_content(url: str, timeout: float = 10.0) -> str:
-    """Fetch and convert webpage content to markdown."""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
 
+# =============================================================================
+# TYPES
+# =============================================================================
+
+class Bibliography(TypedDict, total=False):
+    """Bibliography metadata for citation purposes."""
+    author: str
+    title: str
+    publishedDate: str
+    publisher: str
+    resourceType: str
+
+
+class ScrapedSource(TypedDict):
+    """Structured scraped source data."""
+    url: str
+    title: str
+    content: str
+    bibliography: Bibliography
+    scraped_at: int
+
+
+# =============================================================================
+# BACKEND SCRAPING FUNCTIONS
+# =============================================================================
+
+def fetch_webpage_content(url: str, timeout: float = 15.0) -> str:
+    """Fetch webpage content via backend scraping service.
+    
+    Delegates to the backend /api/scrape endpoint for consistent scraping.
+    Returns markdown content.
+    """
     try:
-        response = httpx.get(url, headers=headers, timeout=timeout, follow_redirects=True)
+        response = httpx.post(
+            f"{BACKEND_URL}/api/scrape",
+            json={"url": url, "timeout": timeout},
+            timeout=timeout + 5.0  # Add buffer for backend processing
+        )
         response.raise_for_status()
-        return markdownify(response.text)
+        data = response.json()
+        return data.get("content", "")
+    except httpx.TimeoutException:
+        return f"Error: Timeout fetching content from {url}"
+    except httpx.HTTPStatusError as e:
+        return f"Error: HTTP {e.response.status_code} fetching {url}"
     except Exception as e:
         return f"Error fetching content from {url}: {str(e)}"
 
+
+def fetch_and_extract_source(url: str, timeout: float = 15.0) -> ScrapedSource:
+    """Fetch a webpage via backend and extract structured source data.
+    
+    Delegates to the backend /api/scrape endpoint which handles:
+    - HTML fetching with proper user agent
+    - Markdown conversion
+    - Bibliography metadata extraction
+    
+    Returns structured data suitable for creating a source in the frontend.
+    """
+    try:
+        response = httpx.post(
+            f"{BACKEND_URL}/api/scrape",
+            json={"url": url, "timeout": timeout},
+            timeout=timeout + 5.0
+        )
+        response.raise_for_status()
+        data = response.json()
+        
+        # Convert backend response to ScrapedSource format
+        return ScrapedSource(
+            url=data["url"],
+            title=data["title"],
+            content=data["content"],
+            bibliography=Bibliography(
+                author=data["bibliography"].get("author"),
+                title=data["bibliography"].get("title"),
+                publishedDate=data["bibliography"].get("publishedDate"),
+                publisher=data["bibliography"].get("publisher"),
+                resourceType=data["bibliography"].get("resourceType"),
+            ),
+            scraped_at=data.get("scraped_at", 0)
+        )
+        
+    except Exception as e:
+        # Return error source on failure
+        return ScrapedSource(
+            url=url,
+            title=url.split("/")[-1] or url,
+            content=f"Error fetching content: {str(e)}",
+            bibliography=Bibliography(publisher=url),
+            scraped_at=0
+        )
+
+
+# =============================================================================
+# AGENT TOOLS
+# =============================================================================
 
 @tool(parse_docstring=True)
 def tavily_search(
@@ -66,7 +157,7 @@ def tavily_search(
         snippet = result.get("content", "")
 
         if include_full_content:
-            # Fetch full webpage content
+            # Fetch full webpage content via backend
             content = fetch_webpage_content(url)
             # Truncate if too long to avoid context overflow
             if len(content) > 15000:
@@ -111,174 +202,6 @@ def fetch_webpage(url: str) -> str:
 {content}"""
 
 
-# =============================================================================
-# BIBLIOGRAPHY EXTRACTION
-# =============================================================================
-
-class Bibliography(TypedDict, total=False):
-    """Bibliography metadata for citation purposes."""
-    author: str
-    title: str
-    publishedDate: str
-    publisher: str
-    resourceType: str
-
-
-class ScrapedSource(TypedDict):
-    """Structured scraped source data."""
-    url: str
-    title: str
-    content: str
-    bibliography: Bibliography
-
-
-def _extract_meta_content(html: str, *names: str) -> str | None:
-    """Extract content from meta tag by name or property."""
-    for name in names:
-        # Check name attribute
-        match = re.search(
-            rf'<meta\s+[^>]*name=["\']?{re.escape(name)}["\']?\s+[^>]*content=["\']([^"\']+)["\']',
-            html,
-            re.IGNORECASE
-        )
-        if match:
-            return match.group(1).strip()
-        
-        # Check property attribute (for Open Graph)
-        match = re.search(
-            rf'<meta\s+[^>]*property=["\']?{re.escape(name)}["\']?\s+[^>]*content=["\']([^"\']+)["\']',
-            html,
-            re.IGNORECASE
-        )
-        if match:
-            return match.group(1).strip()
-        
-        # Check reversed order (content before name/property)
-        match = re.search(
-            rf'<meta\s+[^>]*content=["\']([^"\']+)["\']?\s+[^>]*(?:name|property)=["\']?{re.escape(name)}["\']?',
-            html,
-            re.IGNORECASE
-        )
-        if match:
-            return match.group(1).strip()
-    
-    return None
-
-
-def _extract_title(html: str) -> str:
-    """Extract page title from HTML."""
-    # Try Open Graph title first
-    og_title = _extract_meta_content(html, "og:title")
-    if og_title:
-        return og_title
-    
-    # Fall back to <title> tag
-    match = re.search(r'<title[^>]*>([^<]+)</title>', html, re.IGNORECASE)
-    if match:
-        return match.group(1).strip()
-    
-    return "Untitled"
-
-
-def _extract_bibliography(html: str, url: str) -> Bibliography:
-    """Extract bibliography metadata from HTML meta tags."""
-    bib: Bibliography = {}
-    
-    # Author - try various meta tag formats
-    author = _extract_meta_content(
-        html,
-        "author", "article:author", "og:author", 
-        "twitter:creator", "dc.creator", "citation_author"
-    )
-    if author:
-        bib["author"] = author
-    
-    # Title
-    title = _extract_title(html)
-    if title and title != "Untitled":
-        bib["title"] = title
-    
-    # Published date
-    date = _extract_meta_content(
-        html,
-        "article:published_time", "og:published_time",
-        "publication_date", "date", "dc.date",
-        "citation_publication_date", "datePublished"
-    )
-    if date:
-        bib["publishedDate"] = date
-    
-    # Publisher/site name
-    publisher = _extract_meta_content(
-        html,
-        "og:site_name", "publisher", "dc.publisher",
-        "citation_journal_title", "application-name"
-    )
-    if publisher:
-        bib["publisher"] = publisher
-    else:
-        # Extract domain as fallback publisher
-        from urllib.parse import urlparse
-        domain = urlparse(url).netloc
-        if domain:
-            # Remove www. prefix if present
-            domain = re.sub(r'^www\.', '', domain)
-            bib["publisher"] = domain
-    
-    # Resource type
-    resource_type = _extract_meta_content(
-        html,
-        "og:type", "dc.type", "citation_type"
-    )
-    if resource_type:
-        bib["resourceType"] = resource_type.capitalize()
-    else:
-        bib["resourceType"] = "Article"  # Default
-    
-    return bib
-
-
-def fetch_and_extract_source(url: str, timeout: float = 15.0) -> ScrapedSource:
-    """Fetch a webpage and extract structured source data with bibliography.
-    
-    Returns structured data suitable for creating a source in the frontend.
-    """
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-    
-    try:
-        response = httpx.get(url, headers=headers, timeout=timeout, follow_redirects=True)
-        response.raise_for_status()
-        html = response.text
-        
-        # Extract bibliography from raw HTML (before markdownification)
-        bibliography = _extract_bibliography(html, url)
-        title = bibliography.get("title") or _extract_title(html)
-        
-        # Convert to markdown
-        content = markdownify(html)
-        
-        # Truncate if too long
-        if len(content) > 50000:
-            content = content[:50000] + "\n\n... [content truncated] ..."
-        
-        return ScrapedSource(
-            url=url,
-            title=title,
-            content=content,
-            bibliography=bibliography
-        )
-        
-    except Exception as e:
-        return ScrapedSource(
-            url=url,
-            title=url.split("/")[-1] or url,
-            content=f"Error fetching content: {str(e)}",
-            bibliography=Bibliography(publisher=url)
-        )
-
-
 @tool(parse_docstring=True)
 def scrape_url_to_source(url: str) -> str:
     """Scrape a URL and extract structured source data with bibliography metadata.
@@ -294,18 +217,21 @@ def scrape_url_to_source(url: str) -> str:
     Args:
         url: The URL to scrape and extract source data from
     """
-    import json
-    
     source_data = fetch_and_extract_source(url)
     
     # Return as JSON for the agent to parse and use with create_source
-    return json.dumps(source_data, indent=2)
+    return json.dumps(dict(source_data), indent=2)
 
+
+# =============================================================================
+# MIDDLEWARE
+# =============================================================================
 
 class WebsearchMiddleware(AgentMiddleware[AgentState, None]):
     """Middleware that provides web search and content fetching tools.
     
-    Uses Tavily for discovery and httpx+markdownify for content retrieval.
+    Uses Tavily for URL discovery and the backend /api/scrape service for
+    consistent content fetching and metadata extraction.
     """
     
     def __init__(self) -> None:
@@ -344,4 +270,3 @@ class WebsearchMiddleware(AgentMiddleware[AgentState, None]):
         )
         
         return handler(request.override(system_prompt=new_system_prompt))
-

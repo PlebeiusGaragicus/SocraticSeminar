@@ -2,10 +2,10 @@
 // Provides persistence for projects, artifacts, threads, and messages
 
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import type { Project, Artifact, Thread, Message, Source } from '../stores/types.js';
+import type { Project, Artifact, Thread, Message, Source, SourceFile } from '../stores/types.js';
 
 const DB_NAME = 'socratic-seminar';
-const DB_VERSION = 3; // Bumped for sources
+const DB_VERSION = 4; // Bumped for sourceFiles
 
 interface SocraticDB extends DBSchema {
   projects: {
@@ -21,7 +21,12 @@ interface SocraticDB extends DBSchema {
   sources: {
     key: string;
     value: Source;
-    indexes: { 'by-project': string; 'by-updated': number };
+    indexes: { 'by-project': string; 'by-updated': number; 'by-url': string; 'by-hash': string };
+  };
+  sourceFiles: {
+    key: string;
+    value: SourceFile;
+    indexes: { 'by-source': string };
   };
   threads: {
     key: string;
@@ -60,6 +65,21 @@ function getDB(): Promise<IDBPDatabase<SocraticDB>> {
           const sourceStore = db.createObjectStore('sources', { keyPath: 'id' });
           sourceStore.createIndex('by-project', 'projectId');
           sourceStore.createIndex('by-updated', 'updatedAt');
+          sourceStore.createIndex('by-url', 'url');
+          sourceStore.createIndex('by-hash', 'fileHash');
+        }
+        
+        // Add new indexes to existing sources store (upgrade from v3 to v4)
+        if (oldVersion < 4 && db.objectStoreNames.contains('sources')) {
+          // Note: We can't modify indexes in an existing store during upgrade
+          // The indexes will be added when the store is created fresh
+          // For existing databases, we'll rely on manual iteration for lookups
+        }
+        
+        // SourceFiles store for blob storage (added in version 4)
+        if (!db.objectStoreNames.contains('sourceFiles')) {
+          const sourceFileStore = db.createObjectStore('sourceFiles', { keyPath: 'id' });
+          sourceFileStore.createIndex('by-source', 'sourceId');
         }
 
         // Threads store
@@ -103,8 +123,8 @@ export async function saveProject(project: Project): Promise<void> {
 export async function deleteProject(id: string): Promise<void> {
   const db = await getDB();
   
-  // Delete all artifacts and threads in the project first
-  const tx = db.transaction(['projects', 'artifacts', 'threads', 'messages'], 'readwrite');
+  // Delete all artifacts, sources, and threads in the project first
+  const tx = db.transaction(['projects', 'artifacts', 'sources', 'sourceFiles', 'threads', 'messages'], 'readwrite');
   
   // Delete artifacts
   const artifactIndex = tx.objectStore('artifacts').index('by-project');
@@ -112,6 +132,25 @@ export async function deleteProject(id: string): Promise<void> {
   while (artifactCursor) {
     await artifactCursor.delete();
     artifactCursor = await artifactCursor.continue();
+  }
+  
+  // Get sources to delete their associated files
+  const sourceIndex = tx.objectStore('sources').index('by-project');
+  const sources = await sourceIndex.getAll(IDBKeyRange.only(id));
+  
+  // Delete source files (blobs)
+  const sourceFileStore = tx.objectStore('sourceFiles');
+  for (const source of sources) {
+    if (source.blobId) {
+      await sourceFileStore.delete(source.blobId);
+    }
+  }
+  
+  // Delete sources
+  let sourceCursor = await sourceIndex.openCursor(IDBKeyRange.only(id));
+  while (sourceCursor) {
+    await sourceCursor.delete();
+    sourceCursor = await sourceCursor.continue();
   }
   
   // Get threads to delete their messages
@@ -179,7 +218,56 @@ export async function saveSource(source: Source): Promise<void> {
 
 export async function deleteSource(id: string): Promise<void> {
   const db = await getDB();
-  await db.delete('sources', id);
+  
+  // Get the source to find its blobId
+  const source = await db.get('sources', id);
+  
+  // Delete the source and its associated file (if any) in a transaction
+  const tx = db.transaction(['sources', 'sourceFiles'], 'readwrite');
+  
+  await tx.objectStore('sources').delete(id);
+  
+  // Delete associated blob if it exists
+  if (source?.blobId) {
+    await tx.objectStore('sourceFiles').delete(source.blobId);
+  }
+  
+  await tx.done;
+}
+
+// SourceFile operations (for blob storage)
+export async function getSourceFile(id: string): Promise<SourceFile | undefined> {
+  const db = await getDB();
+  return db.get('sourceFiles', id);
+}
+
+export async function saveSourceFile(sourceFile: SourceFile): Promise<void> {
+  const db = await getDB();
+  await db.put('sourceFiles', sourceFile);
+}
+
+export async function deleteSourceFile(id: string): Promise<void> {
+  const db = await getDB();
+  await db.delete('sourceFiles', id);
+}
+
+export async function getSourceFileBySourceId(sourceId: string): Promise<SourceFile | undefined> {
+  const db = await getDB();
+  const files = await db.getAllFromIndex('sourceFiles', 'by-source', sourceId);
+  return files[0];
+}
+
+// Source lookup helpers for deduplication
+export async function findSourceByUrl(url: string): Promise<Source | undefined> {
+  const db = await getDB();
+  const sources = await db.getAll('sources');
+  return sources.find(s => s.url === url);
+}
+
+export async function findSourceByHash(hash: string): Promise<Source | undefined> {
+  const db = await getDB();
+  const sources = await db.getAll('sources');
+  return sources.find(s => s.fileHash === hash);
 }
 
 // Thread operations
@@ -297,10 +385,12 @@ export async function saveThreads(threads: Thread[]): Promise<void> {
 // Clear all data (for logout)
 export async function clearAllData(): Promise<void> {
   const db = await getDB();
-  const tx = db.transaction(['projects', 'artifacts', 'threads', 'messages'], 'readwrite');
+  const tx = db.transaction(['projects', 'artifacts', 'sources', 'sourceFiles', 'threads', 'messages'], 'readwrite');
   await Promise.all([
     tx.objectStore('projects').clear(),
     tx.objectStore('artifacts').clear(),
+    tx.objectStore('sources').clear(),
+    tx.objectStore('sourceFiles').clear(),
     tx.objectStore('threads').clear(),
     tx.objectStore('messages').clear(),
     tx.done
@@ -327,7 +417,15 @@ export const db = {
     getByProject: getProjectSources,
     get: getSource,
     save: saveSource,
-    delete: deleteSource
+    delete: deleteSource,
+    findByUrl: findSourceByUrl,
+    findByHash: findSourceByHash
+  },
+  sourceFiles: {
+    get: getSourceFile,
+    save: saveSourceFile,
+    delete: deleteSourceFile,
+    getBySourceId: getSourceFileBySourceId
   },
   threads: {
     getByProject: getProjectThreads,

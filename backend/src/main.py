@@ -25,6 +25,7 @@ load_dotenv()
 
 from .wallet import wallet_router
 from .pricing import pricing_router, pricing_service
+from .scrape import scrape_router
 
 
 @asynccontextmanager
@@ -65,6 +66,7 @@ app.add_middleware(
 # Include routers
 app.include_router(wallet_router, prefix="/api/wallet", tags=["wallet"])
 app.include_router(pricing_router, prefix="/api/pricing", tags=["pricing"])
+app.include_router(scrape_router, prefix="/api/scrape", tags=["scrape"])
 
 
 @app.get("/")
