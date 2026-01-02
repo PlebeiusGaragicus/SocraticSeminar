@@ -14,6 +14,8 @@
   import FileImage from '@lucide/svelte/icons/file-image';
   import Download from '@lucide/svelte/icons/download';
   import Loader2 from '@lucide/svelte/icons/loader-2';
+  import Check from '@lucide/svelte/icons/check';
+  import Copy from '@lucide/svelte/icons/copy';
   import type { Source } from '$lib/stores/types.js';
   import { sourceStore } from '$lib/stores/index.js';
   import { cn } from '$lib/utils.js';
@@ -31,6 +33,10 @@
   const isImage = $derived(isFileSource && source.mimeType?.startsWith('image/'));
   const isText = $derived(isFileSource && (source.mimeType === 'text/plain' || source.mimeType === 'text/markdown'));
 
+  // Check if preview PDF is available for URL sources
+  const hasPreview = $derived(!isFileSource && source.previewBlobId);
+  const hasPreviewError = $derived(!isFileSource && source.previewError);
+
   // Tab state
   type ViewTab = 'content' | 'preview';
   let activeTab = $state<ViewTab>('content');
@@ -38,14 +44,18 @@
   // Metadata expansion state
   let metadataExpanded = $state(true);
 
-  // Iframe loading state (for URL sources)
-  let iframeLoaded = $state(false);
-  let iframeError = $state(false);
-
-  // File blob state
+  // File blob state (for file sources)
   let blobUrl = $state<string | null>(null);
   let blobLoading = $state(false);
   let blobError = $state<string | null>(null);
+
+  // Preview PDF blob state (for URL sources)
+  let previewBlobUrl = $state<string | null>(null);
+  let previewLoading = $state(false);
+  let previewLoadError = $state<string | null>(null);
+
+  // URL copy feedback
+  let urlCopied = $state(false);
 
   const bibliography = $derived(source.bibliography);
   const hasBibliography = $derived(
@@ -73,6 +83,18 @@
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
+  async function copyUrlToClipboard() {
+    try {
+      await navigator.clipboard.writeText(source.url);
+      urlCopied = true;
+      setTimeout(() => {
+        urlCopied = false;
+      }, 2000);
+    } catch (error) {
+      console.error('Failed to copy URL:', error);
+    }
+  }
+
   function formatDate(dateStr: string | undefined): string {
     if (!dateStr) return '';
     try {
@@ -86,15 +108,6 @@
     } catch {
       return dateStr;
     }
-  }
-
-  function handleIframeLoad() {
-    iframeLoaded = true;
-  }
-
-  function handleIframeError() {
-    iframeError = true;
-    iframeLoaded = true;
   }
 
   async function loadBlob() {
@@ -117,6 +130,26 @@
     }
   }
 
+  async function loadPreviewBlob() {
+    if (!source.previewBlobId || previewBlobUrl) return;
+    
+    previewLoading = true;
+    previewLoadError = null;
+    
+    try {
+      const blob = await sourceStore.getPreviewBlob(source.id);
+      if (blob) {
+        previewBlobUrl = URL.createObjectURL(blob);
+      } else {
+        previewLoadError = 'Preview PDF not found in storage';
+      }
+    } catch (error) {
+      previewLoadError = error instanceof Error ? error.message : 'Failed to load preview';
+    } finally {
+      previewLoading = false;
+    }
+  }
+
   async function downloadFile() {
     if (!blobUrl) {
       await loadBlob();
@@ -132,14 +165,6 @@
     }
   }
 
-  // Reset iframe state when source changes
-  $effect(() => {
-    if (source.url) {
-      iframeLoaded = false;
-      iframeError = false;
-    }
-  });
-
   // Load blob when switching to file source
   $effect(() => {
     if (isFileSource && source.blobId && !blobUrl && !blobLoading) {
@@ -147,33 +172,46 @@
     }
   });
 
-  // Cleanup blob URL on unmount or source change
+  // Load preview blob when switching to preview tab for URL sources
   $effect(() => {
-    const currentBlobUrl = blobUrl;
+    if (!isFileSource && activeTab === 'preview' && source.previewBlobId && !previewBlobUrl && !previewLoading) {
+      loadPreviewBlob();
+    }
+  });
+
+  // Cleanup blob URLs on unmount
+  $effect(() => {
     return () => {
-      if (currentBlobUrl) {
-        URL.revokeObjectURL(currentBlobUrl);
+      if (blobUrl) {
+        URL.revokeObjectURL(blobUrl);
+      }
+      if (previewBlobUrl) {
+        URL.revokeObjectURL(previewBlobUrl);
       }
     };
   });
 
-  // Revoke old blob URL when source changes
+  // Revoke old blob URLs when source changes
   $effect(() => {
-    // Tracking source.id
     const _id = source.id;
     return () => {
       if (blobUrl) {
         URL.revokeObjectURL(blobUrl);
         blobUrl = null;
       }
+      if (previewBlobUrl) {
+        URL.revokeObjectURL(previewBlobUrl);
+        previewBlobUrl = null;
+      }
+      previewLoadError = null;
     };
   });
 </script>
 
 <div class="flex h-full flex-col bg-zinc-950 overflow-hidden">
   <!-- Header Bar -->
-  <div class="flex items-center justify-between border-b border-zinc-800 bg-zinc-900/50 px-4 py-2.5">
-    <div class="flex items-center gap-3 min-w-0 flex-1">
+  <div class="flex items-center border-b border-zinc-800 bg-zinc-900/50 px-4 py-2.5 gap-4">
+    <div class="flex items-center gap-3 min-w-0 flex-shrink overflow-hidden">
       {#if isFileSource}
         {#if isPdf}
           <File class="h-4 w-4 flex-shrink-0 text-red-400" />
@@ -185,28 +223,32 @@
       {:else}
         <Globe class="h-4 w-4 flex-shrink-0 text-blue-400" />
       {/if}
-      <div class="min-w-0 flex-1">
+      <div class="min-w-0 overflow-hidden">
         <h2 class="text-sm font-medium text-zinc-100 truncate">{source.title}</h2>
         {#if isFileSource}
           <span class="text-xs text-zinc-500">
             {fileInfo()?.size} · {fileInfo()?.type}
           </span>
         {:else}
-          <a 
-            href={source.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            class="text-xs text-zinc-500 hover:text-blue-400 truncate block transition-colors"
+          <button 
+            onclick={copyUrlToClipboard}
+            class="text-xs text-zinc-500 hover:text-blue-400 transition-colors text-left flex items-center gap-1.5 group max-w-full"
+            title="Click to copy URL"
           >
-            {source.url}
-          </a>
+            <span class="truncate">{source.url}</span>
+            {#if urlCopied}
+              <Check class="h-3 w-3 text-green-400 flex-shrink-0" />
+            {:else}
+              <Copy class="h-3 w-3 opacity-0 group-hover:opacity-100 flex-shrink-0 transition-opacity" />
+            {/if}
+          </button>
         {/if}
       </div>
     </div>
     
     {#if !isFileSource}
       <!-- Tab Switcher (only for URL sources) -->
-      <div class="flex items-center gap-1 rounded-lg bg-zinc-800/50 p-1 mx-4">
+      <div class="flex items-center gap-1 rounded-lg bg-zinc-800/50 p-1 flex-shrink-0">
         <button
           onclick={() => activeTab = 'content'}
           class={cn(
@@ -225,7 +267,8 @@
             "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all",
             activeTab === 'preview'
               ? "bg-zinc-700 text-zinc-100 shadow-sm"
-              : "text-zinc-400 hover:text-zinc-200"
+              : "text-zinc-400 hover:text-zinc-200",
+            !hasPreview && hasPreviewError && "opacity-60"
           )}
         >
           <Monitor class="h-3.5 w-3.5" />
@@ -403,48 +446,108 @@
         </div>
       </div>
     {:else}
-      <!-- Iframe Preview View (URL sources) -->
+      <!-- PDF Preview View (URL sources) -->
       <div class="absolute inset-0 flex flex-col">
-        {#if !iframeLoaded}
+        {#if previewLoading}
           <div class="absolute inset-0 flex items-center justify-center bg-zinc-950">
             <div class="text-center">
-              <div class="mb-3 h-6 w-6 animate-spin rounded-full border-2 border-zinc-600 border-t-blue-500 mx-auto"></div>
+              <Loader2 class="h-8 w-8 animate-spin text-blue-500 mx-auto mb-3" />
               <p class="text-sm text-zinc-500">Loading preview...</p>
             </div>
           </div>
-        {/if}
-        
-        {#if iframeError}
+        {:else if hasPreviewError || previewLoadError}
+          <!-- Preview generation failed or loading failed - show error with fallback -->
           <div class="absolute inset-0 flex items-center justify-center bg-zinc-950">
             <div class="text-center max-w-md px-6">
               <AlertCircle class="h-10 w-10 text-amber-500 mx-auto mb-3" />
               <h3 class="text-base font-medium text-zinc-200 mb-2">Preview Unavailable</h3>
               <p class="text-sm text-zinc-500 mb-4">
-                This website prevents embedding in iframes for security reasons.
+                {source.previewError || previewLoadError || 'Could not generate preview for this page.'}
               </p>
-              <a 
-                href={source.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 transition-colors"
-              >
-                <span>Open in New Tab</span>
-                <ExternalLink class="h-4 w-4" />
-              </a>
+              <div class="flex gap-3 justify-center">
+                <button
+                  onclick={() => activeTab = 'content'}
+                  class="inline-flex items-center gap-2 rounded-lg bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-600 transition-colors"
+                >
+                  <FileText class="h-4 w-4" />
+                  <span>View Content</span>
+                </button>
+                <a 
+                  href={source.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 transition-colors"
+                >
+                  <span>Open Original</span>
+                  <ExternalLink class="h-4 w-4" />
+                </a>
+              </div>
             </div>
           </div>
+        {:else if !hasPreview}
+          <!-- No preview available (older source without PDF) -->
+          <div class="absolute inset-0 flex items-center justify-center bg-zinc-950">
+            <div class="text-center max-w-md px-6">
+              <Monitor class="h-10 w-10 text-zinc-500 mx-auto mb-3" />
+              <h3 class="text-base font-medium text-zinc-200 mb-2">No Preview Available</h3>
+              <p class="text-sm text-zinc-500 mb-4">
+                This source was added before preview capture was enabled.
+              </p>
+              <div class="flex gap-3 justify-center">
+                <button
+                  onclick={() => activeTab = 'content'}
+                  class="inline-flex items-center gap-2 rounded-lg bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-600 transition-colors"
+                >
+                  <FileText class="h-4 w-4" />
+                  <span>View Content</span>
+                </button>
+                <a 
+                  href={source.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 transition-colors"
+                >
+                  <span>Open Original</span>
+                  <ExternalLink class="h-4 w-4" />
+                </a>
+              </div>
+            </div>
+          </div>
+        {:else if previewBlobUrl}
+          <!-- PDF Preview -->
+          <object
+            data={previewBlobUrl}
+            type="application/pdf"
+            class="absolute inset-0 w-full h-full"
+            title="{source.title} - Preview"
+          >
+            <div class="absolute inset-0 flex items-center justify-center bg-zinc-950">
+              <div class="text-center max-w-md px-6">
+                <File class="h-10 w-10 text-red-400 mx-auto mb-3" />
+                <h3 class="text-base font-medium text-zinc-200 mb-2">PDF Preview Not Supported</h3>
+                <p class="text-sm text-zinc-500 mb-4">
+                  Your browser doesn't support inline PDF viewing.
+                </p>
+                <a 
+                  href={source.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 transition-colors"
+                >
+                  <span>Open Original</span>
+                  <ExternalLink class="h-4 w-4" />
+                </a>
+              </div>
+            </div>
+          </object>
         {:else}
-          <iframe
-            src={source.url}
-            title="Source preview"
-            class={cn(
-              "flex-1 w-full bg-white",
-              !iframeLoaded && "opacity-0"
-            )}
-            sandbox="allow-scripts allow-same-origin allow-popups"
-            onload={handleIframeLoad}
-            onerror={handleIframeError}
-          ></iframe>
+          <!-- Loading state fallback -->
+          <div class="absolute inset-0 flex items-center justify-center bg-zinc-950">
+            <div class="text-center">
+              <Loader2 class="h-8 w-8 animate-spin text-blue-500 mx-auto mb-3" />
+              <p class="text-sm text-zinc-500">Loading preview...</p>
+            </div>
+          </div>
         {/if}
       </div>
     {/if}

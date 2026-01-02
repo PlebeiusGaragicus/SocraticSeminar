@@ -59,6 +59,8 @@
     content: string;
     bibliography: Bibliography;
     scraped_at: number;
+    preview_pdf: string | null;  // Base64-encoded PDF
+    preview_error: string | null;  // Error message if PDF generation failed
   }
 
   /**
@@ -66,7 +68,7 @@
    * Returns structured data with title, content (markdown), and bibliography.
    */
   async function scrapeUrl(url: string): Promise<ScrapeResponse> {
-    const response = await fetch(`${BACKEND_URL}/api/scrape`, {
+    const response = await fetch(`${BACKEND_URL}/api/scrape/`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -123,7 +125,7 @@
         // Scrape via backend service
         const scraped = await scrapeUrl(url);
         
-        // Create the source with scraped data
+        // Create the source with scraped data and preview PDF
         const source = await sourceStore.createSource(
           projectId,
           scraped.title,
@@ -132,7 +134,9 @@
           { 
             bibliography: scraped.bibliography,
             scrapedAt: scraped.scraped_at,
-            skipDuplicateCheck: true 
+            skipDuplicateCheck: true,
+            previewPdfBase64: scraped.preview_pdf ?? undefined,
+            previewError: scraped.preview_error ?? undefined
           }
         );
         workspaceStore.openItem(source.id, 'source', column);

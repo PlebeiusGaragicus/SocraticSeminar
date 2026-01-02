@@ -59,9 +59,10 @@ def fetch_webpage_content(url: str, timeout: float = 15.0) -> str:
     """
     try:
         response = httpx.post(
-            f"{BACKEND_URL}/api/scrape",
+            f"{BACKEND_URL}/api/scrape/",  # Trailing slash to avoid 307 redirect
             json={"url": url, "timeout": timeout},
-            timeout=timeout + 5.0  # Add buffer for backend processing
+            timeout=timeout + 5.0,  # Add buffer for backend processing
+            follow_redirects=True  # Follow any redirects
         )
         response.raise_for_status()
         data = response.json()
@@ -86,9 +87,10 @@ def fetch_and_extract_source(url: str, timeout: float = 15.0) -> ScrapedSource:
     """
     try:
         response = httpx.post(
-            f"{BACKEND_URL}/api/scrape",
+            f"{BACKEND_URL}/api/scrape/",  # Trailing slash to avoid 307 redirect
             json={"url": url, "timeout": timeout},
-            timeout=timeout + 5.0
+            timeout=timeout + 5.0,
+            follow_redirects=True  # Follow any redirects
         )
         response.raise_for_status()
         data = response.json()

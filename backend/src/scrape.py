@@ -3,6 +3,7 @@ Web scraping service for Socratic Seminar.
 
 Provides centralized URL scraping endpoints that:
 - Fetch webpage content and convert to markdown
+- Generate PDF preview of the webpage
 - Extract bibliography metadata (author, title, date, publisher)
 - Return structured data for source creation
 
@@ -10,6 +11,8 @@ Used by both the frontend and agent middleware for consistent scraping.
 """
 
 import asyncio
+import base64
+import io
 import logging
 import re
 import time
@@ -42,12 +45,14 @@ class ScrapeRequest(BaseModel):
     """Request to scrape a single URL."""
     url: HttpUrl
     timeout: float = 15.0
+    generate_pdf: bool = True  # Whether to generate PDF preview
 
 
 class BatchScrapeRequest(BaseModel):
     """Request to scrape multiple URLs."""
     urls: list[HttpUrl]
     timeout: float = 15.0
+    generate_pdf: bool = True
 
 
 class Bibliography(BaseModel):
@@ -66,6 +71,9 @@ class ScrapedResponse(BaseModel):
     content: str  # Markdown
     bibliography: Bibliography
     scraped_at: int  # Unix timestamp in milliseconds
+    # PDF preview fields
+    preview_pdf: Optional[str] = None  # Base64-encoded PDF
+    preview_error: Optional[str] = None  # Error message if PDF generation failed
 
 
 class BatchScrapedResponse(BaseModel):
@@ -204,7 +212,74 @@ def _html_to_markdown(html: str) -> str:
     return markdown
 
 
-async def scrape_url(url: str, timeout: float = 15.0) -> ScrapedResponse:
+def _generate_pdf_from_html(html: str, base_url: str) -> tuple[Optional[bytes], Optional[str]]:
+    """
+    Generate PDF from HTML using WeasyPrint.
+    
+    Returns:
+        Tuple of (pdf_bytes, error_message)
+        If successful, pdf_bytes contains the PDF and error_message is None.
+        If failed, pdf_bytes is None and error_message contains the error.
+    """
+    try:
+        from weasyprint import HTML, CSS
+        from weasyprint.text.fonts import FontConfiguration
+        
+        # Configure fonts
+        font_config = FontConfiguration()
+        
+        # Add base tag if not present for relative URLs
+        if '<base' not in html.lower():
+            # Insert base tag after <head>
+            head_match = re.search(r'<head[^>]*>', html, re.IGNORECASE)
+            if head_match:
+                insert_pos = head_match.end()
+                html = html[:insert_pos] + f'<base href="{base_url}">' + html[insert_pos:]
+        
+        # Create PDF with print-friendly CSS
+        print_css = CSS(string="""
+            @page {
+                size: A4;
+                margin: 1.5cm;
+            }
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                font-size: 11pt;
+                line-height: 1.5;
+                color: #333;
+            }
+            img {
+                max-width: 100%;
+                height: auto;
+            }
+            a {
+                color: #0066cc;
+            }
+            nav, footer, aside, .sidebar, .comments, .ad, .advertisement {
+                display: none !important;
+            }
+        """, font_config=font_config)
+        
+        # Generate PDF
+        html_doc = HTML(string=html, base_url=base_url)
+        pdf_buffer = io.BytesIO()
+        html_doc.write_pdf(pdf_buffer, stylesheets=[print_css], font_config=font_config)
+        
+        return pdf_buffer.getvalue(), None
+        
+    except ImportError as e:
+        logger.warning(f"WeasyPrint not available: {e}")
+        return None, "PDF generation not available (WeasyPrint not installed)"
+    except Exception as e:
+        logger.warning(f"PDF generation failed: {e}")
+        return None, f"PDF generation failed: {str(e)}"
+
+
+async def scrape_url(
+    url: str,
+    timeout: float = 15.0,
+    generate_pdf: bool = True
+) -> ScrapedResponse:
     """Fetch and scrape a single URL."""
     headers = {
         "User-Agent": USER_AGENT,
@@ -249,18 +324,34 @@ async def scrape_url(url: str, timeout: float = 15.0) -> ScrapedResponse:
     if len(content) > 50000:
         content = content[:50000] + "\n\n... [content truncated due to length] ..."
     
+    # Generate PDF preview
+    preview_pdf_base64: Optional[str] = None
+    preview_error: Optional[str] = None
+    
+    if generate_pdf:
+        pdf_bytes, pdf_error = _generate_pdf_from_html(html, str(url))
+        if pdf_bytes:
+            preview_pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
+            logger.info(f"Generated PDF preview ({len(pdf_bytes)} bytes)")
+        else:
+            preview_error = pdf_error
+            logger.warning(f"PDF preview failed: {pdf_error}")
+    
     return ScrapedResponse(
         url=str(url),
         title=title,
         content=content,
         bibliography=bibliography,
-        scraped_at=int(time.time() * 1000)  # Unix timestamp in ms
+        scraped_at=int(time.time() * 1000),  # Unix timestamp in ms
+        preview_pdf=preview_pdf_base64,
+        preview_error=preview_error
     )
 
 
 async def scrape_urls_batch(
     urls: list[str],
-    timeout: float = 15.0
+    timeout: float = 15.0,
+    generate_pdf: bool = True
 ) -> BatchScrapedResponse:
     """Scrape multiple URLs in parallel."""
     results: list[ScrapedResponse] = []
@@ -268,7 +359,7 @@ async def scrape_urls_batch(
     
     async def scrape_one(url: str):
         try:
-            result = await scrape_url(url, timeout)
+            result = await scrape_url(url, timeout, generate_pdf)
             results.append(result)
         except HTTPException as e:
             errors.append({"url": url, "error": e.detail})
@@ -305,9 +396,15 @@ async def scrape_single_url(request: ScrapeRequest):
         - content: Page content converted to Markdown
         - bibliography: Extracted metadata (author, date, publisher, etc.)
         - scraped_at: Unix timestamp in milliseconds
+        - preview_pdf: Base64-encoded PDF of the page (if generate_pdf=true)
+        - preview_error: Error message if PDF generation failed
     """
-    logger.info(f"Scraping URL: {request.url}")
-    result = await scrape_url(str(request.url), request.timeout)
+    logger.info(f"Scraping URL: {request.url} (PDF: {request.generate_pdf})")
+    result = await scrape_url(
+        str(request.url),
+        request.timeout,
+        request.generate_pdf
+    )
     logger.info(f"Successfully scraped: {result.title}")
     return result
 
@@ -321,10 +418,11 @@ async def scrape_multiple_urls(request: BatchScrapeRequest):
         - results: List of successfully scraped responses
         - errors: List of {url, error} for failed URLs
     """
-    logger.info(f"Batch scraping {len(request.urls)} URLs")
+    logger.info(f"Batch scraping {len(request.urls)} URLs (PDF: {request.generate_pdf})")
     result = await scrape_urls_batch(
         [str(url) for url in request.urls],
-        request.timeout
+        request.timeout,
+        request.generate_pdf
     )
     logger.info(
         f"Batch complete: {len(result.results)} success, {len(result.errors)} errors"
@@ -336,4 +434,3 @@ async def scrape_multiple_urls(request: BatchScrapeRequest):
 async def scrape_health():
     """Health check for scrape service."""
     return {"status": "healthy", "service": "scrape"}
-

@@ -47,7 +47,10 @@ async function persistSource(source: Source): Promise<void> {
       fileHash: source.fileHash,
       mimeType: source.mimeType,
       fileSize: source.fileSize,
-      blobId: source.blobId
+      blobId: source.blobId,
+      // Preview fields
+      previewBlobId: source.previewBlobId,
+      previewError: source.previewError
     };
     await db.sources.save(plainSource);
   } catch (error) {
@@ -132,6 +135,9 @@ interface CreateSourceOptions {
   scrapedAt?: number;
   metadata?: Record<string, unknown>;
   skipDuplicateCheck?: boolean; // For agent-created sources where we've already verified
+  // Preview PDF (base64 encoded or Blob)
+  previewPdfBase64?: string;
+  previewError?: string;
 }
 
 // Options for creating a file source
@@ -143,6 +149,7 @@ interface CreateFileSourceOptions {
 
 /**
  * Create a URL-based source. Throws DuplicateSourceError if URL already exists.
+ * Optionally stores a preview PDF blob.
  */
 async function createSource(
   projectId: string,
@@ -163,9 +170,38 @@ async function createSource(
   }
   
   const now = Date.now();
+  const sourceId = nanoid();
+  
+  // Handle preview PDF if provided
+  let previewBlobId: string | undefined;
+  
+  if (options.previewPdfBase64) {
+    try {
+      // Convert base64 to Blob
+      const binaryString = atob(options.previewPdfBase64);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      const pdfBlob = new Blob([bytes], { type: 'application/pdf' });
+      
+      // Store the preview PDF blob
+      previewBlobId = nanoid();
+      const previewFile: SourceFile = {
+        id: previewBlobId,
+        sourceId,
+        blob: pdfBlob,
+        createdAt: now
+      };
+      await persistSourceFile(previewFile);
+    } catch (error) {
+      console.error('Failed to store preview PDF:', error);
+      // Don't fail the whole operation, just skip the preview
+    }
+  }
   
   const source: Source = {
-    id: nanoid(),
+    id: sourceId,
     projectId,
     title,
     url,
@@ -176,7 +212,9 @@ async function createSource(
     createdAt: now,
     updatedAt: now,
     viewed: false,
-    sourceType: 'url' as SourceType
+    sourceType: 'url' as SourceType,
+    previewBlobId,
+    previewError: options.previewError
   };
   
   sources = [...sources, source];
@@ -275,6 +313,17 @@ async function getSourceBlob(sourceId: string): Promise<Blob | undefined> {
   return sourceFile?.blob;
 }
 
+/**
+ * Get the preview PDF blob for a URL source
+ */
+async function getPreviewBlob(sourceId: string): Promise<Blob | undefined> {
+  const source = sources.find(s => s.id === sourceId);
+  if (!source?.previewBlobId) return undefined;
+  
+  const sourceFile = await db.sourceFiles.get(source.previewBlobId);
+  return sourceFile?.blob;
+}
+
 async function deleteSource(id: string): Promise<void> {
   sources = sources.filter((s) => s.id !== id);
   
@@ -324,6 +373,7 @@ export const sourceStore = {
   deleteSource,
   selectSource,
   getSourceBlob,
+  getPreviewBlob,
   findByUrl,
   findByHash,
   checkDuplicateUrl,

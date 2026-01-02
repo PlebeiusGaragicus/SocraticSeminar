@@ -178,6 +178,10 @@ export interface Source {
   mimeType?: string; // MIME type of the file
   fileSize?: number; // File size in bytes
   blobId?: string; // Reference to blob in sourceFiles store
+  
+  // Preview fields (for URL sources)
+  previewBlobId?: string; // Reference to preview PDF blob in sourceFiles store
+  previewError?: string; // Error message if PDF generation failed
 }
 
 /**
