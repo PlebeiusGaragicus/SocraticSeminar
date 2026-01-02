@@ -43,11 +43,10 @@ nav:
   - Features:
     - Overview: features/overview.md
     - Frontend: features/frontend.md
+    - Tabbed Editor: features/tabbed_editor.md
     - Agents: features/agents.md
     - Backend: features/backend.md
     - Nostr: features/nostr.md
-    - eCash: features/ecash.md
-    - CopyFuck: features/copyfuck.md
     - templates: features/templates.md
     - debugging: features/debugging.md
     - testing: features/testing.md
