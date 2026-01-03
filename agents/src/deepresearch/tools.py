@@ -1,17 +1,11 @@
 """Research Tools for the DeepResearch agent.
 
-This module now primarily exports tools from the shared websearch and thinking middlewares.
+Note: Web search and scraping tools are now provided by WebsearchMiddleware.
+This module exports the think_tool for backward compatibility and sub-agent use.
 """
 
-from src.shared.middleware.websearch import (
-    tavily_search,
-    fetch_webpage,
-    fetch_webpage_content,
-    scrape_url_to_source,
-    fetch_and_extract_source,
-)
 from src.shared.middleware.thinking import think_tool
 
-# Export all tools for backward compatibility if needed, 
-# but agents should prefer using the middlewares directly.
-RESEARCH_TOOLS = [tavily_search, fetch_webpage, scrape_url_to_source, think_tool]
+# The RESEARCH_TOOLS list is now minimal since WebsearchMiddleware provides the main tools.
+# Sub-agents should include WebsearchMiddleware in their middleware stack to get search tools.
+RESEARCH_TOOLS = [think_tool]

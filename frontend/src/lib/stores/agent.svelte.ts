@@ -518,6 +518,18 @@ async function resumeWithDecisions(decisions: HITLDecision[], threadId?: string)
           state.isStreaming = false;
           updateThreadStatus(localThreadId);
         },
+        onClientToolInterrupt: (interrupt, newInterruptId) => {
+          // Handle client tool interrupts that occur after HITL approval
+          handleClientToolInterrupt(interrupt, newInterruptId);
+        },
+        onClarificationInterrupt: (interrupt, newInterruptId) => {
+          state.clarificationInterrupt = interrupt;
+          state.hitlInterruptId = newInterruptId;
+          state.awaitingHumanResponse = true;
+          state.isInterrupted = true;
+          state.isStreaming = false;
+          updateThreadStatus(localThreadId);
+        },
         onComplete: (finalMessages) => {
           state.langGraphMessages = [...finalMessages];
           const convertedMessages = convertLangGraphMessages(finalMessages, localThreadId);

@@ -12,7 +12,6 @@ Usage:
     })
 """
 
-from src.shared.middleware.websearch import tavily_search, fetch_webpage
 from src.shared.middleware.thinking import think_tool
 from src.deepresearch.graph import graph, create_deepresearch_agent
 from src.deepresearch.tools import RESEARCH_TOOLS
@@ -24,8 +23,7 @@ __all__ = [
     "DeepResearchState",
     "COST_PER_ITERATION_SATS",
     # Research tools (for external use)
-    "tavily_search",
-    "fetch_webpage",
+    # Note: web search tools are now provided by WebsearchMiddleware
     "think_tool",
     "RESEARCH_TOOLS",
 ]

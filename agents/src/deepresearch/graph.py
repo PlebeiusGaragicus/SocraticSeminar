@@ -6,14 +6,16 @@ Architecture:
 - TodoListMiddleware: Task tracking for complex multi-step research
 - ClarifyWithHumanMiddleware: Ask user for intent clarification
 - ClientToolsMiddleware: Client-side file operations via HITL interrupts
+- SourcesMiddleware: Access to project sources
+- WebsearchMiddleware: Web search (Tavily) and URL scraping (Firecrawl)
 - HumanInTheLoopMiddleware: Approval for funding requests
 
 The agent operates with:
 1. Two file systems: User's project files (client) and agent scratch files (visible)
 2. Streaming Cashu payments (deducted per LLM iteration)
-3. HITL approval for write operations to user files
+3. HITL approval for write operations to user files and URL scraping
 4. Clarification tools when user intent is unclear
-5. Research tools: tavily_search, fetch_webpage, think_tool
+5. Research tools: web_search, scrape_url, fetch_webpage, think_tool
 6. Sub-agent delegation for parallel research
 """
 
@@ -35,11 +37,11 @@ from src.shared.middleware import (
     CashuPaymentMiddleware, 
     ClarifyWithHumanMiddleware,
     ClientToolsMiddleware,
+    SourcesMiddleware,
     WebsearchMiddleware,
     ThinkingMiddleware,
     ToolValidationMiddleware,
 )
-from src.shared.middleware.websearch import tavily_search, fetch_webpage
 from src.shared.middleware.thinking import think_tool
 
 from src.deepresearch.behaviour import BehaviouralMiddleware
@@ -77,7 +79,7 @@ def create_research_subagent_config() -> dict[str, Any]:
         "name": "research-agent",
         "description": "Delegate research to the sub-agent researcher. Only give this researcher one topic at a time.",
         "system_prompt": RESEARCHER_INSTRUCTIONS.format(date=current_date),
-        "tools": [tavily_search, fetch_webpage, think_tool],
+        "tools": [think_tool],  # Web tools provided by WebsearchMiddleware
     }
 
 
@@ -103,10 +105,11 @@ def create_deepresearch_agent(
     4. TodoListMiddleware - Task tracking for complex research operations
     5. ClarifyWithHumanMiddleware - Ask user for intent clarification
     6. ClientToolsMiddleware - Client-side file operations via HITL interrupts
-    7. WebsearchMiddleware - Web search and content fetching
-    8. ThinkingMiddleware - Strategic reflection
-    9. SubAgentMiddleware - Parallel research delegation
-    10. HumanInTheLoopMiddleware - Approval for funding requests
+    7. SourcesMiddleware - Access to project sources (auto-approved)
+    8. WebsearchMiddleware - Web search and content fetching
+    9. ThinkingMiddleware - Strategic reflection
+    10. SubAgentMiddleware - Parallel research delegation
+    11. HumanInTheLoopMiddleware - Approval for funding requests
     
     Args:
         checkpointer: Optional checkpointer for persistence
@@ -173,13 +176,16 @@ def create_deepresearch_agent(
     # 6. Client tools - ALL client file operations interrupt for client-side execution
     middleware.append(ClientToolsMiddleware())
 
-    # 7. Web Search - URL discovery and content fetching
+    # 7. Sources - Access to project sources (auto-approved, no HITL)
+    middleware.append(SourcesMiddleware())
+
+    # 8. Web Search - URL discovery and content fetching
     middleware.append(WebsearchMiddleware())
 
-    # 8. Thinking - Strategic reflection
+    # 9. Thinking - Strategic reflection
     middleware.append(ThinkingMiddleware())
     
-    # 9. Sub-agent middleware (optional) - for parallel research delegation
+    # 10. Sub-agent middleware (optional) - for parallel research delegation
     if include_subagents:
         subagent_config = create_research_subagent_config()
         middleware.append(
@@ -190,13 +196,14 @@ def create_deepresearch_agent(
                 default_middleware=[
                     ToolValidationMiddleware(),
                     TodoListMiddleware(),
+                    WebsearchMiddleware(),  # Provides web_search, scrape_url, fetch_webpage
                     ThinkingMiddleware(),
                 ],
                 general_purpose_agent=False,
             )
         )
 
-    # 10. Human-in-the-loop - ONLY for payment funding requests
+    # 11. Human-in-the-loop - ONLY for payment funding requests
     if include_payment:
         middleware.append(
             HumanInTheLoopMiddleware(

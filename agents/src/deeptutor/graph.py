@@ -30,6 +30,7 @@ from src.shared.middleware import (
     CashuPaymentMiddleware, 
     ClientToolsMiddleware, 
     ClarifyWithHumanMiddleware,
+    SourcesMiddleware,
     ThinkingMiddleware,
     ToolValidationMiddleware,
 )
@@ -139,8 +140,9 @@ def create_deeptutor_agent(
     3. TodoListMiddleware - Task tracking for complex operations
     4. ClarifyWithHumanMiddleware - Ask user for intent clarification
     5. ClientToolsMiddleware - File operations via client interrupts
-    6. ThinkingMiddleware - Strategic reflection
-    7. HumanInTheLoopMiddleware - Approval for funding requests
+    6. SourcesMiddleware - Access to project sources (auto-approved)
+    7. ThinkingMiddleware - Strategic reflection
+    8. HumanInTheLoopMiddleware - Approval for funding requests
     
     Args:
         checkpointer: Optional checkpointer for persistence
@@ -192,10 +194,13 @@ def create_deeptutor_agent(
         # 5. Client tools - ALL file operations interrupt for client-side execution
         ClientToolsMiddleware(),
 
-        # 6. Thinking - Strategic reflection
+        # 6. Sources - Access to project sources (auto-approved, no HITL)
+        SourcesMiddleware(),
+
+        # 7. Thinking - Strategic reflection
         ThinkingMiddleware(),
         
-        # 7. Human-in-the-loop - ONLY for payment funding requests
+        # 8. Human-in-the-loop - ONLY for payment funding requests
         HumanInTheLoopMiddleware(
             interrupt_on={
                 "request_additional_funding": True,
