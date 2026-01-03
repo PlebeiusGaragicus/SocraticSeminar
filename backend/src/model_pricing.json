@@ -1,0 +1,12 @@
+{
+  "models": {
+    "grok-4-1-fast-non-reasoning": {
+      "input_usd_per_million": 0.20,
+      "output_usd_per_million": 0.50
+    },
+    "qwen3-coder-30b-a3b-instruct-mlx": {
+      "input_usd_per_million": 0.01,
+      "output_usd_per_million": 0.01
+    }
+  }
+}
