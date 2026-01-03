@@ -12,6 +12,7 @@
   import XCircle from '@lucide/svelte/icons/x-circle';
   import Clock from '@lucide/svelte/icons/clock';
   import Monitor from '@lucide/svelte/icons/monitor';
+  import Camera from '@lucide/svelte/icons/camera';
   import Settings2 from '@lucide/svelte/icons/settings-2';
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import ChevronUp from '@lucide/svelte/icons/chevron-up';
@@ -116,7 +117,8 @@
   async function scrapeUrl(
     url: string,
     method: ContentCrawlMethod = 'markdownify',
-    generatePdfPreview: boolean = true
+    generatePdfPreview: boolean = true,
+    previewMethod: PreviewCrawlMethod = 'weasyprint'
   ): Promise<ScrapeResponse> {
     const response = await fetch(`${BACKEND_URL}/api/scrape/`, {
       method: 'POST',
@@ -127,7 +129,8 @@
         url, 
         timeout: 15.0,
         method,
-        generate_pdf: generatePdfPreview
+        generate_pdf: generatePdfPreview,
+        preview_method: previewMethod
       }),
     });
     
@@ -184,7 +187,8 @@
         startCountdown();
 
         // Scrape via backend service with selected methods
-        const scraped = await scrapeUrl(url, selectedContentMethod, generatePdf);
+        const previewMethodToUse = selectedPreviewMethod === 'off' ? 'weasyprint' : selectedPreviewMethod;
+        const scraped = await scrapeUrl(url, selectedContentMethod, generatePdf, previewMethodToUse);
         
         stopCountdown();
         
@@ -209,7 +213,7 @@
             previewPdfBase64: scraped.preview_pdf ?? undefined,
             previewError: scraped.preview_error ?? undefined,
             contentMethod: selectedContentMethod,
-            previewMethod: generatePdf ? 'weasyprint' : undefined
+            previewMethod: generatePdf ? previewMethodToUse : undefined
           }
         );
         workspaceStore.openItem(source.id, 'source', column);
@@ -623,6 +627,19 @@
                     </button>
                     <button
                       type="button"
+                      onclick={() => selectedPreviewMethod = 'firecrawl'}
+                      class={cn(
+                        "flex-1 flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-xs font-medium transition-all",
+                        selectedPreviewMethod === 'firecrawl'
+                          ? "border-amber-500 bg-amber-500/10 text-amber-300"
+                          : "border-zinc-700 text-zinc-400 hover:border-zinc-600"
+                      )}
+                    >
+                      <Camera class="h-3.5 w-3.5" />
+                      Screenshot
+                    </button>
+                    <button
+                      type="button"
                       onclick={() => selectedPreviewMethod = 'off'}
                       class={cn(
                         "flex-1 flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-xs font-medium transition-all",
@@ -638,7 +655,9 @@
                   <p class="text-[10px] text-zinc-600 mt-1">
                     {selectedPreviewMethod === 'off' 
                       ? 'Skip PDF generation (faster scraping)'
-                      : 'Generate PDF preview of the page'}
+                      : selectedPreviewMethod === 'firecrawl'
+                        ? 'Firecrawl full-page screenshot (best for JS-heavy pages)'
+                        : 'Server-side HTML to PDF rendering'}
                   </p>
                 </div>
               </div>

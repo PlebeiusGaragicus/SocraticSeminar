@@ -361,6 +361,33 @@ function selectSource(id: string | null): void {
   }
 }
 
+/**
+ * Update an existing source in the store and persist to IndexedDB.
+ * This ensures both the reactive state AND the database are updated.
+ */
+async function updateSource(id: string, updates: Partial<Omit<Source, 'id' | 'projectId' | 'createdAt'>>): Promise<Source | null> {
+  const existingSource = sources.find(s => s.id === id);
+  if (!existingSource) {
+    console.error('updateSource: Source not found:', id);
+    return null;
+  }
+  
+  const now = Date.now();
+  const updatedSource: Source = {
+    ...existingSource,
+    ...updates,
+    updatedAt: now
+  };
+  
+  // Update the reactive array
+  sources = sources.map(s => s.id === id ? updatedSource : s);
+  
+  // Persist to IndexedDB
+  await persistSource(updatedSource);
+  
+  return updatedSource;
+}
+
 function reset(): void {
   sources = [];
   currentSourceId = null;
@@ -380,6 +407,7 @@ export const sourceStore = {
   loadProjectSources,
   createSource,
   createFileSource,
+  updateSource,
   deleteSource,
   selectSource,
   getSourceBlob,

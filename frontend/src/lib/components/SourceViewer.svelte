@@ -21,9 +21,12 @@
   import X from '@lucide/svelte/icons/x';
   import Sparkles from '@lucide/svelte/icons/sparkles';
   import PenLine from '@lucide/svelte/icons/pen-line';
+  import Clock from '@lucide/svelte/icons/clock';
+  import Camera from '@lucide/svelte/icons/camera';
   import type { Source, ContentCrawlMethod, PreviewCrawlMethod } from '$lib/stores/types.js';
   import { sourceStore } from '$lib/stores/index.js';
   import { cn } from '$lib/utils.js';
+  import { onDestroy } from 'svelte';
   import { toast } from 'svelte-sonner';
   import { nanoid } from 'nanoid';
   import { db } from '$lib/services/indexeddb.js';
@@ -80,6 +83,31 @@
   let selectedPreviewMethod = $state<PreviewCrawlMethod>('weasyprint');
   let isRescraping = $state(false);
   let manualContentInput = $state('');
+  
+  // Re-scrape timeout/countdown state (like NewSourcesModal)
+  const RESCRAPE_TIMEOUT_SECONDS = 60;  // Longer timeout for re-scrape
+  let rescrapeCountdown = $state(RESCRAPE_TIMEOUT_SECONDS);
+  let rescrapeCountdownInterval: ReturnType<typeof setInterval> | null = null;
+  
+  // Cleanup countdown interval on destroy
+  onDestroy(() => {
+    if (rescrapeCountdownInterval) clearInterval(rescrapeCountdownInterval);
+  });
+  
+  function startRescrapeCountdown() {
+    rescrapeCountdown = RESCRAPE_TIMEOUT_SECONDS;
+    if (rescrapeCountdownInterval) clearInterval(rescrapeCountdownInterval);
+    rescrapeCountdownInterval = setInterval(() => {
+      rescrapeCountdown = Math.max(0, rescrapeCountdown - 1);
+    }, 1000);
+  }
+  
+  function stopRescrapeCountdown() {
+    if (rescrapeCountdownInterval) {
+      clearInterval(rescrapeCountdownInterval);
+      rescrapeCountdownInterval = null;
+    }
+  }
   
   // Manual content file upload
   let manualContentFileRef: HTMLInputElement;
@@ -230,6 +258,7 @@
   function closeRescrapeModal() {
     showRescrapeModal = false;
     isRescraping = false;
+    stopRescrapeCountdown();
   }
 
   /**
@@ -261,6 +290,7 @@
     }
     
     isRescraping = true;
+    startRescrapeCountdown();
     const now = Date.now();
     
     try {
@@ -275,6 +305,7 @@
         if (selectedContentMethod === 'manual') {
           if (!manualContentInput.trim()) {
             toast.error('No content provided', { description: 'Please enter or upload content.' });
+            stopRescrapeCountdown();
             isRescraping = false;
             return;
           }
@@ -310,7 +341,7 @@
           // Just keep current - user will upload via the preview pane
           newPreviewMethod = 'manual';
         } else {
-          // Re-generate PDF via backend
+          // Re-generate PDF via backend with selected preview method
           const response = await fetch(`${BACKEND_URL}/api/scrape/`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -318,6 +349,7 @@
               url: source.url,
               timeout: 15.0,
               generate_pdf: true,
+              preview_method: selectedPreviewMethod
             }),
           });
           
@@ -340,7 +372,7 @@
                 createdAt: now
               });
               newPreviewError = undefined;
-              newPreviewMethod = 'weasyprint';
+              newPreviewMethod = selectedPreviewMethod;
               
               // Update preview blob URL
               if (previewBlobUrl) URL.revokeObjectURL(previewBlobUrl);
@@ -352,31 +384,19 @@
         }
       }
       
-      // Update source in database - create plain object to avoid Proxy serialization issues
-      const updatedSource = {
-        id: source.id,
-        projectId: source.projectId,
-        title: source.title,
-        url: source.url,
+      // Update source via store (updates both reactive state AND IndexedDB)
+      await sourceStore.updateSource(source.id, {
         content: newContent,
         bibliography: source.bibliography ? JSON.parse(JSON.stringify(source.bibliography)) : undefined,
         scrapedAt: now,
         metadata: source.metadata ? JSON.parse(JSON.stringify(source.metadata)) : undefined,
-        createdAt: source.createdAt,
-        updatedAt: now,
-        viewed: source.viewed ?? false,
-        sourceType: source.sourceType,
-        fileHash: source.fileHash,
-        mimeType: source.mimeType,
-        fileSize: source.fileSize,
-        blobId: source.blobId,
         previewBlobId: newPreviewBlobId,
         previewError: newPreviewError,
         contentMethod: newContentMethod,
         previewMethod: newPreviewMethod
-      };
-      await db.sources.save(updatedSource);
-      
+      });
+
+      stopRescrapeCountdown();
       toast.success('Re-scrape complete', {
         description: `Updated using ${newContentMethod} method`
       });
@@ -384,6 +404,7 @@
       closeRescrapeModal();
       
     } catch (error) {
+      stopRescrapeCountdown();
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       toast.error('Re-scrape failed', { description: errorMsg });
     } finally {
@@ -420,38 +441,17 @@
         createdAt: now
       });
       
-      // Update the source with the new preview blob ID and clear error
-      // Create plain object to avoid Proxy serialization issues
-      const updatedSource = {
-        id: source.id,
-        projectId: source.projectId,
-        title: source.title,
-        url: source.url,
-        content: source.content,
-        bibliography: source.bibliography ? JSON.parse(JSON.stringify(source.bibliography)) : undefined,
-        scrapedAt: source.scrapedAt,
-        metadata: source.metadata ? JSON.parse(JSON.stringify(source.metadata)) : undefined,
-        createdAt: source.createdAt,
-        updatedAt: now,
-        viewed: source.viewed ?? false,
-        sourceType: source.sourceType,
-        fileHash: source.fileHash,
-        mimeType: source.mimeType,
-        fileSize: source.fileSize,
-        blobId: source.blobId,
+      // Update source via store (updates both reactive state AND IndexedDB)
+      await sourceStore.updateSource(source.id, {
         previewBlobId: newPreviewBlobId,
         previewError: undefined,
-        contentMethod: source.contentMethod,
         previewMethod: 'manual' as PreviewCrawlMethod
-      };
-      await db.sources.save(updatedSource);
+      });
       
       // Update local state by reloading the preview
       previewBlobUrl = URL.createObjectURL(file);
       previewLoadError = null;
       
-      // Force reactivity by updating source reference in store
-      // Note: This is a workaround - ideally the store would handle this
       toast.success('PDF uploaded successfully', {
         description: 'Preview is now available for this source.'
       });
@@ -1133,6 +1133,23 @@
                 </div>
               </button>
               <button
+                onclick={() => selectedPreviewMethod = 'firecrawl'}
+                class={cn(
+                  "w-full flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-all",
+                  selectedPreviewMethod === 'firecrawl'
+                    ? "border-blue-500 bg-blue-500/10"
+                    : "border-zinc-700 hover:border-zinc-600"
+                )}
+              >
+                <Camera class={cn("h-5 w-5", selectedPreviewMethod === 'firecrawl' ? "text-amber-400" : "text-zinc-500")} />
+                <div>
+                  <div class={cn("text-sm font-medium", selectedPreviewMethod === 'firecrawl' ? "text-blue-200" : "text-zinc-300")}>
+                    Firecrawl Screenshot
+                  </div>
+                  <div class="text-xs text-zinc-500">Full-page screenshot (best for JS-heavy pages)</div>
+                </div>
+              </button>
+              <button
                 onclick={() => selectedPreviewMethod = 'manual'}
                 class={cn(
                   "w-full flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-all",
@@ -1150,6 +1167,14 @@
                 </div>
               </button>
             </div>
+          </div>
+        {/if}
+        
+        <!-- Countdown timer when re-scraping -->
+        {#if isRescraping}
+          <div class="flex items-center justify-center gap-2 py-2 text-sm text-zinc-400">
+            <Clock class="h-4 w-4 animate-pulse" />
+            <span>Scraping... {rescrapeCountdown}s remaining</span>
           </div>
         {/if}
       </div>

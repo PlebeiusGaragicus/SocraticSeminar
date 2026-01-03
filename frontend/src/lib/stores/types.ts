@@ -159,9 +159,10 @@ export type ContentCrawlMethod = 'markdownify' | 'firecrawl' | 'manual';
 /**
  * Method used to generate PDF preview.
  * - 'weasyprint': WeasyPrint HTML-to-PDF rendering
+ * - 'firecrawl': Firecrawl full-page screenshot
  * - 'manual': User-uploaded PDF
  */
-export type PreviewCrawlMethod = 'weasyprint' | 'manual';
+export type PreviewCrawlMethod = 'weasyprint' | 'firecrawl' | 'manual';
 
 /** Allowed MIME types for file uploads */
 export const ALLOWED_FILE_TYPES = [

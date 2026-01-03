@@ -32,6 +32,12 @@ class ContentMethod(str, Enum):
     MARKDOWNIFY = "markdownify"  # Built-in markdownify
     FIRECRAWL = "firecrawl"      # Firecrawl API
 
+
+class PreviewMethod(str, Enum):
+    """Method for generating PDF/image preview of a URL."""
+    WEASYPRINT = "weasyprint"    # WeasyPrint HTML-to-PDF rendering
+    FIRECRAWL = "firecrawl"      # Firecrawl screenshot (full page)
+
 # Configure logging
 logger = logging.getLogger("scrape")
 logger.setLevel(logging.INFO)
@@ -55,6 +61,7 @@ class ScrapeRequest(BaseModel):
     timeout: float = 15.0
     generate_pdf: bool = True  # Whether to generate PDF preview
     method: ContentMethod = ContentMethod.MARKDOWNIFY  # Content extraction method
+    preview_method: PreviewMethod = PreviewMethod.WEASYPRINT  # Preview generation method
 
 
 class BatchScrapeRequest(BaseModel):
@@ -288,6 +295,109 @@ async def _scrape_with_firecrawl(url: str, timeout: float = 30.0) -> tuple[str, 
             )
 
 
+async def _screenshot_with_firecrawl(url: str, timeout: float = 30.0) -> tuple[Optional[bytes], Optional[str]]:
+    """
+    Capture full-page screenshot using Firecrawl API.
+    
+    Returns:
+        Tuple of (screenshot_bytes_as_pdf, error_message)
+        If successful, returns PDF bytes and None error.
+        If failed, returns None and error message.
+    """
+    if not FIRECRAWL_API_KEY:
+        return None, "Firecrawl API key not configured. Set FIRECRAWL_API_KEY environment variable."
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                FIRECRAWL_API_URL,
+                headers={
+                    "Authorization": f"Bearer {FIRECRAWL_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "url": url,
+                    "formats": ["screenshot@fullPage"],
+                    "waitFor": 3000,  # Wait 3s for JS rendering
+                },
+                timeout=timeout
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            if not data.get("success"):
+                return None, f"Firecrawl screenshot failed: {data.get('error', 'Unknown error')}"
+            
+            result = data.get("data", {})
+            screenshot_url = result.get("screenshot")
+            
+            if not screenshot_url:
+                return None, "Firecrawl did not return a screenshot URL"
+            
+            # Download the screenshot image
+            img_response = await client.get(screenshot_url, timeout=30.0)
+            img_response.raise_for_status()
+            screenshot_bytes = img_response.content
+            
+            # Convert the screenshot (PNG) to PDF
+            pdf_bytes = _convert_image_to_pdf(screenshot_bytes)
+            if pdf_bytes:
+                logger.info(f"Firecrawl screenshot captured and converted to PDF ({len(pdf_bytes)} bytes)")
+                return pdf_bytes, None
+            else:
+                return None, "Failed to convert screenshot to PDF"
+            
+        except httpx.TimeoutException:
+            return None, f"Firecrawl screenshot timeout for URL: {url}"
+        except httpx.HTTPStatusError as e:
+            return None, f"Firecrawl screenshot error: {e.response.status_code}"
+        except Exception as e:
+            return None, f"Firecrawl screenshot error: {str(e)}"
+
+
+def _convert_image_to_pdf(image_bytes: bytes) -> Optional[bytes]:
+    """Convert image bytes (PNG/JPEG) to PDF."""
+    try:
+        from PIL import Image as PILImage
+        from reportlab.lib.pagesizes import letter
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.units import inch
+        
+        # Load image
+        img = PILImage.open(io.BytesIO(image_bytes))
+        img_width, img_height = img.size
+        
+        # Calculate PDF page size to fit the image
+        # Use a reasonable max width, scale proportionally
+        max_width = 8.5 * inch  # letter width
+        scale = max_width / img_width
+        pdf_width = img_width * scale
+        pdf_height = img_height * scale
+        
+        # Create PDF
+        pdf_buffer = io.BytesIO()
+        c = canvas.Canvas(pdf_buffer, pagesize=(pdf_width, pdf_height))
+        
+        # Save image to temp buffer for reportlab
+        img_buffer = io.BytesIO()
+        img.save(img_buffer, format='PNG')
+        img_buffer.seek(0)
+        
+        # Draw image on PDF
+        from reportlab.lib.utils import ImageReader
+        c.drawImage(ImageReader(img_buffer), 0, 0, width=pdf_width, height=pdf_height)
+        c.save()
+        
+        return pdf_buffer.getvalue()
+        
+    except ImportError as e:
+        logger.warning(f"Image to PDF conversion not available: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"Image to PDF conversion failed: {e}")
+        return None
+
+
 def _generate_pdf_from_html(html: str, base_url: str) -> tuple[Optional[bytes], Optional[str]]:
     """
     Generate PDF from HTML using WeasyPrint.
@@ -355,7 +465,8 @@ async def scrape_url(
     url: str,
     timeout: float = 15.0,
     generate_pdf: bool = True,
-    method: ContentMethod = ContentMethod.MARKDOWNIFY
+    method: ContentMethod = ContentMethod.MARKDOWNIFY,
+    preview_method: PreviewMethod = PreviewMethod.WEASYPRINT
 ) -> ScrapedResponse:
     """Fetch and scrape a single URL."""
     
@@ -414,18 +525,30 @@ async def scrape_url(
     preview_error: Optional[str] = None
     
     if generate_pdf:
-        # Run PDF generation with timeout to prevent hanging on slow external resources
-        try:
-            loop = asyncio.get_event_loop()
-            pdf_bytes, pdf_error = await asyncio.wait_for(
-                loop.run_in_executor(None, _generate_pdf_from_html, html, str(url)),
-                timeout=30.0  # 30 second timeout for PDF generation
-            )
-        except asyncio.TimeoutError:
-            pdf_bytes, pdf_error = None, "PDF generation timed out (external resources slow)"
+        if preview_method == PreviewMethod.FIRECRAWL:
+            # Use Firecrawl screenshot for preview
+            logger.info(f"Using Firecrawl screenshot for preview: {url}")
+            try:
+                pdf_bytes, pdf_error = await asyncio.wait_for(
+                    _screenshot_with_firecrawl(str(url), timeout=30.0),
+                    timeout=45.0  # Overall timeout
+                )
+            except asyncio.TimeoutError:
+                pdf_bytes, pdf_error = None, "Firecrawl screenshot timed out"
+        else:
+            # Run WeasyPrint PDF generation with timeout to prevent hanging
+            try:
+                loop = asyncio.get_event_loop()
+                pdf_bytes, pdf_error = await asyncio.wait_for(
+                    loop.run_in_executor(None, _generate_pdf_from_html, html, str(url)),
+                    timeout=30.0  # 30 second timeout for PDF generation
+                )
+            except asyncio.TimeoutError:
+                pdf_bytes, pdf_error = None, "PDF generation timed out (external resources slow)"
+        
         if pdf_bytes:
             preview_pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
-            logger.info(f"Generated PDF preview ({len(pdf_bytes)} bytes)")
+            logger.info(f"Generated PDF preview ({len(pdf_bytes)} bytes) via {preview_method.value}")
         else:
             preview_error = pdf_error
             logger.warning(f"PDF preview failed: {pdf_error}")
@@ -488,6 +611,7 @@ async def scrape_single_url(request: ScrapeRequest):
         - timeout: Request timeout in seconds (default: 15.0)
         - generate_pdf: Whether to generate PDF preview (default: true)
         - method: Content extraction method - 'markdownify' or 'firecrawl'
+        - preview_method: Preview generation method - 'weasyprint' or 'firecrawl'
     
     Returns:
         - url: The original URL
@@ -498,12 +622,13 @@ async def scrape_single_url(request: ScrapeRequest):
         - preview_pdf: Base64-encoded PDF of the page (if generate_pdf=true)
         - preview_error: Error message if PDF generation failed
     """
-    logger.info(f"Scraping URL: {request.url} (PDF: {request.generate_pdf}, Method: {request.method.value})")
+    logger.info(f"Scraping URL: {request.url} (PDF: {request.generate_pdf}, Content: {request.method.value}, Preview: {request.preview_method.value})")
     result = await scrape_url(
         str(request.url),
         request.timeout,
         request.generate_pdf,
-        request.method
+        request.method,
+        request.preview_method
     )
     logger.info(f"Successfully scraped: {result.title}")
     return result
