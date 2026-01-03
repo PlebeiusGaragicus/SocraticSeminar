@@ -3,7 +3,7 @@
 
 import { nanoid } from 'nanoid';
 import { untrack } from 'svelte';
-import type { Source, SourceFile, Bibliography, SourceType } from './types.js';
+import type { Source, SourceFile, Bibliography, SourceType, ContentCrawlMethod, PreviewCrawlMethod } from './types.js';
 import { ALLOWED_FILE_TYPES } from './types.js';
 import { db } from '$lib/services/indexeddb.js';
 
@@ -50,7 +50,10 @@ async function persistSource(source: Source): Promise<void> {
       blobId: source.blobId,
       // Preview fields
       previewBlobId: source.previewBlobId,
-      previewError: source.previewError
+      previewError: source.previewError,
+      // Crawl method tracking
+      contentMethod: source.contentMethod,
+      previewMethod: source.previewMethod
     };
     await db.sources.save(plainSource);
   } catch (error) {
@@ -138,11 +141,16 @@ interface CreateSourceOptions {
   // Preview PDF (base64 encoded or Blob)
   previewPdfBase64?: string;
   previewError?: string;
+  // Crawl method tracking
+  contentMethod?: ContentCrawlMethod;
+  previewMethod?: PreviewCrawlMethod;
 }
 
 // Options for creating a file source
 interface CreateFileSourceOptions {
   metadata?: Record<string, unknown>;
+  url?: string;    // Override URL (e.g., for manual PDF upload of failed scrapes)
+  title?: string;  // Override title
 }
 
 // Actions
@@ -214,7 +222,9 @@ async function createSource(
     viewed: false,
     sourceType: 'url' as SourceType,
     previewBlobId,
-    previewError: options.previewError
+    previewError: options.previewError,
+    contentMethod: options.contentMethod,
+    previewMethod: options.previewMethod
   };
   
   sources = [...sources, source];
@@ -268,8 +278,8 @@ async function createFileSource(
   const source: Source = {
     id: nanoid(),
     projectId,
-    title: file.name,
-    url: file.name, // Use filename as URL for file sources
+    title: options.title || file.name,
+    url: options.url || file.name, // Use filename as URL for file sources, or override
     content,
     metadata: options.metadata,
     createdAt: now,

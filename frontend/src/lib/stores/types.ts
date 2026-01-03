@@ -148,6 +148,21 @@ export interface Bibliography {
 /** Type of source - web URL or uploaded file */
 export type SourceType = 'url' | 'file';
 
+/** 
+ * Method used to extract markdown content from a URL.
+ * - 'markdownify': Built-in markdownify HTML-to-Markdown conversion
+ * - 'firecrawl': Firecrawl API (better for complex/JS-heavy pages)
+ * - 'manual': User-provided text
+ */
+export type ContentCrawlMethod = 'markdownify' | 'firecrawl' | 'manual';
+
+/**
+ * Method used to generate PDF preview.
+ * - 'weasyprint': WeasyPrint HTML-to-PDF rendering
+ * - 'manual': User-uploaded PDF
+ */
+export type PreviewCrawlMethod = 'weasyprint' | 'manual';
+
 /** Allowed MIME types for file uploads */
 export const ALLOWED_FILE_TYPES = [
   'application/pdf',
@@ -182,6 +197,10 @@ export interface Source {
   // Preview fields (for URL sources)
   previewBlobId?: string; // Reference to preview PDF blob in sourceFiles store
   previewError?: string; // Error message if PDF generation failed
+  
+  // Crawl method tracking (for URL sources)
+  contentMethod?: ContentCrawlMethod; // How markdown content was obtained
+  previewMethod?: PreviewCrawlMethod; // How PDF preview was obtained
 }
 
 /**

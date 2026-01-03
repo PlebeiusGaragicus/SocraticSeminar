@@ -13,13 +13,25 @@
   import File from '@lucide/svelte/icons/file';
   import FileImage from '@lucide/svelte/icons/file-image';
   import Download from '@lucide/svelte/icons/download';
+  import Upload from '@lucide/svelte/icons/upload';
   import Loader2 from '@lucide/svelte/icons/loader-2';
   import Check from '@lucide/svelte/icons/check';
   import Copy from '@lucide/svelte/icons/copy';
-  import type { Source } from '$lib/stores/types.js';
+  import RefreshCw from '@lucide/svelte/icons/refresh-cw';
+  import X from '@lucide/svelte/icons/x';
+  import Sparkles from '@lucide/svelte/icons/sparkles';
+  import PenLine from '@lucide/svelte/icons/pen-line';
+  import type { Source, ContentCrawlMethod, PreviewCrawlMethod } from '$lib/stores/types.js';
   import { sourceStore } from '$lib/stores/index.js';
   import { cn } from '$lib/utils.js';
+  import { toast } from 'svelte-sonner';
+  import { nanoid } from 'nanoid';
+  import { db } from '$lib/services/indexeddb.js';
   import Markdown from './Markdown.svelte';
+  import { Button } from './ui/index.js';
+  
+  // Backend URL for scraping service
+  const BACKEND_URL = import.meta.env.PUBLIC_BACKEND_URL ?? 'http://localhost:8000';
 
   interface Props {
     source: Source;
@@ -56,6 +68,26 @@
 
   // URL copy feedback
   let urlCopied = $state(false);
+
+  // PDF upload state
+  let pdfUploadInputRef: HTMLInputElement;
+  let isUploadingPdf = $state(false);
+  
+  // Re-scrape modal state
+  let showRescrapeModal = $state(false);
+  let rescrapeTarget = $state<'content' | 'preview' | 'both'>('both');
+  let selectedContentMethod = $state<ContentCrawlMethod>('markdownify');
+  let selectedPreviewMethod = $state<PreviewCrawlMethod>('weasyprint');
+  let isRescraping = $state(false);
+  let manualContentInput = $state('');
+  
+  // Manual content file upload
+  let manualContentFileRef: HTMLInputElement;
+  
+  // Header container ref for responsive behavior
+  let headerRef: HTMLDivElement;
+  let headerWidth = $state(0);
+  const isCompact = $derived(headerWidth < 500);
 
   const bibliography = $derived(source.bibliography);
   const hasBibliography = $derived(
@@ -165,6 +197,274 @@
     }
   }
 
+  function openPdfUploadPicker() {
+    pdfUploadInputRef?.click();
+  }
+
+  function openManualContentFilePicker() {
+    manualContentFileRef?.click();
+  }
+
+  // ResizeObserver for responsive header
+  $effect(() => {
+    if (!headerRef) return;
+    
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        headerWidth = entry.contentRect.width;
+      }
+    });
+    
+    observer.observe(headerRef);
+    return () => observer.disconnect();
+  });
+
+  function openRescrapeModal() {
+    showRescrapeModal = true;
+    rescrapeTarget = 'both';
+    selectedContentMethod = source.contentMethod || 'markdownify';
+    selectedPreviewMethod = source.previewMethod || 'weasyprint';
+    manualContentInput = '';
+  }
+
+  function closeRescrapeModal() {
+    showRescrapeModal = false;
+    isRescraping = false;
+  }
+
+  /**
+   * Handle manual content text/file upload.
+   */
+  async function handleManualContentFile(e: Event) {
+    const input = e.target as HTMLInputElement;
+    if (!input.files?.[0]) return;
+    
+    const file = input.files[0];
+    if (!file.type.startsWith('text/')) {
+      toast.error('Invalid file type', { description: 'Please upload a text or markdown file.' });
+      input.value = '';
+      return;
+    }
+    
+    manualContentInput = await file.text();
+    input.value = '';
+    toast.success('File loaded', { description: `${file.name} content loaded` });
+  }
+
+  /**
+   * Execute re-scrape with selected methods.
+   */
+  async function executeRescrape() {
+    if (!source.url.startsWith('http')) {
+      toast.error('Cannot re-scrape', { description: 'This source does not have a valid URL.' });
+      return;
+    }
+    
+    isRescraping = true;
+    const now = Date.now();
+    
+    try {
+      let newContent = source.content;
+      let newContentMethod: ContentCrawlMethod = source.contentMethod || 'markdownify';
+      let newPreviewBlobId = source.previewBlobId;
+      let newPreviewError = source.previewError;
+      let newPreviewMethod: PreviewCrawlMethod = source.previewMethod || 'weasyprint';
+      
+      // Re-scrape content if requested
+      if (rescrapeTarget === 'content' || rescrapeTarget === 'both') {
+        if (selectedContentMethod === 'manual') {
+          if (!manualContentInput.trim()) {
+            toast.error('No content provided', { description: 'Please enter or upload content.' });
+            isRescraping = false;
+            return;
+          }
+          newContent = manualContentInput;
+          newContentMethod = 'manual';
+        } else {
+          // Call backend with method parameter
+          const response = await fetch(`${BACKEND_URL}/api/scrape/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: source.url,
+              timeout: 15.0,
+              generate_pdf: false,
+              method: selectedContentMethod
+            }),
+          });
+          
+          if (!response.ok) {
+            const err = await response.json().catch(() => ({ detail: 'Unknown error' }));
+            throw new Error(err.detail || `HTTP ${response.status}`);
+          }
+          
+          const scraped = await response.json();
+          newContent = scraped.content;
+          newContentMethod = selectedContentMethod;
+        }
+      }
+      
+      // Re-scrape preview if requested  
+      if (rescrapeTarget === 'preview' || rescrapeTarget === 'both') {
+        if (selectedPreviewMethod === 'manual') {
+          // Just keep current - user will upload via the preview pane
+          newPreviewMethod = 'manual';
+        } else {
+          // Re-generate PDF via backend
+          const response = await fetch(`${BACKEND_URL}/api/scrape/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: source.url,
+              timeout: 15.0,
+              generate_pdf: true,
+            }),
+          });
+          
+          if (response.ok) {
+            const scraped = await response.json();
+            if (scraped.preview_pdf) {
+              // Store the new preview PDF
+              const binaryString = atob(scraped.preview_pdf);
+              const bytes = new Uint8Array(binaryString.length);
+              for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+              }
+              const pdfBlob = new Blob([bytes], { type: 'application/pdf' });
+              
+              newPreviewBlobId = nanoid();
+              await db.sourceFiles.save({
+                id: newPreviewBlobId,
+                sourceId: source.id,
+                blob: pdfBlob,
+                createdAt: now
+              });
+              newPreviewError = undefined;
+              newPreviewMethod = 'weasyprint';
+              
+              // Update preview blob URL
+              if (previewBlobUrl) URL.revokeObjectURL(previewBlobUrl);
+              previewBlobUrl = URL.createObjectURL(pdfBlob);
+            } else {
+              newPreviewError = scraped.preview_error || 'PDF generation failed';
+            }
+          }
+        }
+      }
+      
+      // Update source in database - create plain object to avoid Proxy serialization issues
+      const updatedSource = {
+        id: source.id,
+        projectId: source.projectId,
+        title: source.title,
+        url: source.url,
+        content: newContent,
+        bibliography: source.bibliography ? JSON.parse(JSON.stringify(source.bibliography)) : undefined,
+        scrapedAt: now,
+        metadata: source.metadata ? JSON.parse(JSON.stringify(source.metadata)) : undefined,
+        createdAt: source.createdAt,
+        updatedAt: now,
+        viewed: source.viewed ?? false,
+        sourceType: source.sourceType,
+        fileHash: source.fileHash,
+        mimeType: source.mimeType,
+        fileSize: source.fileSize,
+        blobId: source.blobId,
+        previewBlobId: newPreviewBlobId,
+        previewError: newPreviewError,
+        contentMethod: newContentMethod,
+        previewMethod: newPreviewMethod
+      };
+      await db.sources.save(updatedSource);
+      
+      toast.success('Re-scrape complete', {
+        description: `Updated using ${newContentMethod} method`
+      });
+      
+      closeRescrapeModal();
+      
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      toast.error('Re-scrape failed', { description: errorMsg });
+    } finally {
+      isRescraping = false;
+    }
+  }
+
+  /**
+   * Handle manual PDF upload to replace the failed/missing preview.
+   * Stores the PDF blob and updates the source's previewBlobId.
+   */
+  async function handlePdfUpload(e: Event) {
+    const input = e.target as HTMLInputElement;
+    if (!input.files?.[0]) return;
+    
+    const file = input.files[0];
+    if (file.type !== 'application/pdf') {
+      toast.error('Invalid file type', { description: 'Please upload a PDF file.' });
+      input.value = '';
+      return;
+    }
+    
+    isUploadingPdf = true;
+    
+    try {
+      const now = Date.now();
+      const newPreviewBlobId = nanoid();
+      
+      // Store the preview PDF blob
+      await db.sourceFiles.save({
+        id: newPreviewBlobId,
+        sourceId: source.id,
+        blob: file,
+        createdAt: now
+      });
+      
+      // Update the source with the new preview blob ID and clear error
+      // Create plain object to avoid Proxy serialization issues
+      const updatedSource = {
+        id: source.id,
+        projectId: source.projectId,
+        title: source.title,
+        url: source.url,
+        content: source.content,
+        bibliography: source.bibliography ? JSON.parse(JSON.stringify(source.bibliography)) : undefined,
+        scrapedAt: source.scrapedAt,
+        metadata: source.metadata ? JSON.parse(JSON.stringify(source.metadata)) : undefined,
+        createdAt: source.createdAt,
+        updatedAt: now,
+        viewed: source.viewed ?? false,
+        sourceType: source.sourceType,
+        fileHash: source.fileHash,
+        mimeType: source.mimeType,
+        fileSize: source.fileSize,
+        blobId: source.blobId,
+        previewBlobId: newPreviewBlobId,
+        previewError: undefined,
+        contentMethod: source.contentMethod,
+        previewMethod: 'manual' as PreviewCrawlMethod
+      };
+      await db.sources.save(updatedSource);
+      
+      // Update local state by reloading the preview
+      previewBlobUrl = URL.createObjectURL(file);
+      previewLoadError = null;
+      
+      // Force reactivity by updating source reference in store
+      // Note: This is a workaround - ideally the store would handle this
+      toast.success('PDF uploaded successfully', {
+        description: 'Preview is now available for this source.'
+      });
+      
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      toast.error('Upload failed', { description: errorMsg });
+    } finally {
+      isUploadingPdf = false;
+      input.value = '';
+    }
+  }
+
   // Load blob when switching to file source
   $effect(() => {
     if (isFileSource && source.blobId && !blobUrl && !blobLoading) {
@@ -208,10 +508,22 @@
   });
 </script>
 
+<!-- Hidden PDF upload input -->
+<input
+  bind:this={pdfUploadInputRef}
+  type="file"
+  accept=".pdf,application/pdf"
+  onchange={handlePdfUpload}
+  class="hidden"
+/>
+
 <div class="flex h-full flex-col bg-zinc-950 overflow-hidden">
   <!-- Header Bar -->
-  <div class="flex items-center border-b border-zinc-800 bg-zinc-900/50 px-4 py-2.5 gap-4">
-    <div class="flex items-center gap-3 min-w-0 flex-shrink overflow-hidden">
+  <div 
+    bind:this={headerRef}
+    class="flex items-center border-b border-zinc-800 bg-zinc-900/50 px-3 py-2 gap-2"
+  >
+    <div class="flex items-center gap-2 min-w-0 flex-shrink overflow-hidden flex-1">
       {#if isFileSource}
         {#if isPdf}
           <File class="h-4 w-4 flex-shrink-0 text-red-400" />
@@ -229,7 +541,7 @@
           <span class="text-xs text-zinc-500">
             {fileInfo()?.size} · {fileInfo()?.type}
           </span>
-        {:else}
+        {:else if !isCompact}
           <button 
             onclick={copyUrlToClipboard}
             class="text-xs text-zinc-500 hover:text-blue-400 transition-colors text-left flex items-center gap-1.5 group max-w-full"
@@ -247,24 +559,26 @@
     </div>
     
     {#if !isFileSource}
-      <!-- Tab Switcher (only for URL sources) -->
-      <div class="flex items-center gap-1 rounded-lg bg-zinc-800/50 p-1 flex-shrink-0">
+      <!-- Tab Switcher (only for URL sources) - responsive -->
+      <div class="flex items-center gap-0.5 rounded-lg bg-zinc-800/50 p-0.5 flex-shrink-0">
         <button
           onclick={() => activeTab = 'content'}
+          title="Content"
           class={cn(
-            "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all",
+            "flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all",
             activeTab === 'content'
               ? "bg-zinc-700 text-zinc-100 shadow-sm"
               : "text-zinc-400 hover:text-zinc-200"
           )}
         >
           <FileText class="h-3.5 w-3.5" />
-          Content
+          {#if !isCompact}<span>Content</span>{/if}
         </button>
         <button
           onclick={() => activeTab = 'preview'}
+          title="Preview"
           class={cn(
-            "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all",
+            "flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all",
             activeTab === 'preview'
               ? "bg-zinc-700 text-zinc-100 shadow-sm"
               : "text-zinc-400 hover:text-zinc-200",
@@ -272,28 +586,45 @@
           )}
         >
           <Monitor class="h-3.5 w-3.5" />
-          Preview
+          {#if !isCompact}<span>Preview</span>{/if}
         </button>
       </div>
+      
+      <!-- Re-scrape button -->
+      <button
+        onclick={openRescrapeModal}
+        title="Re-scrape with different method"
+        class="flex items-center justify-center rounded-md bg-zinc-800 p-1.5 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200 transition-colors flex-shrink-0"
+      >
+        <RefreshCw class="h-3.5 w-3.5" />
+      </button>
     {/if}
 
     {#if isFileSource}
       <button 
         onclick={downloadFile}
-        class="flex items-center gap-1.5 rounded-md bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100 transition-colors flex-shrink-0"
+        title="Download file"
+        class={cn(
+          "flex items-center gap-1.5 rounded-md bg-zinc-800 px-2 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100 transition-colors flex-shrink-0",
+          isCompact && "px-1.5"
+        )}
       >
-        <Download class="h-3 w-3" />
-        <span>Download</span>
+        <Download class="h-3.5 w-3.5" />
+        {#if !isCompact}<span>Download</span>{/if}
       </button>
     {:else}
       <a 
         href={source.url} 
         target="_blank" 
         rel="noopener noreferrer"
-        class="flex items-center gap-1.5 rounded-md bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100 transition-colors flex-shrink-0"
+        title="Open original URL"
+        class={cn(
+          "flex items-center gap-1.5 rounded-md bg-zinc-800 px-2 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100 transition-colors flex-shrink-0",
+          isCompact && "px-1.5"
+        )}
       >
-        <span>Open Original</span>
-        <ExternalLink class="h-3 w-3" />
+        {#if !isCompact}<span>Open</span>{/if}
+        <ExternalLink class="h-3.5 w-3.5" />
       </a>
     {/if}
   </div>
@@ -464,23 +795,43 @@
               <p class="text-sm text-zinc-500 mb-4">
                 {source.previewError || previewLoadError || 'Could not generate preview for this page.'}
               </p>
-              <div class="flex gap-3 justify-center">
-                <button
-                  onclick={() => activeTab = 'content'}
-                  class="inline-flex items-center gap-2 rounded-lg bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-600 transition-colors"
-                >
-                  <FileText class="h-4 w-4" />
-                  <span>View Content</span>
-                </button>
-                <a 
-                  href={source.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 transition-colors"
-                >
-                  <span>Open Original</span>
-                  <ExternalLink class="h-4 w-4" />
-                </a>
+              <div class="flex flex-col gap-3 items-center">
+                <div class="flex gap-3 justify-center">
+                  <button
+                    onclick={() => activeTab = 'content'}
+                    class="inline-flex items-center gap-2 rounded-lg bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-600 transition-colors"
+                  >
+                    <FileText class="h-4 w-4" />
+                    <span>View Content</span>
+                  </button>
+                  <a 
+                    href={source.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 transition-colors"
+                  >
+                    <span>Open Original</span>
+                    <ExternalLink class="h-4 w-4" />
+                  </a>
+                </div>
+                <div class="border-t border-zinc-800 pt-3 mt-1 w-full">
+                  <p class="text-xs text-zinc-500 mb-2">
+                    Or save the webpage as PDF in your browser and upload it:
+                  </p>
+                  <button
+                    onclick={openPdfUploadPicker}
+                    disabled={isUploadingPdf}
+                    class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-500 transition-colors disabled:opacity-50"
+                  >
+                    {#if isUploadingPdf}
+                      <Loader2 class="h-4 w-4 animate-spin" />
+                      <span>Uploading...</span>
+                    {:else}
+                      <Upload class="h-4 w-4" />
+                      <span>Upload PDF Instead</span>
+                    {/if}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -493,23 +844,43 @@
               <p class="text-sm text-zinc-500 mb-4">
                 This source was added before preview capture was enabled.
               </p>
-              <div class="flex gap-3 justify-center">
-                <button
-                  onclick={() => activeTab = 'content'}
-                  class="inline-flex items-center gap-2 rounded-lg bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-600 transition-colors"
-                >
-                  <FileText class="h-4 w-4" />
-                  <span>View Content</span>
-                </button>
-                <a 
-                  href={source.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 transition-colors"
-                >
-                  <span>Open Original</span>
-                  <ExternalLink class="h-4 w-4" />
-                </a>
+              <div class="flex flex-col gap-3 items-center">
+                <div class="flex gap-3 justify-center">
+                  <button
+                    onclick={() => activeTab = 'content'}
+                    class="inline-flex items-center gap-2 rounded-lg bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-600 transition-colors"
+                  >
+                    <FileText class="h-4 w-4" />
+                    <span>View Content</span>
+                  </button>
+                  <a 
+                    href={source.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 transition-colors"
+                  >
+                    <span>Open Original</span>
+                    <ExternalLink class="h-4 w-4" />
+                  </a>
+                </div>
+                <div class="border-t border-zinc-800 pt-3 mt-1 w-full">
+                  <p class="text-xs text-zinc-500 mb-2">
+                    You can add a PDF preview by saving the webpage as PDF:
+                  </p>
+                  <button
+                    onclick={openPdfUploadPicker}
+                    disabled={isUploadingPdf}
+                    class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-500 transition-colors disabled:opacity-50"
+                  >
+                    {#if isUploadingPdf}
+                      <Loader2 class="h-4 w-4 animate-spin" />
+                      <span>Uploading...</span>
+                    {:else}
+                      <Upload class="h-4 w-4" />
+                      <span>Upload PDF</span>
+                    {/if}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -553,7 +924,7 @@
     {/if}
   </div>
 
-  <!-- Footer with scraped timestamp -->
+  <!-- Footer with scraped timestamp and method info -->
   <div class="border-t border-zinc-800 px-4 py-1.5 flex items-center justify-between text-[10px] text-zinc-600">
     <span>
       {#if isFileSource}
@@ -562,6 +933,12 @@
         {/if}
       {:else if source.scrapedAt}
         Scraped {new Date(source.scrapedAt).toLocaleDateString()} at {new Date(source.scrapedAt).toLocaleTimeString()}
+        {#if source.contentMethod}
+          · Content: {source.contentMethod}
+        {/if}
+        {#if source.previewMethod}
+          · PDF: {source.previewMethod}
+        {/if}
       {:else}
         Added {new Date(source.createdAt).toLocaleDateString()}
       {/if}
@@ -569,3 +946,238 @@
     <span class="uppercase tracking-wider font-medium text-zinc-700">Read Only</span>
   </div>
 </div>
+
+<!-- Hidden input for manual content file upload -->
+<input
+  bind:this={manualContentFileRef}
+  type="file"
+  accept=".txt,.md,text/plain,text/markdown"
+  onchange={handleManualContentFile}
+  class="hidden"
+/>
+
+<!-- Re-scrape Modal -->
+{#if showRescrapeModal}
+  <div 
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+    onclick={(e) => e.target === e.currentTarget && closeRescrapeModal()}
+    role="presentation"
+  >
+    <div 
+      class="w-full max-w-md rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl overflow-hidden"
+      role="dialog"
+      aria-modal="true"
+    >
+      <!-- Header -->
+      <div class="flex items-center justify-between border-b border-zinc-800 px-4 py-3 bg-zinc-800/50">
+        <div class="flex items-center gap-2">
+          <RefreshCw class="h-5 w-5 text-blue-500" />
+          <h3 class="font-semibold text-zinc-100">Re-scrape Source</h3>
+        </div>
+        <button 
+          onclick={closeRescrapeModal}
+          disabled={isRescraping}
+          class="rounded-lg p-1 text-zinc-500 hover:bg-zinc-700 hover:text-zinc-200 transition-colors disabled:opacity-50"
+        >
+          <X class="h-5 w-5" />
+        </button>
+      </div>
+
+      <div class="p-5 space-y-5">
+        <!-- Target Selection -->
+        <div>
+          <label class="block text-xs font-bold uppercase tracking-wider text-zinc-500 mb-2">
+            What to re-scrape
+          </label>
+          <div class="flex gap-2">
+            <button
+              onclick={() => rescrapeTarget = 'content'}
+              class={cn(
+                "flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-all",
+                rescrapeTarget === 'content'
+                  ? "border-blue-500 bg-blue-500/10 text-blue-300"
+                  : "border-zinc-700 text-zinc-400 hover:border-zinc-600"
+              )}
+            >
+              <FileText class="h-4 w-4 mx-auto mb-1" />
+              Content
+            </button>
+            <button
+              onclick={() => rescrapeTarget = 'preview'}
+              class={cn(
+                "flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-all",
+                rescrapeTarget === 'preview'
+                  ? "border-blue-500 bg-blue-500/10 text-blue-300"
+                  : "border-zinc-700 text-zinc-400 hover:border-zinc-600"
+              )}
+            >
+              <Monitor class="h-4 w-4 mx-auto mb-1" />
+              Preview
+            </button>
+            <button
+              onclick={() => rescrapeTarget = 'both'}
+              class={cn(
+                "flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-all",
+                rescrapeTarget === 'both'
+                  ? "border-blue-500 bg-blue-500/10 text-blue-300"
+                  : "border-zinc-700 text-zinc-400 hover:border-zinc-600"
+              )}
+            >
+              <RefreshCw class="h-4 w-4 mx-auto mb-1" />
+              Both
+            </button>
+          </div>
+        </div>
+
+        <!-- Content Method (if content or both) -->
+        {#if rescrapeTarget === 'content' || rescrapeTarget === 'both'}
+          <div>
+            <label class="block text-xs font-bold uppercase tracking-wider text-zinc-500 mb-2">
+              Content extraction method
+            </label>
+            <div class="space-y-2">
+              <button
+                onclick={() => selectedContentMethod = 'markdownify'}
+                class={cn(
+                  "w-full flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-all",
+                  selectedContentMethod === 'markdownify'
+                    ? "border-blue-500 bg-blue-500/10"
+                    : "border-zinc-700 hover:border-zinc-600"
+                )}
+              >
+                <Globe class={cn("h-5 w-5", selectedContentMethod === 'markdownify' ? "text-blue-400" : "text-zinc-500")} />
+                <div>
+                  <div class={cn("text-sm font-medium", selectedContentMethod === 'markdownify' ? "text-blue-200" : "text-zinc-300")}>
+                    Markdownify
+                  </div>
+                  <div class="text-xs text-zinc-500">Built-in HTML to Markdown conversion</div>
+                </div>
+              </button>
+              <button
+                onclick={() => selectedContentMethod = 'firecrawl'}
+                class={cn(
+                  "w-full flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-all",
+                  selectedContentMethod === 'firecrawl'
+                    ? "border-blue-500 bg-blue-500/10"
+                    : "border-zinc-700 hover:border-zinc-600"
+                )}
+              >
+                <Sparkles class={cn("h-5 w-5", selectedContentMethod === 'firecrawl' ? "text-amber-400" : "text-zinc-500")} />
+                <div>
+                  <div class={cn("text-sm font-medium", selectedContentMethod === 'firecrawl' ? "text-blue-200" : "text-zinc-300")}>
+                    Firecrawl API
+                  </div>
+                  <div class="text-xs text-zinc-500">Better for complex/JS-heavy pages</div>
+                </div>
+              </button>
+              <button
+                onclick={() => selectedContentMethod = 'manual'}
+                class={cn(
+                  "w-full flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-all",
+                  selectedContentMethod === 'manual'
+                    ? "border-blue-500 bg-blue-500/10"
+                    : "border-zinc-700 hover:border-zinc-600"
+                )}
+              >
+                <PenLine class={cn("h-5 w-5", selectedContentMethod === 'manual' ? "text-green-400" : "text-zinc-500")} />
+                <div>
+                  <div class={cn("text-sm font-medium", selectedContentMethod === 'manual' ? "text-blue-200" : "text-zinc-300")}>
+                    Manual Input
+                  </div>
+                  <div class="text-xs text-zinc-500">Paste or upload your own text</div>
+                </div>
+              </button>
+            </div>
+            
+            <!-- Manual content input -->
+            {#if selectedContentMethod === 'manual'}
+              <div class="mt-3 space-y-2">
+                <textarea
+                  bind:value={manualContentInput}
+                  placeholder="Paste content here, or upload a text file..."
+                  class="w-full h-32 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 outline-none focus:border-blue-500 transition-colors resize-none"
+                ></textarea>
+                <button
+                  onclick={openManualContentFilePicker}
+                  class="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                >
+                  Or upload a .txt/.md file
+                </button>
+              </div>
+            {/if}
+          </div>
+        {/if}
+
+        <!-- Preview Method (if preview or both) -->
+        {#if rescrapeTarget === 'preview' || rescrapeTarget === 'both'}
+          <div>
+            <label class="block text-xs font-bold uppercase tracking-wider text-zinc-500 mb-2">
+              PDF preview method
+            </label>
+            <div class="space-y-2">
+              <button
+                onclick={() => selectedPreviewMethod = 'weasyprint'}
+                class={cn(
+                  "w-full flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-all",
+                  selectedPreviewMethod === 'weasyprint'
+                    ? "border-blue-500 bg-blue-500/10"
+                    : "border-zinc-700 hover:border-zinc-600"
+                )}
+              >
+                <Monitor class={cn("h-5 w-5", selectedPreviewMethod === 'weasyprint' ? "text-blue-400" : "text-zinc-500")} />
+                <div>
+                  <div class={cn("text-sm font-medium", selectedPreviewMethod === 'weasyprint' ? "text-blue-200" : "text-zinc-300")}>
+                    WeasyPrint
+                  </div>
+                  <div class="text-xs text-zinc-500">Server-side HTML to PDF rendering</div>
+                </div>
+              </button>
+              <button
+                onclick={() => selectedPreviewMethod = 'manual'}
+                class={cn(
+                  "w-full flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-all",
+                  selectedPreviewMethod === 'manual'
+                    ? "border-blue-500 bg-blue-500/10"
+                    : "border-zinc-700 hover:border-zinc-600"
+                )}
+              >
+                <Upload class={cn("h-5 w-5", selectedPreviewMethod === 'manual' ? "text-green-400" : "text-zinc-500")} />
+                <div>
+                  <div class={cn("text-sm font-medium", selectedPreviewMethod === 'manual' ? "text-blue-200" : "text-zinc-300")}>
+                    Manual Upload
+                  </div>
+                  <div class="text-xs text-zinc-500">Upload your own PDF (use Preview tab after)</div>
+                </div>
+              </button>
+            </div>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Footer -->
+      <div class="flex items-center justify-end gap-3 border-t border-zinc-800 px-4 py-3 bg-zinc-800/30">
+        <Button
+          onclick={closeRescrapeModal}
+          disabled={isRescraping}
+          variant="ghost"
+          class="text-zinc-400 hover:text-zinc-200"
+        >
+          Cancel
+        </Button>
+        <Button
+          onclick={executeRescrape}
+          disabled={isRescraping || (selectedContentMethod === 'manual' && !manualContentInput.trim() && (rescrapeTarget === 'content' || rescrapeTarget === 'both'))}
+          class="bg-blue-600 hover:bg-blue-500"
+        >
+          {#if isRescraping}
+            <Loader2 class="h-4 w-4 mr-2 animate-spin" />
+            Re-scraping...
+          {:else}
+            <RefreshCw class="h-4 w-4 mr-2" />
+            Re-scrape
+          {/if}
+        </Button>
+      </div>
+    </div>
+  </div>
+{/if}

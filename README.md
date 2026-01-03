@@ -119,7 +119,7 @@ pnpm run build
 # build frontend
 cd frontend
 pnpm install
-npm run build
+pnpm run build
 
 cp .env.example .env
 nano .env

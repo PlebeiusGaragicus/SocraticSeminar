@@ -14,15 +14,23 @@ import asyncio
 import base64
 import io
 import logging
+import os
 import re
 import time
-from typing import Optional
+from enum import Enum
+from typing import Literal, Optional
 from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, HTTPException
 from markdownify import markdownify
 from pydantic import BaseModel, HttpUrl
+
+
+class ContentMethod(str, Enum):
+    """Method for extracting markdown content from a URL."""
+    MARKDOWNIFY = "markdownify"  # Built-in markdownify
+    FIRECRAWL = "firecrawl"      # Firecrawl API
 
 # Configure logging
 logger = logging.getLogger("scrape")
@@ -46,6 +54,7 @@ class ScrapeRequest(BaseModel):
     url: HttpUrl
     timeout: float = 15.0
     generate_pdf: bool = True  # Whether to generate PDF preview
+    method: ContentMethod = ContentMethod.MARKDOWNIFY  # Content extraction method
 
 
 class BatchScrapeRequest(BaseModel):
@@ -212,6 +221,73 @@ def _html_to_markdown(html: str) -> str:
     return markdown
 
 
+# Firecrawl API key from environment
+FIRECRAWL_API_KEY = os.environ.get("FIRECRAWL_API_KEY", "")
+FIRECRAWL_API_URL = "https://api.firecrawl.dev/v1/scrape"
+
+
+async def _scrape_with_firecrawl(url: str, timeout: float = 30.0) -> tuple[str, str, str]:
+    """
+    Scrape URL using Firecrawl API.
+    
+    Returns:
+        Tuple of (markdown_content, title, html_content)
+    """
+    if not FIRECRAWL_API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Firecrawl API key not configured. Set FIRECRAWL_API_KEY environment variable."
+        )
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                FIRECRAWL_API_URL,
+                headers={
+                    "Authorization": f"Bearer {FIRECRAWL_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "url": url,
+                    "formats": ["markdown", "html"],
+                    "onlyMainContent": True
+                },
+                timeout=timeout
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            if not data.get("success"):
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Firecrawl failed: {data.get('error', 'Unknown error')}"
+                )
+            
+            result = data.get("data", {})
+            markdown = result.get("markdown", "")
+            html = result.get("html", "")
+            metadata = result.get("metadata", {})
+            title = metadata.get("title") or metadata.get("ogTitle") or "Untitled"
+            
+            return markdown, title, html
+            
+        except httpx.TimeoutException:
+            raise HTTPException(
+                status_code=504,
+                detail=f"Firecrawl timeout for URL: {url}"
+            )
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(
+                status_code=e.response.status_code,
+                detail=f"Firecrawl error: {e.response.status_code}"
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Firecrawl error: {str(e)}"
+            )
+
+
 def _generate_pdf_from_html(html: str, base_url: str) -> tuple[Optional[bytes], Optional[str]]:
     """
     Generate PDF from HTML using WeasyPrint.
@@ -278,47 +354,56 @@ def _generate_pdf_from_html(html: str, base_url: str) -> tuple[Optional[bytes], 
 async def scrape_url(
     url: str,
     timeout: float = 15.0,
-    generate_pdf: bool = True
+    generate_pdf: bool = True,
+    method: ContentMethod = ContentMethod.MARKDOWNIFY
 ) -> ScrapedResponse:
     """Fetch and scrape a single URL."""
-    headers = {
-        "User-Agent": USER_AGENT,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-    }
     
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(
-                str(url),
-                headers=headers,
-                timeout=timeout,
-                follow_redirects=True
-            )
-            response.raise_for_status()
-            html = response.text
-        except httpx.TimeoutException:
-            raise HTTPException(
-                status_code=504,
-                detail=f"Timeout fetching URL: {url}"
-            )
-        except httpx.HTTPStatusError as e:
-            raise HTTPException(
-                status_code=e.response.status_code,
-                detail=f"HTTP error fetching URL: {url} - {e.response.status_code}"
-            )
-        except Exception as e:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Error fetching URL: {url} - {str(e)}"
-            )
-    
-    # Extract metadata
-    title = _extract_title(html)
-    bibliography = _extract_bibliography(html, str(url))
-    
-    # Convert to markdown
-    content = _html_to_markdown(html)
+    # Use Firecrawl if requested
+    if method == ContentMethod.FIRECRAWL:
+        logger.info(f"Using Firecrawl for: {url}")
+        content, title, html = await _scrape_with_firecrawl(url, timeout=30.0)
+        bibliography = _extract_bibliography(html, str(url)) if html else Bibliography()
+    else:
+        # Default: fetch with httpx and convert with markdownify
+        headers = {
+            "User-Agent": USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        }
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(
+                    str(url),
+                    headers=headers,
+                    timeout=httpx.Timeout(timeout, connect=10.0),
+                    follow_redirects=True
+                )
+                response.raise_for_status()
+                html = response.text
+            except httpx.TimeoutException:
+                raise HTTPException(
+                    status_code=504,
+                    detail=f"Timeout fetching URL: {url}"
+                )
+            except httpx.HTTPStatusError as e:
+                raise HTTPException(
+                    status_code=e.response.status_code,
+                    detail=f"HTTP error fetching URL: {url} - {e.response.status_code}"
+                )
+            except Exception as e:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Error fetching URL: {url} - {str(e)}"
+                )
+        
+        # Extract metadata
+        title = _extract_title(html)
+        bibliography = _extract_bibliography(html, str(url))
+        
+        # Convert to markdown
+        content = _html_to_markdown(html)
     
     # Truncate if too long (avoid massive responses)
     if len(content) > 50000:
@@ -329,7 +414,15 @@ async def scrape_url(
     preview_error: Optional[str] = None
     
     if generate_pdf:
-        pdf_bytes, pdf_error = _generate_pdf_from_html(html, str(url))
+        # Run PDF generation with timeout to prevent hanging on slow external resources
+        try:
+            loop = asyncio.get_event_loop()
+            pdf_bytes, pdf_error = await asyncio.wait_for(
+                loop.run_in_executor(None, _generate_pdf_from_html, html, str(url)),
+                timeout=30.0  # 30 second timeout for PDF generation
+            )
+        except asyncio.TimeoutError:
+            pdf_bytes, pdf_error = None, "PDF generation timed out (external resources slow)"
         if pdf_bytes:
             preview_pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
             logger.info(f"Generated PDF preview ({len(pdf_bytes)} bytes)")
@@ -390,6 +483,12 @@ async def scrape_single_url(request: ScrapeRequest):
     """
     Scrape a single URL and return structured content.
     
+    Args:
+        - url: The URL to scrape
+        - timeout: Request timeout in seconds (default: 15.0)
+        - generate_pdf: Whether to generate PDF preview (default: true)
+        - method: Content extraction method - 'markdownify' or 'firecrawl'
+    
     Returns:
         - url: The original URL
         - title: Page title extracted from og:title or <title>
@@ -399,11 +498,12 @@ async def scrape_single_url(request: ScrapeRequest):
         - preview_pdf: Base64-encoded PDF of the page (if generate_pdf=true)
         - preview_error: Error message if PDF generation failed
     """
-    logger.info(f"Scraping URL: {request.url} (PDF: {request.generate_pdf})")
+    logger.info(f"Scraping URL: {request.url} (PDF: {request.generate_pdf}, Method: {request.method.value})")
     result = await scrape_url(
         str(request.url),
         request.timeout,
-        request.generate_pdf
+        request.generate_pdf,
+        request.method
     )
     logger.info(f"Successfully scraped: {result.title}")
     return result
