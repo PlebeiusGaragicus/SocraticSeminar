@@ -3,7 +3,7 @@
 Extends the shared BaseAgentState with Deeptutor-specific fields.
 """
 
-from typing import Annotated, Literal, Sequence
+from typing import Annotated, Sequence
 from typing_extensions import TypedDict, NotRequired
 
 from langchain_core.messages import BaseMessage
@@ -29,10 +29,10 @@ class ProjectFile(TypedDict):
     Files are stored in the browser (IndexedDB) and provided to the agent
     via client-side tool execution. When the agent calls read_file or
     list_files, execution is interrupted and the client provides the data.
+    All files are markdown format.
     """
     id: str
     title: str
-    file_type: Literal["artifact", "document", "code"]
     content: NotRequired[str]  # Optional: included when client provides file content
 
 

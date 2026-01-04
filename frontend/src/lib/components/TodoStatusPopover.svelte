@@ -9,6 +9,7 @@
 
   // Local state
   let isOpen = $state(false);
+  let containerRef: HTMLDivElement | undefined = $state();
 
   // Derived state
   const todos = $derived(agentStore.todos);
@@ -34,8 +35,7 @@
   }
 
   function handleClickOutside(event: MouseEvent) {
-    const target = event.target as HTMLElement;
-    if (!target.closest('.todo-popover')) {
+    if (isOpen && containerRef && !containerRef.contains(event.target as Node)) {
       isOpen = false;
     }
   }
@@ -76,7 +76,7 @@
 </script>
 
 {#if hasTodos}
-  <div class="relative todo-popover">
+  <div bind:this={containerRef} class="relative todo-popover">
     <!-- Trigger Button -->
     <button
       type="button"

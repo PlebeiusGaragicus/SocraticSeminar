@@ -35,7 +35,8 @@ import type {
 	CashuPaymentState,
 	ClientToolInterrupt,
 	PaymentExhaustedInterrupt,
-	StoredRefund
+	StoredRefund,
+	AgentSettings
 } from '../stores/types.js';
 import { 
 	AUTO_APPROVE_TOOLS as autoApproveTools,
@@ -105,6 +106,38 @@ export interface SubmitOptions {
 	projectFiles?: ProjectFile[];
 	streamMode?: ('values' | 'messages' | 'updates')[];
 	maxToolIterations?: number;
+	/** Agent settings for this request (LLM model, research params) */
+	agentSettings?: AgentSettings;
+}
+
+/**
+ * Build the config object for LangGraph runs.
+ * This converts agentSettings to the configurable format expected by
+ * LangGraph's configurable_alternatives pattern.
+ * 
+ * The agent uses get_configurable_model() which expects:
+ * config={"configurable": {"llm_model": "grok-4-1-fast-non-reasoning"}}
+ */
+function buildConfig(agentSettings?: AgentSettings): { configurable: Record<string, unknown> } | undefined {
+	// #region agent log
+	fetch('http://127.0.0.1:7242/ingest/fc6ffbca-5f57-4f03-928e-cc3dba3a1fac',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'langgraph.ts:buildConfig:entry',message:'buildConfig called',data:{hasAgentSettings:!!agentSettings,agentSettings},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
+	// #endregion
+	if (!agentSettings) return undefined;
+	
+	const config = {
+		configurable: {
+			// Model selection - used by get_configurable_model()
+			llm_model: agentSettings.llm_model,
+			// Additional settings that can be read from config
+			max_concurrent_research_units: agentSettings.max_concurrent_research_units,
+			max_researcher_iterations: agentSettings.max_researcher_iterations,
+			enable_thinking_tool: agentSettings.enable_thinking_tool,
+		}
+	};
+	// #region agent log
+	fetch('http://127.0.0.1:7242/ingest/fc6ffbca-5f57-4f03-928e-cc3dba3a1fac',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'langgraph.ts:buildConfig:exit',message:'buildConfig returning',data:{config},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,B'})}).catch(()=>{});
+	// #endregion
+	return config;
 }
 
 // Tool executor function type - injected by the caller
@@ -311,7 +344,7 @@ export async function submitMessage(
 	callbacks: StreamCallbacks
 ): Promise<{ threadId: string; messages: Message[] }> {
 	const client = getClient();
-	const assistantId = options.assistantId || 'seminar_agent';
+	const assistantId = options.assistantId || null;
 	const maxIterations = options.maxToolIterations ?? 10;
 	const projectId = options.projectId || '';
 	
@@ -344,6 +377,11 @@ export async function submitMessage(
 		input.current_project_id = projectId;
 	}
 	
+	// Include agent settings for runtime configuration
+	if (options.agentSettings) {
+		input.agent_settings = options.agentSettings;
+	}
+	
 	const messages: Message[] = [];
 	let currentContent = '';
 	let iteration = 0;
@@ -365,10 +403,19 @@ export async function submitMessage(
 			
 			console.log(`[LangGraph] Starting stream with input:`, currentInput === null ? 'null (resume)' : 'new message');
 			
+			// Build config for model selection and other settings
+			const runConfig = buildConfig(options.agentSettings);
+			console.log('[LangGraph] Run config:', runConfig);
+			
+			// #region agent log
+			fetch('http://127.0.0.1:7242/ingest/fc6ffbca-5f57-4f03-928e-cc3dba3a1fac',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'langgraph.ts:submitMessage:beforeStream',message:'About to call client.runs.stream',data:{threadId,assistantId,hasInput:currentInput!==null,runConfig,optionsAgentSettings:options.agentSettings},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B,C'})}).catch(()=>{});
+			// #endregion
+			
 			// Stream the response
 			const stream = client.runs.stream(threadId, assistantId, {
 				input: currentInput,
 				streamMode: options.streamMode || ['messages', 'values', 'updates'],
+				config: runConfig,
 			});
 			
 			for await (const event of stream) {
@@ -585,6 +632,7 @@ export async function submitMessage(
 									input: null,
 									command: { resume: resumePayload },
 									streamMode: options.streamMode || ['messages', 'values'],
+									config: runConfig,
 								});
 								
 								for await (const resumeEvent of resumeStream) {
@@ -673,6 +721,7 @@ export async function submitMessage(
 									input: null,
 									command: { resume: resumePayload },
 									streamMode: options.streamMode || ['messages', 'values', 'updates'],
+									config: runConfig,
 								});
 								
 								// Process the resume stream
@@ -885,12 +934,14 @@ export async function resumeWithHITLDecisions(
 	interruptId: string,
 	response: HITLResumeResponse,
 	assistantId: string,
-	callbacks: StreamCallbacks
+	callbacks: StreamCallbacks,
+	agentSettings?: AgentSettings
 ): Promise<{ threadId: string; messages: Message[] }> {
 	const client = getClient();
 	const ctx: StreamContext = { messages: [], currentContent: '' };
 	
 	const resumePayload = { [interruptId]: response };
+	const runConfig = buildConfig(agentSettings);
 	console.log('[LangGraph] Resuming with HITL decisions');
 	
 	try {
@@ -898,6 +949,7 @@ export async function resumeWithHITLDecisions(
 			input: null,
 			command: { resume: resumePayload },
 			streamMode: ['messages', 'values'],
+			config: runConfig,
 		});
 		
 		await processStreamEvents(stream, callbacks, ctx);
@@ -1221,12 +1273,14 @@ export async function resumeWithPayment(
 	interruptId: string,
 	paymentToken: string,
 	assistantId: string,
-	callbacks: StreamCallbacks
+	callbacks: StreamCallbacks,
+	agentSettings?: AgentSettings
 ): Promise<{ threadId: string; messages: Message[] }> {
 	const client = getClient();
 	const ctx: StreamContext = { messages: [], currentContent: '' };
 	
 	const resumePayload = { [interruptId]: { payment_token: paymentToken } };
+	const runConfig = buildConfig(agentSettings);
 	console.log('[LangGraph] Resuming with additional payment');
 	
 	try {
@@ -1234,6 +1288,7 @@ export async function resumeWithPayment(
 			input: null,
 			command: { resume: resumePayload },
 			streamMode: ['messages', 'values', 'updates'],
+			config: runConfig,
 		});
 		
 		await processStreamEvents(stream, callbacks, ctx);
@@ -1273,7 +1328,8 @@ export async function resumeWithToolResults(
 	interruptId: string,
 	toolResults: ToolResult[],
 	assistantId: string,
-	callbacks: StreamCallbacks
+	callbacks: StreamCallbacks,
+	agentSettings?: AgentSettings
 ): Promise<{ threadId: string; messages: Message[] }> {
 	const client = getClient();
 	const ctx: StreamContext = { messages: [], currentContent: '' };
@@ -1287,6 +1343,7 @@ export async function resumeWithToolResults(
 		}
 	};
 	
+	const runConfig = buildConfig(agentSettings);
 	console.log('[LangGraph] Resuming with tool results:', toolResults.map(r => r.tool_call_id));
 	
 	try {
@@ -1294,6 +1351,7 @@ export async function resumeWithToolResults(
 			input: null,
 			command: { resume: resumePayload },
 			streamMode: ['messages', 'values', 'updates'],
+			config: runConfig,
 		});
 		
 		await processStreamEvents(stream, callbacks, ctx);

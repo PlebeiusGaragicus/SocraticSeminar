@@ -78,6 +78,7 @@ You have access to research tools:
 2. **fetch_webpage**: For fetching a specific URL's full content
 3. **think_tool**: For reflection and strategic planning during research
 **CRITICAL: Use think_tool after each search to reflect on results and plan next steps**
+**RESTRICTION: Do NOT use think_tool for simple greetings, general knowledge questions, or when you can answer directly without research.**
 </Available Research Tools>
 
 <Instructions>
@@ -208,7 +209,7 @@ files for transparency, but they are READ-ONLY from their perspective.
 
 ### 2. User's Project Files (Client-side)
 The user's actual documents stored in their browser. Use these client-side tools:
-- `list_files(file_type?)` - List user's files
+- `list_files()` - List user's project files
 - `read_file(file_id)` - Read a user file by ID
 - `search_files(query)` - Semantic search across user files
 - `grep_files(pattern)` - Pattern search in file contents

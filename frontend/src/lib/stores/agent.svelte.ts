@@ -203,7 +203,8 @@ function getRunState(threadId: string): ThreadRunState {
 // HELPERS
 // =============================================================================
 
-import type { ScratchFile, TodoItem } from './types.js';
+import type { ScratchFile, TodoItem, AgentSettings } from './types.js';
+import { DEFAULT_AGENT_SETTINGS } from './types.js';
 
 // Build project files with content for agent context
 function buildProjectFiles(): ProjectFile[] {
@@ -220,6 +221,22 @@ function buildProjectFiles(): ProjectFile[] {
   });
 }
 
+/**
+ * Get agent settings for a thread, with defaults.
+ * This is used to pass the configured LLM model and other settings to resume functions.
+ */
+function getAgentSettings(localThreadId: string): AgentSettings {
+  const thread = threadStore.threads.find(t => t.id === localThreadId);
+  const result = {
+    ...DEFAULT_AGENT_SETTINGS,
+    ...(thread?.agentSettings || {})
+  };
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/fc6ffbca-5f57-4f03-928e-cc3dba3a1fac',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'agent.svelte.ts:getAgentSettings',message:'Getting agent settings for thread',data:{localThreadId,threadExists:!!thread,threadAgentSettings:thread?.agentSettings,result},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+  // #endregion
+  return result;
+}
+
 // =============================================================================
 // MAIN SEND MESSAGE FUNCTION
 // =============================================================================
@@ -232,7 +249,7 @@ async function sendMessage(
   const state = getThreadState(localThreadId);
   
   const thread = threadStore.threads.find(t => t.id === localThreadId);
-  const assistantId = thread?.assistantId || assistantStore.selectedAssistantId || 'seminar_agent';
+  const assistantId = thread?.assistantId || assistantStore.selectedAssistantId || null;
   const projectId = thread?.projectId || '';
   
   if (langGraphThreadId !== state.langGraphThreadId) {
@@ -266,6 +283,12 @@ async function sendMessage(
     
     threadStore.updateThread(localThreadId, { description: message });
     
+    // Get agent settings from thread, with defaults
+    const agentSettings: AgentSettings = {
+      ...DEFAULT_AGENT_SETTINGS,
+      ...(thread?.agentSettings || {})
+    };
+    
     const result = await submitToLangGraph(
       message,
       {
@@ -274,6 +297,7 @@ async function sendMessage(
         projectId,
         projectFiles: buildProjectFiles(),
         streamMode: ['messages', 'values', 'updates'],
+        agentSettings,
       },
       {
         onToken: (token) => {
@@ -471,7 +495,7 @@ async function resumeWithDecisions(decisions: HITLDecision[], threadId?: string)
   }
   
   const thread = threadStore.threads.find(t => t.id === localThreadId);
-  const assistantId = thread?.assistantId || assistantStore.selectedAssistantId || 'seminar_agent';
+  const assistantId = thread?.assistantId || assistantStore.selectedAssistantId || null;
   const interruptId = state.hitlInterruptId;
   
   state.hitlInterrupt = null;
@@ -484,6 +508,7 @@ async function resumeWithDecisions(decisions: HITLDecision[], threadId?: string)
   updateThreadStatus(localThreadId);
   
   const response: HITLResumeResponse = { decisions };
+  const agentSettings = getAgentSettings(localThreadId);
   
   try {
     await resumeWithHITLDecisions(
@@ -549,7 +574,8 @@ async function resumeWithDecisions(decisions: HITLDecision[], threadId?: string)
           state.streamingContent = '';
           updateThreadStatus(localThreadId);
         }
-      }
+      },
+      agentSettings
     );
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : 'Unknown error';
@@ -644,7 +670,7 @@ async function resumeWithAdditionalPayment(paymentToken: string): Promise<void> 
     return;
   }
   
-  const assistantId = assistantStore.selectedAssistantId || 'seminar_agent';
+  const assistantId = assistantStore.selectedAssistantId || null;
   const interruptId = state.hitlInterruptId;
   
   state.paymentInterrupt = null;
@@ -655,6 +681,8 @@ async function resumeWithAdditionalPayment(paymentToken: string): Promise<void> 
   state.isInterrupted = false;
   state.streamingContent = '';
   updateThreadStatus(localThreadId);
+  
+  const agentSettings = getAgentSettings(localThreadId);
   
   try {
     await resumeWithPayment(
@@ -693,7 +721,8 @@ async function resumeWithAdditionalPayment(paymentToken: string): Promise<void> 
           state.streamingContent = '';
           updateThreadStatus(localThreadId);
         }
-      }
+      },
+      agentSettings
     );
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : 'Unknown error';
@@ -731,7 +760,8 @@ async function handleClientToolInterrupt(
     const results = await executeToolCalls(toolCalls, projectId);
     
     if (state.langGraphThreadId) {
-      const assistantId = assistantStore.selectedAssistantId || 'seminar_agent';
+      const assistantId = assistantStore.selectedAssistantId || null;
+      const agentSettings = getAgentSettings(localThreadId);
       await resumeWithToolResults(
         state.langGraphThreadId,
         interruptId,
@@ -772,7 +802,8 @@ async function handleClientToolInterrupt(
             state.clientToolInterrupt = null;
             updateThreadStatus(localThreadId);
           }
-        }
+        },
+        agentSettings
       );
     }
   } else {
@@ -828,7 +859,7 @@ async function executeApprovedWriteTools(threadId?: string): Promise<void> {
   
   const results = await executeToolCalls(toolCalls, projectId);
   const thread = threadStore.threads.find(t => t.id === localThreadId);
-  const assistantId = thread?.assistantId || assistantStore.selectedAssistantId || 'seminar_agent';
+  const assistantId = thread?.assistantId || assistantStore.selectedAssistantId || null;
   const interruptId = state.hitlInterruptId;
   
   state.clientToolInterrupt = null;
@@ -841,6 +872,8 @@ async function executeApprovedWriteTools(threadId?: string): Promise<void> {
   
   // Clear any UI diffs
   artifactStore.clearPendingChanges();
+  
+  const agentSettings = getAgentSettings(localThreadId);
   
   await resumeWithToolResults(
     state.langGraphThreadId,
@@ -890,7 +923,8 @@ async function executeApprovedWriteTools(threadId?: string): Promise<void> {
         state.isInterrupted = false;
         updateThreadStatus(localThreadId);
       }
-    }
+    },
+    agentSettings
   );
 }
 
@@ -906,7 +940,7 @@ async function rejectClientToolInterrupt(threadId?: string): Promise<void> {
   
   const toolCalls = state.clientToolInterrupt.tool_calls;
   const thread = threadStore.threads.find(t => t.id === localThreadId);
-  const assistantId = thread?.assistantId || assistantStore.selectedAssistantId || 'seminar_agent';
+  const assistantId = thread?.assistantId || assistantStore.selectedAssistantId || null;
   const interruptId = state.hitlInterruptId;
   
   state.clientToolInterrupt = null;
@@ -924,6 +958,8 @@ async function rejectClientToolInterrupt(threadId?: string): Promise<void> {
     tool_call_id: tc.id,
     content: JSON.stringify({ status: 'rejected', message: 'User declined to execute this action' })
   }));
+  
+  const agentSettings = getAgentSettings(localThreadId);
   
   try {
     await resumeWithToolResults(
@@ -974,7 +1010,8 @@ async function rejectClientToolInterrupt(threadId?: string): Promise<void> {
           state.isInterrupted = false;
           updateThreadStatus(localThreadId);
         }
-      }
+      },
+      agentSettings
     );
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : 'Unknown error';
@@ -1002,7 +1039,7 @@ async function resumeWithClarificationResponse(response: ClarificationResponse, 
   
   const interrupt = state.clarificationInterrupt;
   const thread = threadStore.threads.find(t => t.id === localThreadId);
-  const assistantId = thread?.assistantId || assistantStore.selectedAssistantId || 'seminar_agent';
+  const assistantId = thread?.assistantId || assistantStore.selectedAssistantId || null;
   const interruptId = state.hitlInterruptId;
   
   state.clarificationInterrupt = null;
@@ -1027,6 +1064,8 @@ async function resumeWithClarificationResponse(response: ClarificationResponse, 
     tool_call_id: interrupt.tool_call_id,
     content: responseContent
   }];
+  
+  const agentSettings = getAgentSettings(localThreadId);
   
   try {
     await resumeWithToolResults(
@@ -1077,7 +1116,8 @@ async function resumeWithClarificationResponse(response: ClarificationResponse, 
           state.isInterrupted = false;
           updateThreadStatus(localThreadId);
         }
-      }
+      },
+      agentSettings
     );
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : 'Unknown error';

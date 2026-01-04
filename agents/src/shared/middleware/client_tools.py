@@ -11,7 +11,7 @@ Key Patterns:
 """
 
 from collections.abc import Awaitable, Callable
-from typing import Any, Literal
+from typing import Any
 
 from langchain.agents.middleware.types import AgentMiddleware, AgentState, ModelRequest, ModelResponse
 from langchain.tools import ToolRuntime
@@ -29,9 +29,18 @@ from typing_extensions import NotRequired
 class ClientToolsState(AgentState):
     """State extension for client tools.
     
-    Note: Project files are NOT stored in agent state.
-    The client provides file contents via tool execution interrupts.
+    The client injects files_list on each invocation so list_files can
+    return data directly without interrupting. File contents are still
+    fetched via tool execution interrupts.
+    
+    Fields:
+        files_list: List of file metadata from the client (injected each invocation)
+        current_project_id: Project ID for scoping file operations
     """
+    
+    # List of user's project files (injected by client each invocation)
+    # Each file has: id, title, updated_at
+    files_list: NotRequired[list[dict] | None]
     
     # Current project ID for scoping file operations
     current_project_id: NotRequired[str | None]
@@ -44,20 +53,20 @@ class ClientToolsState(AgentState):
 CLIENT_TOOLS_SYSTEM_PROMPT = """## Project File Operations
 
 You have access to tools for working with the user's project files. These files are
-stored locally on the user's device (browser) and will be provided when you request them.
+stored locally on the user's device (browser).
 
 ### Available Tools
 
 **Discovery & Reading:**
-- `list_files(file_type?)` - List files, optionally filtered by type
+- `list_files()` - List all project files (returns from cached state)
 - `read_file(file_id)` - Read the full content of a file by ID
 - `search_files(query, top_k?)` - Semantic search across file contents
 - `grep_files(pattern, glob_pattern?, case_sensitive?)` - Pattern search in file contents
 - `glob_files(pattern)` - Find files by title/name pattern (e.g., "*.md", "*bitcoin*")
 
 **Writing:**
-- `write_file(title, content, file_type)` - Create a new file
-- `patch_file(file_id, patches, description)` - Edit a file with one or more patches. `patches` is a list of `{search, replace}` objects. Each `search` string must match exactly.
+- `write_file(title, content)` - Create a new markdown file
+- `patch_file(file_id, patches, description)` - Edit a file with one or more patches (requires approval). `patches` is a list of `{search, replace}` objects. Each `search` string must match exactly.
 
 **Sources:**
 - `create_source(url, title, content, ...)` - Save a web source to the project. Use after scraping a URL to preserve it for research.
@@ -70,7 +79,10 @@ stored locally on the user's device (browser) and will be provided when you requ
 4. **Read files before editing** to understand current content
 5. **Use patch_file** for all edits to existing files. You can provide multiple patches in one call - prefer this for complex edits to avoid multiple user approvals.
 6. **Explain your changes** clearly when writing or patching files
-7. **Use create_source** after scraping URLs with `scrape_url_to_source` to save sources to the project"""
+7. **Use create_source** after scraping URLs with `scrape_url` to save sources to the project"""
+
+FILES_LIST_HEADER = "\n\n### Available Project Files\n\n"
+NO_FILES_MESSAGE = "_No files have been added to this project yet._"
 
 
 # =============================================================================
@@ -81,20 +93,15 @@ def _create_list_files_tool() -> StructuredTool:
     """Create the list_files tool."""
     
     def list_files(
-        file_type: Literal["artifact", "document", "code"] | None = None,
         runtime: ToolRuntime = None,
     ) -> str:
-        """List all files in the current project, optionally filtered.
+        """List all files in the current project.
         
         Returns metadata about available files including:
         - id: Unique file identifier
         - title: File display name
-        - file_type: Type ('artifact', 'document', 'code')
         
         Use this to discover files before reading them.
-        
-        Args:
-            file_type: Optional file type filter
         """
         # This will be handled by the middleware's wrap_tool_call
         # which interrupts for client execution
@@ -103,12 +110,9 @@ def _create_list_files_tool() -> StructuredTool:
     return StructuredTool.from_function(
         name="list_files",
         func=list_files,
-        description="""List all files in the current project, optionally filtered.
+        description="""List all files in the current project.
 
-Args:
-    file_type: Optional filter by type ('artifact', 'document', 'code')
-
-Returns JSON array of file metadata with id, title, and file_type.
+Returns JSON array of file metadata with id and title.
 Use this first to discover what files are available.""",
     )
 
@@ -178,17 +182,15 @@ def _create_write_file_tool() -> StructuredTool:
     def write_file(
         title: str,
         content: str,
-        file_type: Literal["artifact", "document", "code"] = "artifact",
         runtime: ToolRuntime = None,
     ) -> str:
-        """Create a new file in the project.
+        """Create a new markdown file in the project.
         
         This action executes on the client-side.
         
         Args:
             title: Title/name for the new file
-            content: Initial content for the file
-            file_type: Type of file ('artifact', 'document', 'code')
+            content: Markdown content for the file
         
         Returns:
             Success message with new file ID, or error
@@ -198,12 +200,11 @@ def _create_write_file_tool() -> StructuredTool:
     return StructuredTool.from_function(
         name="write_file",
         func=write_file,
-        description="""Create a new file.
+        description="""Create a new markdown file.
 
 Args:
     title: File name/title
-    content: File content
-    file_type: 'artifact', 'document', or 'code'
+    content: Markdown content
 
 Returns success message with new file ID.""",
     )
@@ -274,7 +275,7 @@ def _create_glob_files_tool() -> StructuredTool:
 Args:
     pattern: Glob pattern (e.g., "*.md", "article-*", "*bitcoin*")
 
-Returns array of matching files with id, title, file_type.""",
+Returns array of matching files with id and title.""",
     )
 
 
@@ -374,20 +375,21 @@ Returns success message with new source ID.""",
     )
 
 
-# Tools that can be auto-approved by the client
+# Tools that can be auto-approved by the client (no HITL required)
 AUTO_APPROVE_TOOLS = {
-    "list_files", 
     "read_file", 
     "search_files", 
     "grep_files", 
     "glob_files",
     "write_file",
-    "patch_file",
     "create_source",
 }
 
-# Tools that require explicit human approval (e.g. non-file tools)
-REQUIRE_APPROVAL_TOOLS = set()
+# Tools that require explicit human approval (HITL)
+# Note: list_files returns from state, so it's not in either set
+REQUIRE_APPROVAL_TOOLS = {
+    "patch_file",  # Editing existing files requires user approval
+}
 
 
 # =============================================================================
@@ -397,9 +399,14 @@ REQUIRE_APPROVAL_TOOLS = set()
 class ClientToolsMiddleware(AgentMiddleware[ClientToolsState, None]):
     """Middleware for client-side file operations.
     
-    All file tools interrupt execution and wait for the client to:
-    1. Execute the operation locally (files in browser storage)
-    2. Return the result
+    The client injects files_list on each invocation so list_files can return
+    data directly without interrupting. Other file tools interrupt for
+    client-side execution.
+    
+    Interrupt Behavior:
+    - list_files: Returns from state (no interrupt)
+    - read_file, search_files, grep_files, glob_files, write_file, create_source: Auto-approved interrupt
+    - patch_file: Requires human approval (HITL interrupt)
     
     Example:
         ```python
@@ -409,6 +416,14 @@ class ClientToolsMiddleware(AgentMiddleware[ClientToolsState, None]):
                 ClientToolsMiddleware(),
             ],
         )
+        
+        # Invoke with files_list from client
+        agent.invoke({
+            "messages": [...],
+            "files_list": [
+                {"id": "abc123", "title": "Research Notes.md"},
+            ]
+        })
         ```
     
     Client Integration:
@@ -449,16 +464,35 @@ class ClientToolsMiddleware(AgentMiddleware[ClientToolsState, None]):
             _create_create_source_tool(),
         ]
     
+    def _format_files_list(self, files_list: list[dict] | None) -> str:
+        """Format the files list for the system prompt."""
+        if not files_list:
+            return NO_FILES_MESSAGE
+        
+        lines = []
+        for f in files_list:
+            file_id = f.get("id", "unknown")
+            title = f.get("title", "Untitled")
+            lines.append(f"- **[{file_id}]** {title}")
+        
+        return "\n".join(lines)
+    
     async def awrap_model_call(
         self,
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
-        """Add client tools system prompt."""
+        """Add client tools system prompt with files list."""
+        # Get files list from state (passed in by client)
+        files_list = getattr(request, 'state', {}).get('files_list') if hasattr(request, 'state') else None
+        
+        # Build files section
+        files_section = CLIENT_TOOLS_SYSTEM_PROMPT + FILES_LIST_HEADER + self._format_files_list(files_list)
+        
         new_system_prompt = (
-            request.system_prompt + "\n\n" + CLIENT_TOOLS_SYSTEM_PROMPT
+            request.system_prompt + "\n\n" + files_section
             if request.system_prompt
-            else CLIENT_TOOLS_SYSTEM_PROMPT
+            else files_section
         )
         
         return await handler(request.override(system_prompt=new_system_prompt))
@@ -468,11 +502,17 @@ class ClientToolsMiddleware(AgentMiddleware[ClientToolsState, None]):
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
-        """Synchronous version - add client tools system prompt."""
+        """Synchronous version - add client tools system prompt with files list."""
+        # Get files list from state (passed in by client)
+        files_list = getattr(request, 'state', {}).get('files_list') if hasattr(request, 'state') else None
+        
+        # Build files section
+        files_section = CLIENT_TOOLS_SYSTEM_PROMPT + FILES_LIST_HEADER + self._format_files_list(files_list)
+        
         new_system_prompt = (
-            request.system_prompt + "\n\n" + CLIENT_TOOLS_SYSTEM_PROMPT
+            request.system_prompt + "\n\n" + files_section
             if request.system_prompt
-            else CLIENT_TOOLS_SYSTEM_PROMPT
+            else files_section
         )
         
         return handler(request.override(system_prompt=new_system_prompt))
@@ -485,14 +525,17 @@ class ClientToolsMiddleware(AgentMiddleware[ClientToolsState, None]):
         """Intercept file tool calls for client-side execution.
         
         Flow:
-        1. Check if this is a client tool
-        2. If yes, interrupt with tool call details
-        3. When resumed, extract client's result
-        4. Return the result as a ToolMessage
+        1. list_files: Returns from state directly (no interrupt)
+        2. Other client tools: Interrupt for client-side execution
+        3. patch_file: Requires HITL approval
         """
         tool_name = request.tool_call.get("name", "")
         tool_call_id = request.tool_call.get("id", "")
         tool_args = request.tool_call.get("args", {})
+        
+        # Handle list_files specially - return from state, no interrupt
+        if tool_name == "list_files":
+            return self._handle_list_files(request, tool_call_id, tool_args)
         
         # Check if this is a client tool
         is_client_tool = tool_name in AUTO_APPROVE_TOOLS or tool_name in REQUIRE_APPROVAL_TOOLS
@@ -518,7 +561,7 @@ class ClientToolsMiddleware(AgentMiddleware[ClientToolsState, None]):
             "requires_approval": requires_approval,
         }
         
-        # For write operations, add HITL-style data
+        # For HITL operations (patch_file), add approval data
         if requires_approval:
             interrupt_data["action_requests"] = [
                 {
@@ -548,6 +591,37 @@ class ClientToolsMiddleware(AgentMiddleware[ClientToolsState, None]):
             content=result_content,
             tool_call_id=tool_call_id,
             name=tool_name,
+        )
+    
+    def _handle_list_files(
+        self,
+        request: ToolCallRequest,
+        tool_call_id: str,
+        tool_args: dict[str, Any],
+    ) -> ToolMessage:
+        """Handle list_files by returning from state (no interrupt).
+        
+        The files_list is injected by the client on each invocation,
+        so we can return it directly without interrupting.
+        """
+        import json
+        
+        # Get files_list from state
+        state = request.runtime.state if hasattr(request, 'runtime') and request.runtime else {}
+        files_list = state.get("files_list", []) or []
+        
+        if not files_list:
+            result = "No files found in project."
+        else:
+            # Format as JSON for the model
+            result = json.dumps(files_list, indent=2)
+        
+        print(f"[ClientTools] list_files returned {len(files_list)} files from state")
+        
+        return ToolMessage(
+            content=result,
+            tool_call_id=tool_call_id,
+            name="list_files",
         )
     
     def wrap_tool_call(

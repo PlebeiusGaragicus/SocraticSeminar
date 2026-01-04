@@ -3,8 +3,8 @@
   "python_version": "3.11",
   "dependencies": ["."],
   "graphs": {
-    "deeptutor": "./src/deeptutor/__init__.py:graph",
-    "deepresearch": "./src/deepresearch/__init__.py:graph"
+    "deepresearch": "./src/deepresearch/__init__.py:graph",
+    "deeptutor": "./src/deeptutor/__init__.py:graph"
   },
   "env": ".env"
 }

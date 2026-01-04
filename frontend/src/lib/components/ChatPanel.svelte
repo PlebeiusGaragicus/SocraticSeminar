@@ -20,6 +20,7 @@
   import ArrowUp from '@lucide/svelte/icons/arrow-up';
   import { Button, Textarea } from './ui/index.js';
   import AgentPicker from './AgentPicker.svelte';
+  import AgentSettingsPopover from './AgentSettingsPopover.svelte';
   import ToolCallDisplay from './ToolCallDisplay.svelte';
   import TodoStatusPopover from './TodoStatusPopover.svelte';
   import Markdown from './Markdown.svelte';
@@ -559,9 +560,12 @@
   onkeydown={handleContainerClick}
   role="presentation"
 >
-  <!-- Header with Agent Picker and Todo Status -->
+  <!-- Header with Agent Picker, Settings, and Todo Status -->
   <div class="flex items-center justify-between border-b border-zinc-800 px-4 py-2">
-    <AgentPicker threadId={effectiveThreadId} />
+    <div class="flex items-center gap-2">
+      <AgentPicker threadId={effectiveThreadId} />
+      <AgentSettingsPopover threadId={effectiveThreadId} />
+    </div>
     <TodoStatusPopover />
   </div>
 
@@ -771,7 +775,7 @@
             {#if backendAvailable === false}
               <div class="flex items-center gap-2 rounded-lg bg-red-500/10 px-3 py-1.5 text-xs text-red-600 dark:text-red-400">
                 <AlertCircle class="h-3 w-3" />
-                <span>LangGraph server unavailable. Start the server to enable AI chat.</span>
+                <span>Unable to connect to agent server.</span>
               </div>
             {/if}
             

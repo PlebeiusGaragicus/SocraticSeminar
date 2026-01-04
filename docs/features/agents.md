@@ -1,87 +1,38 @@
-# Agent Architecture
+# DeepResearch Agent Architecture
 
-## Available Agents
-
-| Agent | Path | Description |
-|-------|------|-------------|
-| `deeptutor` | `./src/deeptutor/__init__.py:graph` | Socratic dialogue assistant with full middleware stack |
-| `seminar_agent` | `./src/agent/__init__.py:graph` | Legacy seminar agent |
-| `simple_agent` | `./src/simple_agent/__init__.py:graph` | Minimal agent for testing |
-
-## Deeptutor (Primary Agent)
-
-The **deeptutor** agent is the primary implementation with:
-
-- **Middleware-based architecture** for modularity
-- **Two file systems**: Client-side (user's files) and server-side (agent memory)
-- **Clarification tools** for handling ambiguous user intent
-- **Task tracking** with TodoListMiddleware
-- **Streaming payments** with Cashu micropayments
-
-See [Deeptutor Architecture](deeptutor.md) for full details.
-
-### Middleware Stack
-
-1. `CashuPaymentMiddleware` - Payment validation and per-iteration deduction
-2. `TodoListMiddleware` - Task tracking for complex operations
-3. `ClarifyWithHumanMiddleware` - Ask user for intent clarification
-4. `FilesystemMiddleware` - Server-side ephemeral storage (StateBackend)
-5. `ClientToolsMiddleware` - Client-side file operations via interrupts
-6. `HumanInTheLoopMiddleware` - Approval for funding requests
-
-## Deepagents Reference
-
-The `deepagents/` directory contains a **reference implementation** of the deepagents library, which provides:
-
-- `FilesystemMiddleware` - File tools with backend abstraction
-- `TodoListMiddleware` - Task tracking (also available from langchain)
-- `SubAgentMiddleware` - Spawn subagents for complex tasks
-- `StateBackend` / `StoreBackend` - Storage backends
-
-**Note**: This is included for reference only. The actual `deepagents` package should be installed separately via pip:
-
-```bash
-pip install -e ./deepagents/libs/deepagents
-```
-
-
-# Deeptutor Agent Architecture
-
-The Deeptutor agent is a Socratic dialogue assistant that helps users develop and refine arguments. It uses a middleware-based architecture for modularity and extensibility.
+The DeepResearch agent is the primary agent for the Socratic Seminar project. It's a research assistant that helps users find, synthesize, and organize information using web search, file management, and structured task planning.
 
 ## Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        Deeptutor Agent                          │
+│                     DeepResearch Agent                          │
 ├─────────────────────────────────────────────────────────────────┤
 │  Middleware Stack (processed in order)                          │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │ 1. CashuPaymentMiddleware  - Payment validation          │   │
-│  │ 2. TodoListMiddleware      - Task tracking               │   │
-│  │ 3. ClarifyWithHumanMiddleware - User clarification       │   │
-│  │ 4. FilesystemMiddleware    - Server-side memory          │   │
-│  │ 5. ClientToolsMiddleware   - Client-side file ops        │   │
-│  │ 6. HumanInTheLoopMiddleware - Approval workflows         │   │
+│  │ 1. CashuPaymentMiddleware  - Payment validation (TBD)    │   │
+│  │ 2. ToolValidationMiddleware - JSON validation            │   │
+│  │ 3. BehaviouralMiddleware   - Personality (prompt-only)   │   │
+│  │ 4. TodoListMiddleware      - Task tracking               │   │
+│  │ 5. ThinkingMiddleware      - Strategic reflection        │   │
+│  │ 6. ClarifyWithHumanMiddleware - User clarification       │   │
+│  │ 7. ClientToolsMiddleware   - File operations             │   │
+│  │ 8. SourcesMiddleware       - Project sources             │   │
+│  │ 9. WebsearchMiddleware     - Web search & scraping       │   │
+│  │ 10. SubAgentMiddleware     - Parallel research (opt)     │   │
 │  └──────────────────────────────────────────────────────────┘   │
 ├─────────────────────────────────────────────────────────────────┤
-│                      Two File Systems                            │
-│  ┌────────────────────┐    ┌────────────────────────────────┐   │
-│  │ Server-side        │    │ Client-side (Browser)          │   │
-│  │ (StateBackend)     │    │ (IndexedDB)                    │   │
-│  │                    │    │                                │   │
-│  │ /scratch/          │    │ User's project files:          │   │
-│  │ /summaries/        │    │ - Scraped articles             │   │
-│  │ /analysis/         │    │ - Drafts and notes             │   │
-│  │                    │    │ - Seminar documents            │   │
-│  │ Agent writes freely│    │ Writes require approval        │   │
-│  └────────────────────┘    └────────────────────────────────┘   │
+│                    Client-Injected State                         │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │ files_list: List of project files (for list_files tool)   │ │
+│  │ sources_list: List of sources (for list_sources tool)     │ │
+│  └────────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ## Middleware Stack
 
-### 1. CashuPaymentMiddleware
+### 1. CashuPaymentMiddleware (TBD)
 
 Handles streaming micropayments with per-iteration deduction.
 
@@ -90,7 +41,25 @@ Handles streaming micropayments with per-iteration deduction.
 - Interrupts for additional funding when exhausted
 - Generates refund tokens for unused balance
 
-### 2. TodoListMiddleware
+**Status:** Not fully implemented. Feature is TBD.
+
+### 2. ToolValidationMiddleware
+
+Validates all tool call arguments against their Pydantic schemas before execution.
+
+- Catches malformed JSON from LLM
+- Returns descriptive errors prompting self-correction
+- No HITL interrupts
+
+### 3. BehaviouralMiddleware
+
+Provides prompt-only modifications to steer agent behavior.
+
+- Controls agent personality and verbosity
+- Injects current date into system prompt
+- No tools, no HITL interrupts
+
+### 4. TodoListMiddleware
 
 Provides task tracking for complex multi-step operations.
 
@@ -98,16 +67,29 @@ Provides task tracking for complex multi-step operations.
 
 Use cases:
 - Multi-step research tasks
-- Argument development workflows
 - Complex document creation
+- Breaking down research into focused tasks
 
-### 3. ClarifyWithHumanMiddleware
+### 5. ThinkingMiddleware
+
+Provides a reflection tool for strategic planning during research.
+
+**Tool:** `think_tool(reflection: str)`
+
+Use after significant steps to:
+- Analyze current findings
+- Assess gaps in research
+- Plan next steps systematically
+
+### 6. ClarifyWithHumanMiddleware
 
 Allows the agent to ask clarifying questions when user intent is unclear.
 
 **Tools:**
 - `ask_user(question)` - Free-form natural language question
 - `ask_choices(question, options, allow_multiple?, allow_freeform?)` - Structured choices
+
+**HITL Behavior:** Both tools interrupt for user input.
 
 **When to use:**
 - User's goal or intent is ambiguous
@@ -119,291 +101,218 @@ Allows the agent to ask clarifying questions when user intent is unclear.
 - Confirming obvious next steps
 - Delays that don't add value
 
-### 4. FilesystemMiddleware (StateBackend)
-
-Provides server-side ephemeral storage for agent working memory.
-
-**Tools:** `ls`, `read_file`, `write_file`, `patch_file`, `glob`, `grep`
-
-Use for:
-- Intermediate analysis and notes
-- Drafts before presenting to user
-- Research findings within a session
-
-Files persist within a thread but not across threads.
-
-### 5. ClientToolsMiddleware
+### 7. ClientToolsMiddleware
 
 Provides access to user's project files stored in the browser.
 
-**Read & Write tools (auto-approved):**
-- `list_files(file_type?)` - List files with optional filters
-- `read_file(file_id)` - Read file content
-- `search_files(query, top_k?)` - Semantic search
-- `grep_files(pattern, glob_pattern?, case_sensitive?)` - Pattern search
-- `glob_files(pattern)` - Find files by name pattern
-- `write_file(title, content, file_type)` - Create new file
-- `patch_file(file_id, search, replace, description)` - Edit file
+**Tools:**
 
-### 6. HumanInTheLoopMiddleware
+| Tool | Description | Interrupt Type |
+|------|-------------|----------------|
+| `list_files(file_type?)` | List project files | **No interrupt** - returns from state |
+| `read_file(file_id)` | Read file content | Auto-approved |
+| `search_files(query, top_k?)` | Semantic search | Auto-approved |
+| `grep_files(pattern, glob_pattern?)` | Pattern search | Auto-approved |
+| `glob_files(pattern)` | Find by name pattern | Auto-approved |
+| `write_file(title, content, file_type)` | Create new file | Auto-approved |
+| `patch_file(file_id, patches, description)` | Edit file | **HITL required** |
+| `create_source(url, title, content, ...)` | Save web source | Auto-approved |
 
-Handles approval workflows for payment funding requests.
+**State Injection:** Client must inject `files_list` on each invocation so `list_files` can return immediately without interrupting.
 
-## Interrupt Flow
+### 8. SourcesMiddleware
+
+Provides access to project sources (web references, PDFs, documents).
+
+**Tools:**
+
+| Tool | Description | Interrupt Type |
+|------|-------------|----------------|
+| `list_sources(source_type?)` | List sources | **No interrupt** - returns from state |
+| `read_source(source_id)` | Read source content | Auto-approved |
+| `search_sources(query, top_k?)` | Semantic search | Auto-approved |
+
+**State Injection:** Client must inject `sources_list` on each invocation so `list_sources` can return immediately without interrupting.
+
+### 9. WebsearchMiddleware
+
+Provides web search and URL scraping capabilities.
+
+**Tools:**
+
+| Tool | Description | Interrupt Type |
+|------|-------------|----------------|
+| `web_search(query, max_results?, topic?)` | Tavily search | Auto-approved (auto-creates sources) |
+| `fetch_webpage(url)` | Quick markdown fetch | No interrupt (server-side) |
+| `scrape_url(url, method?)` | High-quality scrape | **HITL required** (costs money) |
+
+### 10. SubAgentMiddleware (Optional)
+
+Enables parallel research delegation to sub-agents.
+
+**Status:** Disabled by default (`include_subagents=False`). Spec is being finalized.
+
+## HITL Interrupt Summary
+
+The following tools trigger Human-in-the-Loop interrupts:
+
+| Tool | Middleware | Reason |
+|------|------------|--------|
+| `ask_user` | ClarifyWithHumanMiddleware | User input needed |
+| `ask_choices` | ClarifyWithHumanMiddleware | User input needed |
+| `patch_file` | ClientToolsMiddleware | File edit approval |
+| `scrape_url` | WebsearchMiddleware | Costs money (Firecrawl) |
+
+## Client Integration
+
+### Required State Injection
+
+The client must inject these fields on each invocation:
+
+```typescript
+agent.invoke({
+  messages: [...],
+  files_list: [
+    { id: "abc123", title: "Research Notes.md", file_type: "document" },
+    // ...
+  ],
+  sources_list: [
+    { id: "def456", title: "Bitcoin Whitepaper", url: "https://...", sourceType: "url" },
+    // ...
+  ],
+  // Optional payment
+  payment_token: "cashuA...",
+})
+```
+
+### Interrupt Flow
 
 ```
 Agent calls tool
        │
        ▼
 ┌──────────────────┐
-│ Is it a client   │──No──► Execute normally
-│ or clarify tool? │
+│ Is it a state    │──Yes──► Return from files_list/sources_list
+│ return tool?     │         (list_files, list_sources)
 └────────┬─────────┘
-         │Yes
+         │No
          ▼
 ┌──────────────────┐
-│ interrupt()      │
-│ Pause execution  │
+│ Is it a HITL     │──Yes──► interrupt() with approval UI
+│ tool?            │         (patch_file, ask_*, scrape_url)
 └────────┬─────────┘
-         │
+         │No
          ▼
 ┌──────────────────┐
-│ Frontend handles │
-│ - Renders UI     │
-│ - Gets user input│
-│ - Executes tool  │
+│ Is it a client   │──Yes──► interrupt() with auto_approve=true
+│ tool?            │         (read_file, search_files, etc.)
 └────────┬─────────┘
-         │
+         │No
          ▼
-┌──────────────────┐
-│ Resume with      │
-│ tool result      │
-└────────┬─────────┘
-         │
-         ▼
-Agent continues
+Execute server-side
+(fetch_webpage, think_tool, etc.)
 ```
 
-## Design Considerations
+### Handling Interrupts
 
-### Why Two File Systems?
+When the agent triggers an interrupt:
 
-1. **User autonomy**: User's files stay in their browser, under their control
-2. **Privacy**: Scraped articles and drafts never leave the client unless explicitly shared
-3. **Agent flexibility**: Agent can freely write to its working memory without interrupting the user
-4. **Session context**: Agent can maintain analysis notes throughout a conversation
+1. **Detect interrupt type** via `type` field:
+   - `client_tool_execution` → Execute tool locally, resume with result
+   - `clarification_request` → Show question UI, resume with answer
+   - `human_approval_required` → Show approval dialog, resume with decision
 
-### Why Clarification Tools?
+2. **Resume the graph** with the appropriate response format:
 
-Instead of making assumptions, the agent can:
-- Ask structured questions with predefined options
-- Request free-form clarification when needed
-- Avoid wasted effort from misunderstanding intent
+```typescript
+// For auto-approved client tools
+{ tool_results: [{ tool_call_id: "...", content: "..." }] }
 
-The tools are designed to NOT be overused:
-- System prompt discourages asking about tool usage
-- Encourages asking only when genuinely ambiguous
+// For clarification
+{ response: "user's answer" }
+// or
+{ selected: ["option-id"], freeform: "optional text" }
 
-### Why Client-side Tool Execution?
-
-1. **Latency**: File operations happen locally, no round-trip to server
-2. **Offline capability**: Files work even if connection drops
-3. **Data sovereignty**: User's documents stay on their device
-4. **Approval UX**: Frontend can show rich diffs and approval dialogs
+// For HITL approval
+{ decisions: [{ type: "approve" }] }
+// or
+{ decisions: [{ type: "reject" }] }
+```
 
 ## State Schema
 
 ```python
-class DeeptutorState(TypedDict, total=False):
-    # Messages (required)
-    messages: Annotated[Sequence[BaseMessage], add_messages]
+class DeepResearchState(BaseAgentState):
+    # Client-injected state (provided each invocation)
+    files_list: list[FileMetadata] | None    # For list_files tool
+    sources_list: list[SourceMetadata] | None  # For list_sources tool
     
-    # Payment state
+    # Inherited from BaseAgentState
+    messages: Sequence[BaseMessage]
     payment_token: str | None
     payment_balance_sats: int
     payment_spent_sats: int
-    payment_refund_token: str | None
     payment_status: PaymentStatus
-    payment_refund_claimed: bool
-    
-    # Project context
     current_project_id: str | None
     
-    # Middleware-added state
-    # files: dict[str, FileData]  # Added by FilesystemMiddleware
-    # todos: list[Todo]           # Added by TodoListMiddleware
+    # Research state
+    research_query: str | None
+    research_sources: list[ResearchSource]
+    research_findings: list[ResearchFinding]
+    research_phase: Literal["planning", "researching", "synthesizing", "complete"] | None
 ```
-
-## Example Prompts
-
-### Trigger Clarification Tools
-
-```
-"Help me with my argument"
-```
-→ Agent should ask: "What topic is your argument about?" or offer choices.
-
-```
-"I want to write about economics"  
-```
-→ Agent might ask choices: "Which aspect interests you? a) Monetary policy b) Market structures c) International trade d) Something else"
-
-```
-"Improve this"
-```
-→ Agent should ask: "What would you like me to improve? Style, clarity, argumentation, or something else?"
-
-### Normal Usage (No Clarification Needed)
-
-```
-"Create a new document titled 'Bitcoin Thesis' with an introduction about sound money"
-```
-→ Clear intent, agent proceeds with write_file.
-
-```
-"Search my files for mentions of inflation"
-```
-→ Clear intent, agent uses grep_files.
 
 ## File Structure
 
 ```
-agents/src/deeptutor/
+agents/src/deepresearch/
 ├── __init__.py
 ├── graph.py              # Agent factory and configuration
 ├── state.py              # State type definitions
-└── middleware/
-    ├── __init__.py
-    ├── payment.py        # CashuPaymentMiddleware
-    ├── client_tools.py   # ClientToolsMiddleware
-    └── clarify.py        # ClarifyWithHumanMiddleware
+├── behaviour.py          # BehaviouralMiddleware
+└── prompts.py            # System prompts
+
+agents/src/shared/middleware/
+├── __init__.py
+├── payment.py            # CashuPaymentMiddleware
+├── validation.py         # ToolValidationMiddleware
+├── thinking.py           # ThinkingMiddleware
+├── clarify.py            # ClarifyWithHumanMiddleware
+├── client_tools.py       # ClientToolsMiddleware
+├── sources.py            # SourcesMiddleware
+└── websearch.py          # WebsearchMiddleware
 ```
 
-## Frontend Integration
+## Example Usage
 
-The frontend handles interrupts by:
+```python
+from langgraph.checkpoint.memory import MemorySaver
+from src.deepresearch.graph import create_deepresearch_agent
 
-1. **Detecting interrupt type** via `type` field:
-   - `client_tool_execution` → Execute tool locally
-   - `clarification_request` → Show question UI
-   - `payment_exhausted` → Show funding dialog
+# Create agent with checkpointer
+agent = create_deepresearch_agent(
+    checkpointer=MemorySaver(),
+    include_payment=False,  # Disable payment for development
+)
 
-2. **Rendering appropriate UI**:
-   - Text input for `ask_user`
-   - Choice buttons for `ask_choices`
-   - Diff view for `patch_file` approval
-
-3. **Resuming the graph** with the response in the expected format
-
-See `frontend/src/lib/services/tool-executor.ts` for tool execution implementation.
-
-## Clarification Flow
-
-When the agent calls `ask_user` or `ask_choices`:
-
-```
-Agent calls ask_user("What topic?")
-         │
-         ▼
-ClarifyWithHumanMiddleware
-         │
-         ▼
-interrupt({type: "clarification_request", ...})
-         │
-         ▼
-┌────────────────────────────────────────┐
-│ Frontend: langgraph.ts                 │
-│ - Detects isClarificationInterrupt()   │
-│ - Calls onClarificationInterrupt()     │
-└────────────────────────────────────────┘
-         │
-         ▼
-┌────────────────────────────────────────┐
-│ Frontend: agent.svelte.ts              │
-│ - Stores clarificationInterrupt        │
-│ - Sets awaitingHumanResponse = true    │
-└────────────────────────────────────────┘
-         │
-         ▼
-┌────────────────────────────────────────┐
-│ Frontend: ClarificationPanel.svelte    │
-│ - Shows question text                  │
-│ - For ask_user: textarea input         │
-│ - For ask_choices: button options      │
-│ - Optional freeform with choices       │
-└────────────────────────────────────────┘
-         │
-         ▼ (user responds)
-┌────────────────────────────────────────┐
-│ resumeWithClarificationResponse()      │
-│ - Formats response as tool result      │
-│ - Resumes graph with answer            │
-└────────────────────────────────────────┘
-         │
-         ▼
-Agent receives user's answer as ToolMessage
-         │
-         ▼
-Agent continues with clarified intent
-         │
-         ▼ (may trigger another interrupt)
-┌────────────────────────────────────────┐
-│ Chained Interrupt Handling:            │
-│ - Another clarification (ask_user)     │
-│ - Client tool (list_files, etc.)       │
-│ - HITL approval (write operations)     │
-└────────────────────────────────────────┘
+# Invoke with client-injected state
+result = await agent.ainvoke({
+    "messages": [HumanMessage(content="Research Bitcoin's consensus mechanism")],
+    "files_list": [],
+    "sources_list": [],
+})
 ```
 
-### Chained Interrupt Handling
+## Deepagents Reference
 
-After resuming from any interrupt type, the agent may immediately trigger another
-interrupt. All resume functions include callbacks for all interrupt types:
+The `deepagents/` directory contains a **reference implementation** of the deepagents library, which provides additional middleware:
 
-- `onClarificationInterrupt` - Another clarification question
-- `onClientToolInterrupt` - Client-side tool execution needed  
-- `onHITLInterrupt` - Human approval required
+- `SubAgentMiddleware` - Spawn subagents for complex tasks
+- `FilesystemMiddleware` - File tools with backend abstraction
+- `StateBackend` / `StoreBackend` - Storage backends
 
-This allows seamless handling of multi-step interactions where the agent asks
-clarifying questions, then uses tools, then requests approvals, etc.
+**Note**: This is included for reference only. The actual `deepagents` package should be installed separately:
 
-### Interrupt Data Format
-
-```typescript
-// ask_user interrupt
-{
-  type: 'clarification_request',
-  tool: 'ask_user',
-  tool_call_id: '12345',
-  question: 'What topic would you like to write about?'
-}
-
-// ask_choices interrupt
-{
-  type: 'clarification_request',
-  tool: 'ask_choices',
-  tool_call_id: '12345',
-  question: 'What type of document?',
-  options: [
-    { id: 'seminar', label: 'Socratic Seminar' },
-    { id: 'essay', label: 'Essay' },
-    { id: 'notes', label: 'Research Notes' }
-  ],
-  allow_multiple: false,
-  allow_freeform: true
-}
+```bash
+pip install -e ./deepagents/libs/deepagents
 ```
-
-### Response Format
-
-```typescript
-// For ask_user
-{ response: "I want to write about Bitcoin's monetary policy" }
-
-// For ask_choices (single select)
-{ selected: ['seminar'] }
-
-// For ask_choices (with freeform)
-{ selected: ['essay'], freeform: 'Specifically about inflation' }
-```
-

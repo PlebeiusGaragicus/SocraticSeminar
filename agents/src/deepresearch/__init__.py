@@ -14,7 +14,6 @@ Usage:
 
 from src.shared.middleware.thinking import think_tool
 from src.deepresearch.graph import graph, create_deepresearch_agent
-from src.deepresearch.tools import RESEARCH_TOOLS
 from src.deepresearch.state import DeepResearchState, COST_PER_ITERATION_SATS
 
 __all__ = [
@@ -24,6 +23,5 @@ __all__ = [
     "COST_PER_ITERATION_SATS",
     # Research tools (for external use)
     # Note: web search tools are now provided by WebsearchMiddleware
-    "think_tool",
-    "RESEARCH_TOOLS",
+    "think_tool"
 ]

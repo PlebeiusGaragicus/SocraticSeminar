@@ -103,7 +103,7 @@ function createThread(projectId: string, title?: string): Thread {
   return thread;
 }
 
-function updateThread(id: string, updates: Partial<Pick<Thread, 'title' | 'description' | 'status' | 'metadata' | 'langGraphThreadId' | 'assistantId'>>): void {
+function updateThread(id: string, updates: Partial<Pick<Thread, 'title' | 'description' | 'status' | 'metadata' | 'langGraphThreadId' | 'assistantId' | 'agentSettings'>>): void {
   let updatedThread: Thread | null = null;
   let didChange = false;
   

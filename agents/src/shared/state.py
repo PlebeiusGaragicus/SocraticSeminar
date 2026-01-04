@@ -13,6 +13,95 @@ from langgraph.graph.message import add_messages
 
 
 # =============================================================================
+# AGENT SETTINGS (per-thread configuration from UI)
+# =============================================================================
+
+# Available LLM models
+LLMModel = Literal["qwen3-coder-30b-a3b-instruct-mlx", "grok-4-1-fast-non-reasoning"]
+
+
+# -----------------------------------------------------------------------------
+# DeepResearch Settings
+# -----------------------------------------------------------------------------
+
+class DeepResearchSettings(TypedDict, total=False):
+    """Settings specific to DeepResearch agent.
+    
+    These settings are passed via RunnableConfig:
+    config={"configurable": {...}}
+    """
+    
+    # LLM model to use for this thread
+    llm_model: LLMModel
+    
+    # Maximum parallel research tasks (1-10)
+    max_concurrent_research_units: int
+    
+    # Maximum iterations per research task (1-10)
+    max_researcher_iterations: int
+
+
+DEFAULT_DEEPRESEARCH_SETTINGS: DeepResearchSettings = {
+    "llm_model": "qwen3-coder-30b-a3b-instruct-mlx",
+    "max_concurrent_research_units": 3,
+    "max_researcher_iterations": 3,
+}
+
+
+# -----------------------------------------------------------------------------
+# DeepTutor Settings
+# -----------------------------------------------------------------------------
+
+class DeepTutorSettings(TypedDict, total=False):
+    """Settings specific to DeepTutor agent.
+    
+    These settings are passed via RunnableConfig:
+    config={"configurable": {...}}
+    """
+    
+    # LLM model to use for this thread
+    llm_model: LLMModel
+    
+    # Enable/disable the thinking tool for strategic reflection
+    enable_thinking_tool: bool
+
+
+DEFAULT_DEEPTUTOR_SETTINGS: DeepTutorSettings = {
+    "llm_model": "qwen3-coder-30b-a3b-instruct-mlx",
+    "enable_thinking_tool": True,
+}
+
+
+# -----------------------------------------------------------------------------
+# Generic Agent Settings (backwards compatibility)
+# -----------------------------------------------------------------------------
+
+class AgentSettings(TypedDict, total=False):
+    """Generic agent settings configurable per-thread from UI.
+    
+    DEPRECATED: Use agent-specific settings (DeepResearchSettings, DeepTutorSettings)
+    instead. This is kept for backwards compatibility.
+    """
+    
+    # LLM model to use for this thread
+    llm_model: LLMModel
+    
+    # Maximum parallel research tasks (1-10)
+    max_concurrent_research_units: int
+    
+    # Maximum iterations per research task (1-10)
+    max_researcher_iterations: int
+
+
+# Default agent settings (backwards compatibility)
+DEFAULT_AGENT_SETTINGS: AgentSettings = {
+    "llm_model": "qwen3-coder-30b-a3b-instruct-mlx",
+    "max_concurrent_research_units": 3,
+    "max_researcher_iterations": 3,
+}
+
+
+# =============================================================================
 # PAYMENT TYPES
 # =============================================================================
 
@@ -131,4 +220,11 @@ class BaseAgentState(TypedDict, total=False):
     
     # Unique run identifier
     run_id: str | None
+    
+    # ==========================================================================
+    # AGENT SETTINGS (from UI)
+    # ==========================================================================
+    
+    # Per-thread agent configuration (LLM model, research settings)
+    agent_settings: AgentSettings
 

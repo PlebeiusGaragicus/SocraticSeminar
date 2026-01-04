@@ -3,16 +3,22 @@
 Architecture:
 - Uses create_agent() with middleware composition
 - CashuPaymentMiddleware: Streaming micropayments with per-iteration deduction
+- BehaviouralMiddleware: Agent character and personality (Socratic tutor)
 - TodoListMiddleware: Task tracking for complex multi-step operations
 - ClarifyWithHumanMiddleware: Ask user for intent clarification
 - ClientToolsMiddleware: Client-side file operations via interrupts
+- ThinkingMiddleware: Strategic reflection (can be disabled via config)
 - HumanInTheLoopMiddleware: Approval for funding requests
 
 The agent operates with:
-1. Two file systems: User's project files (client) and agent working memory (server)
+1. A file system: The user's project files (on the client-side)
 2. Streaming Cashu payments (deducted per LLM iteration)
 3. Human approval for funding requests
 4. Clarification tools when user intent is unclear
+
+Agent Settings (passed via RunnableConfig):
+- llm_model: Pass via config={"configurable": {"llm_model": "grok-4-1-fast-non-reasoning"}}
+- enable_thinking_tool: Toggle thinking/reflection tool (coming soon)
 """
 
 import os
@@ -24,7 +30,7 @@ from langchain.agents.middleware.types import AgentMiddleware
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Checkpointer
 
-from src.shared.models import get_model
+from src.shared.models import get_configurable_model
 from src.shared.config import DEEPTUTOR_CONFIG
 from src.shared.middleware import (
     CashuPaymentMiddleware, 
@@ -34,6 +40,7 @@ from src.shared.middleware import (
     ThinkingMiddleware,
     ToolValidationMiddleware,
 )
+from src.deeptutor.behaviour import BehaviouralMiddleware
 
 
 # =============================================================================
@@ -85,7 +92,7 @@ You have access to TWO separate file systems:
 
 ### 1. User's Project Files (Client-side)
 These are the user's actual documents stored in their browser. Use these tools:
-- `list_files(file_type?)` - List user's files, optionally filtered
+- `list_files()` - List user's project files
 - `read_file(file_id)` - Read a user file
 - `search_files(query)` - Semantic search across user files
 - `grep_files(pattern)` - Pattern search in file contents
@@ -137,12 +144,13 @@ def create_deeptutor_agent(
     Middleware Stack (in order):
     1. CashuPaymentMiddleware - Payment validation and per-iteration deduction
     2. ToolValidationMiddleware - Catch and correct malformed tool calls
-    3. TodoListMiddleware - Task tracking for complex operations
-    4. ClarifyWithHumanMiddleware - Ask user for intent clarification
-    5. ClientToolsMiddleware - File operations via client interrupts
-    6. SourcesMiddleware - Access to project sources (auto-approved)
-    7. ThinkingMiddleware - Strategic reflection
-    8. HumanInTheLoopMiddleware - Approval for funding requests
+    3. BehaviouralMiddleware - Agent character and personality (prompt-only)
+    4. TodoListMiddleware - Task tracking for complex operations
+    5. ClarifyWithHumanMiddleware - Ask user for intent clarification
+    6. ClientToolsMiddleware - File operations via client interrupts
+    7. SourcesMiddleware - Access to project sources (auto-approved)
+    8. ThinkingMiddleware - Strategic reflection
+    9. HumanInTheLoopMiddleware - Approval for funding requests
     
     Args:
         checkpointer: Optional checkpointer for persistence
@@ -153,6 +161,10 @@ def create_deeptutor_agent(
     Returns:
         Compiled agent graph ready for invoke/stream
         
+    Note:
+        Model selection is dynamic via RunnableConfig. Pass the model at invocation time:
+        config={"configurable": {"llm_model": "grok-4-1-fast-non-reasoning"}}
+        
     Example:
         ```python
         from langgraph.checkpoint.memory import MemorySaver
@@ -162,16 +174,18 @@ def create_deeptutor_agent(
             cost_per_iteration=10,
         )
         
-        # Start a session with payment
-        result = await agent.ainvoke({
-            "messages": [HumanMessage(content="Help me with my argument")],
-            "payment_token": "cashuA...",
-            # Optional: client can override cost
-            "payment_cost_per_iteration": 5,
-        })
+        # Start a session with dynamic model selection
+        result = await agent.ainvoke(
+            {
+                "messages": [HumanMessage(content="Help me with my argument")],
+                "payment_token": "cashuA...",
+            },
+            config={"configurable": {"llm_model": "grok-4-1-fast-non-reasoning"}},
+        )
         ```
     """
-    model = get_model()
+    # Use configurable model - selection happens at runtime via config
+    model = get_configurable_model(temperature=0.0)
     
     # Get effective cost per iteration
     # Priority: function arg > env var > agent config default
@@ -185,22 +199,25 @@ def create_deeptutor_agent(
         # 2. Tool Validation - catch and correct malformed tool calls immediately
         ToolValidationMiddleware(),
         
-        # 3. Todo list - task tracking for complex multi-step operations
+        # 3. Behavioural - control the agent's character and personality (prompt-only)
+        BehaviouralMiddleware(),
+        
+        # 4. Todo list - task tracking for complex multi-step operations
         TodoListMiddleware(),
 
-        # 4. Clarification tools - ask user for intent clarification
+        # 5. Clarification tools - ask user for intent clarification
         ClarifyWithHumanMiddleware(),
 
-        # 5. Client tools - ALL file operations interrupt for client-side execution
+        # 6. Client tools - ALL file operations interrupt for client-side execution
         ClientToolsMiddleware(),
 
-        # 6. Sources - Access to project sources (auto-approved, no HITL)
+        # 7. Sources - Access to project sources (auto-approved, no HITL)
         SourcesMiddleware(),
 
-        # 7. Thinking - Strategic reflection
+        # 8. Thinking - Strategic reflection (can be disabled via config)
         ThinkingMiddleware(),
-        
-        # 8. Human-in-the-loop - ONLY for payment funding requests
+
+        # 9. Human-in-the-loop - ONLY for payment funding requests
         HumanInTheLoopMiddleware(
             interrupt_on={
                 "request_additional_funding": True,

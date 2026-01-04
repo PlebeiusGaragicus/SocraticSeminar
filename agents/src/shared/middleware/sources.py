@@ -52,15 +52,17 @@ You have access to external sources (web references, PDFs, documents) that have 
 
 ### Available Tools
 
+- `list_sources(source_type?)` - List all sources, optionally filtered (returns from cached state)
 - `read_source(source_id)` - Read the full markdown content of a source
 - `search_sources(query, top_k?)` - Semantic search across all source contents
 
 ### Guidelines
 
 1. **Sources are already listed** - You can see available sources below
-2. **Use read_source** to get full content when you need details
-3. **Use search_sources** for finding relevant information across sources
-4. **Cite sources** using the source title when referencing content"""
+2. **Use list_sources** to get the current list of sources (returns from cache)
+3. **Use read_source** to get full content when you need details
+4. **Use search_sources** for finding relevant information across sources
+5. **Cite sources** using the source title when referencing content"""
 
 SOURCES_LIST_HEADER = "\n\n### Available Sources\n\n"
 NO_SOURCES_MESSAGE = "_No sources have been added to this project yet._"
@@ -69,6 +71,42 @@ NO_SOURCES_MESSAGE = "_No sources have been added to this project yet._"
 # =============================================================================
 # TOOL DEFINITIONS
 # =============================================================================
+
+def _create_list_sources_tool() -> StructuredTool:
+    """Create the list_sources tool."""
+    
+    def list_sources(
+        source_type: str | None = None,
+        runtime: ToolRuntime = None,
+    ) -> str:
+        """List all sources in the current project, optionally filtered.
+        
+        Returns metadata about available sources including:
+        - id: Unique source identifier
+        - title: Source display name
+        - url: Source URL (if applicable)
+        - source_type: Type ('url' or 'file')
+        
+        This tool returns from cached state - no client query needed.
+        
+        Args:
+            source_type: Optional filter by type ('url' or 'file')
+        """
+        # Handled by middleware - returns from state
+        return "Tool execution pending"
+    
+    return StructuredTool.from_function(
+        name="list_sources",
+        func=list_sources,
+        description="""List all sources in the project, optionally filtered.
+
+Args:
+    source_type: Optional filter by type ('url' or 'file')
+
+Returns JSON array of source metadata with id, title, url, source_type.
+This returns from cached state - use read_source to get full content.""",
+    )
+
 
 def _create_read_source_tool() -> StructuredTool:
     """Create the read_source tool."""
@@ -131,7 +169,10 @@ Returns matching excerpts with relevance scores.""",
     )
 
 
-# Tools that are auto-approved (no HITL required)
+# Tools that return from state (no interrupt)
+STATE_RETURN_TOOLS = {"list_sources"}
+
+# Tools that are auto-approved (interrupt but no HITL required)
 AUTO_APPROVE_TOOLS = {"read_source", "search_sources"}
 
 
@@ -142,11 +183,13 @@ AUTO_APPROVE_TOOLS = {"read_source", "search_sources"}
 class SourcesMiddleware(AgentMiddleware[SourcesState, None]):
     """Middleware for accessing project sources.
     
-    Injects the available sources list into the system prompt on every
-    invocation, so agents always know what sources are available without
-    needing to call a list_sources tool.
+    The client injects sources_list on each invocation so list_sources can
+    return data directly without interrupting. The sources list is also
+    injected into the system prompt for LLM context.
     
-    All source tools interrupt for client-side execution but are auto-approved.
+    Tool Behavior:
+    - list_sources: Returns from state (no interrupt)
+    - read_source, search_sources: Auto-approved interrupt for client execution
     
     Example:
         ```python
@@ -168,7 +211,7 @@ class SourcesMiddleware(AgentMiddleware[SourcesState, None]):
         ```
     
     Client Integration:
-        When the agent calls a source tool, execution interrupts with:
+        When the agent calls read_source or search_sources, execution interrupts with:
         ```json
         {
             "type": "client_tool_execution",
@@ -195,6 +238,7 @@ class SourcesMiddleware(AgentMiddleware[SourcesState, None]):
         """Initialize sources middleware."""
         super().__init__()
         self.tools = [
+            _create_list_sources_tool(),
             _create_read_source_tool(),
             _create_search_sources_tool(),
         ]
@@ -263,19 +307,21 @@ class SourcesMiddleware(AgentMiddleware[SourcesState, None]):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command]],
     ) -> ToolMessage | Command:
-        """Intercept source tool calls for client-side execution.
+        """Intercept source tool calls.
         
         Flow:
-        1. Check if this is a source tool
-        2. If yes, interrupt with tool call details (auto-approved)
-        3. When resumed, extract client's result
-        4. Return the result as a ToolMessage
+        1. list_sources: Returns from state directly (no interrupt)
+        2. read_source, search_sources: Interrupt for client-side execution (auto-approved)
         """
         tool_name = request.tool_call.get("name", "")
         tool_call_id = request.tool_call.get("id", "")
         tool_args = request.tool_call.get("args", {})
         
-        # Check if this is a source tool
+        # Handle list_sources specially - return from state, no interrupt
+        if tool_name in STATE_RETURN_TOOLS:
+            return self._handle_list_sources(request, tool_call_id, tool_args)
+        
+        # Check if this is a source tool that needs interrupt
         if tool_name not in AUTO_APPROVE_TOOLS:
             # Not our tool, pass through
             return await handler(request)
@@ -308,6 +354,42 @@ class SourcesMiddleware(AgentMiddleware[SourcesState, None]):
             content=result_content,
             tool_call_id=tool_call_id,
             name=tool_name,
+        )
+    
+    def _handle_list_sources(
+        self,
+        request: ToolCallRequest,
+        tool_call_id: str,
+        tool_args: dict,
+    ) -> ToolMessage:
+        """Handle list_sources by returning from state (no interrupt).
+        
+        The sources_list is injected by the client on each invocation,
+        so we can return it directly without interrupting.
+        """
+        import json
+        
+        # Get sources_list from state
+        state = request.runtime.state if hasattr(request, 'runtime') and request.runtime else {}
+        sources_list = state.get("sources_list", []) or []
+        
+        # Apply optional source_type filter
+        source_type_filter = tool_args.get("source_type")
+        if source_type_filter:
+            sources_list = [s for s in sources_list if s.get("sourceType") == source_type_filter or s.get("source_type") == source_type_filter]
+        
+        if not sources_list:
+            result = "No sources found in project." if not source_type_filter else f"No sources of type '{source_type_filter}' found."
+        else:
+            # Format as JSON for the model
+            result = json.dumps(sources_list, indent=2)
+        
+        print(f"[Sources] list_sources returned {len(sources_list)} sources from state")
+        
+        return ToolMessage(
+            content=result,
+            tool_call_id=tool_call_id,
+            name="list_sources",
         )
     
     def wrap_tool_call(

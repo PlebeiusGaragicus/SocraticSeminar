@@ -46,6 +46,33 @@ export interface Project {
 
 export type ThreadStatus = 'idle' | 'busy' | 'interrupted' | 'error';
 
+// =============================================================================
+// AGENT SETTINGS (per-thread configuration)
+// =============================================================================
+
+/** Available LLM models for agent use */
+export type LLMModel = 'qwen3-coder-30b-a3b-instruct-mlx' | 'grok-4-1-fast-non-reasoning';
+
+/** Agent settings configurable per-thread */
+export interface AgentSettings {
+  /** LLM model to use for this thread */
+  llm_model: LLMModel;
+  /** Maximum parallel research tasks (1-10) - deepresearch only */
+  max_concurrent_research_units: number;
+  /** Maximum iterations per research task (1-10) - deepresearch only */
+  max_researcher_iterations: number;
+  /** Enable thinking/reflection tool - deeptutor only */
+  enable_thinking_tool: boolean;
+}
+
+/** Default agent settings */
+export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
+  llm_model: 'qwen3-coder-30b-a3b-instruct-mlx',
+  max_concurrent_research_units: 3,
+  max_researcher_iterations: 3,
+  enable_thinking_tool: true,
+};
+
 export interface Thread {
   id: string;
   projectId: string;
@@ -54,6 +81,7 @@ export interface Thread {
   status: ThreadStatus;
   langGraphThreadId?: string; // LangGraph server's thread ID (different from local id)
   assistantId?: string; // ID of the agent assigned to this thread
+  agentSettings?: AgentSettings; // Per-thread agent configuration
   metadata?: Record<string, unknown>;
   createdAt: number;
   updatedAt: number;
